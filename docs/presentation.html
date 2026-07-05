@@ -1,0 +1,317 @@
+<meta charset="utf-8">
+<title>StrongARM Sizing Console — build story</title>
+<style>
+  :root{
+    --bg:#05100e; --bg2:#081a16; --panel:#0b201b; --panel2:#0e2823;
+    --line:#173a34; --line2:#22514a;
+    --ink:#dff2ee; --dim:#83aca6; --faint:#4d7e78;
+    --si:#35d0c2; --si-deep:#0f9c8f; --ag:#8b7bff; --ag-deep:#6a5be0;
+    --good:#33c47a; --warn:#e6b23a; --bad:#ff6b6b; --amber:#ffb02e;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;line-height:1.5;
+    background-image:radial-gradient(circle at 50% -10%, #0a201c 0%, var(--bg) 55%);}
+  .deck{scroll-snap-type:y mandatory;overflow-y:auto;height:100vh;scroll-padding-top:0}
+  .slide{min-height:100vh;scroll-snap-align:start;display:flex;flex-direction:column;
+    justify-content:center;padding:64px 7vw;position:relative;border-bottom:1px solid var(--line);}
+  .wrap{width:100%;max-width:1080px;margin:0 auto}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.24em;text-transform:uppercase;
+    color:var(--si);margin:0 0 18px;display:flex;align-items:center;gap:10px}
+  .eyebrow::before{content:"";width:26px;height:1px;background:var(--si);display:inline-block}
+  h1{font-size:clamp(2.4rem,6vw,4.6rem);line-height:1.02;margin:0;font-weight:750;
+    letter-spacing:-.02em;text-wrap:balance}
+  h2{font-size:clamp(1.6rem,3.4vw,2.6rem);line-height:1.08;margin:0 0 22px;font-weight:700;
+    letter-spacing:-.015em;text-wrap:balance}
+  p.lead{font-size:1.15rem;color:var(--dim);max-width:62ch;margin:16px 0 0}
+  p{color:var(--dim);max-width:64ch}
+  .accent{color:var(--si)} .accent-ag{color:var(--ag)} .ink{color:var(--ink)}
+  .mono{font-family:var(--mono)}
+
+  /* hero */
+  .hero-stats{display:flex;flex-wrap:wrap;gap:14px 34px;margin-top:40px}
+  .hero-stats .s{display:flex;flex-direction:column}
+  .hero-stats .n{font-family:var(--mono);font-size:1.9rem;font-weight:700;color:var(--ink);line-height:1}
+  .hero-stats .k{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-top:6px}
+  .scan{position:absolute;left:0;right:0;top:0;height:2px;overflow:hidden;opacity:.8}
+  .scan i{position:absolute;top:0;left:-30%;width:30%;height:100%;
+    background:linear-gradient(90deg,transparent,var(--si),transparent);
+    animation:scan 4.5s linear infinite}
+  @keyframes scan{to{left:130%}}
+  @media (prefers-reduced-motion:reduce){.scan i{animation:none;left:35%}}
+
+  /* cards / grids */
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:820px){.g2,.g3,.g4{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);
+    border-radius:14px;padding:18px 20px}
+  .card h3{margin:0 0 6px;font-size:1.02rem;color:var(--ink);font-weight:650}
+  .card p{margin:0;font-size:.92rem;color:var(--dim);max-width:none}
+  .card .tag{font-family:var(--mono);font-size:.64rem;letter-spacing:.12em;text-transform:uppercase;color:var(--si);display:block;margin-bottom:8px}
+  .card.ag{border-left:3px solid var(--ag)} .card.si{border-left:3px solid var(--si)}
+
+  ul.clean{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px}
+  ul.clean li{display:flex;gap:12px;align-items:flex-start;color:var(--dim);font-size:1rem}
+  ul.clean li::before{content:"▸";color:var(--si);font-family:var(--mono);margin-top:1px}
+  ul.clean li b{color:var(--ink);font-weight:600}
+
+  .kv{font-family:var(--mono);font-size:.9rem}
+  .metric{display:flex;flex-direction:column;gap:3px}
+  .metric .v{font-family:var(--mono);font-size:1.5rem;color:var(--si);font-weight:700}
+  .metric .v.ag{color:var(--ag)} .metric .v.good{color:var(--good)}
+  .metric .l{font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+  .arrow{color:var(--faint)}
+
+  /* progress + nav */
+  #bar{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--si),var(--ag));width:0;z-index:20;transition:width .15s}
+  #dots{position:fixed;right:22px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:11px;z-index:20}
+  #dots a{width:9px;height:9px;border-radius:50%;background:var(--line2);border:1px solid transparent;transition:.2s;cursor:pointer}
+  #dots a.on{background:var(--si);box-shadow:0 0 10px var(--si);transform:scale(1.25)}
+  #idx{position:fixed;left:22px;bottom:18px;font-family:var(--mono);font-size:.72rem;color:var(--faint);letter-spacing:.1em;z-index:20}
+  @media(max-width:640px){#dots{display:none}}
+  .hint{font-family:var(--mono);font-size:.66rem;color:var(--faint);letter-spacing:.1em;margin-top:34px}
+  .foot{font-family:var(--mono);font-size:.72rem;color:var(--faint);letter-spacing:.06em}
+  a.link{color:var(--si);text-decoration:none;border-bottom:1px solid var(--line2)}
+  svg{display:block;max-width:100%}
+  .badge{display:inline-block;font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;
+    padding:3px 9px;border-radius:20px;border:1px solid var(--line2);color:var(--dim)}
+</style>
+
+<div id="bar"></div>
+<nav id="dots"></nav>
+<div id="idx" class="mono">01</div>
+
+<div class="deck">
+
+  <!-- 1 · hero -->
+  <section class="slide" data-t="Intro">
+    <div class="scan"><i></i></div>
+    <div class="wrap">
+      <p class="eyebrow">analog IC sizing &amp; sign-off · over ngspice</p>
+      <h1>StrongARM<br>Sizing&nbsp;Console</h1>
+      <p class="lead">An agent-driven tool that closes the analog design loop —
+        <span class="accent mono">simulate → evaluate → optimize → sign-off</span> —
+        against real SPICE, for a StrongARM comparator <span class="ink">and</span> a MOSFET ring VCO.</p>
+      <div class="hero-stats">
+        <div class="s"><span class="n">2</span><span class="k">circuit domains</span></div>
+        <div class="s"><span class="n">22</span><span class="k">console pages</span></div>
+        <div class="s"><span class="n">39</span><span class="k">passing tests</span></div>
+        <div class="s"><span class="n">ngspice</span><span class="k">PTM 45nm · SKY130</span></div>
+      </div>
+      <p class="hint">↓ scroll / arrow keys / click the dots</p>
+    </div>
+  </section>
+
+  <!-- 2 · problem -->
+  <section class="slide" data-t="Problem">
+    <div class="wrap">
+      <p class="eyebrow">the problem</p>
+      <h2>Sizing analog circuits is a hand-run loop</h2>
+      <p class="lead">Every transistor has a width, length, and finger count. Picking them to hit
+        <span class="ink">speed, power, offset, noise</span> targets means editing a netlist, running SPICE,
+        reading the numbers, and adjusting — over and over, then re-checking across process corners.</p>
+      <div class="grid g3" style="margin-top:34px">
+        <div class="card si"><span class="tag">the ask</span><h3>Close the loop</h3><p>Let an optimizer drive the simulate→adjust cycle instead of a human.</p></div>
+        <div class="card si"><span class="tag">the ask</span><h3>Sign it off</h3><p>PVT corners, mismatch yield, layout + DRC — not just a nominal point.</p></div>
+        <div class="card si"><span class="tag">the ask</span><h3>See it</h3><p>A real console: schematics, waveforms, tuning curves, Pareto fronts.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · architecture -->
+  <section class="slide" data-t="Architecture">
+    <div class="wrap">
+      <p class="eyebrow">architecture</p>
+      <h2>One SPICE backend, two front doors</h2>
+      <svg viewBox="0 0 900 250" role="img" aria-label="Architecture: ngspice backend, HTTP bridge, React console, MCP server" style="margin:8px 0 22px">
+        <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L8,4.5 L0,9 z" fill="#4d7e78"/></marker></defs>
+        <g font-family="ui-monospace,monospace" font-size="13">
+          <rect x="20" y="95" width="200" height="62" rx="10" fill="#0b201b" stroke="#22514a"/>
+          <text x="120" y="120" fill="#dff2ee" text-anchor="middle">ngspice · BSIM4</text>
+          <text x="120" y="140" fill="#83aca6" text-anchor="middle" font-size="11">run_sim · vco_sim · layout</text>
+          <rect x="300" y="95" width="200" height="62" rx="10" fill="#0b201b" stroke="#22514a"/>
+          <text x="400" y="120" fill="#dff2ee" text-anchor="middle">server.py bridge</text>
+          <text x="400" y="140" fill="#83aca6" text-anchor="middle" font-size="11">DE · GP · NSGA-II · PVT</text>
+          <rect x="580" y="30" width="300" height="62" rx="10" fill="#0e2823" stroke="#35d0c2"/>
+          <text x="730" y="55" fill="#dff2ee" text-anchor="middle">React 19 web console</text>
+          <text x="730" y="75" fill="#83aca6" text-anchor="middle" font-size="11">Virtuoso-styled · KO/EN</text>
+          <rect x="580" y="160" width="300" height="62" rx="10" fill="#0e2823" stroke="#8b7bff"/>
+          <text x="730" y="185" fill="#dff2ee" text-anchor="middle">MCP server</text>
+          <text x="730" y="205" fill="#83aca6" text-anchor="middle" font-size="11">agents call it as a tool</text>
+          <line x1="222" y1="126" x2="298" y2="126" stroke="#4d7e78" stroke-width="1.5" marker-end="url(#ar)"/>
+          <line x1="502" y1="120" x2="576" y2="70" stroke="#4d7e78" stroke-width="1.5" marker-end="url(#ar)"/>
+          <line x1="502" y1="132" x2="576" y2="185" stroke="#4d7e78" stroke-width="1.5" marker-end="url(#ar)"/>
+        </g>
+      </svg>
+      <p>Dependency-free Python stdlib bridge — no framework. ngspice runs as a subprocess (releases the GIL),
+        so every optimizer and corner sweep is <span class="accent">parallelized</span> across cores.</p>
+    </div>
+  </section>
+
+  <!-- 4 · comparator -->
+  <section class="slide" data-t="Comparator">
+    <div class="wrap">
+      <p class="eyebrow">domain 1 · ⚖ comparator</p>
+      <h2>StrongARM latch — 13 pages</h2>
+      <div class="grid g4">
+        <div class="card"><span class="tag">size</span><h3>Sizing + spec</h3><p>W/L/M editor, P1/P2/P3 profiles, PASS/FAIL gauges.</p></div>
+        <div class="card"><span class="tag">characterize</span><h3>Metastability</h3><p>decision time vs V<sub>in</sub> → regeneration τ ≈ 26 ps.</p></div>
+        <div class="card"><span class="tag">characterize</span><h3>Max f_clk</h3><p>2 GHz, ~0.8 pJ/conversion FoM.</p></div>
+        <div class="card ag"><span class="tag">optimize</span><h3>Auto-find</h3><p>DE + GP surrogate → min power meeting specs.</p></div>
+        <div class="card ag"><span class="tag">optimize</span><h3>Pareto</h3><p>NSGA-II power ↔ decision-time front.</p></div>
+        <div class="card"><span class="tag">variation</span><h3>Monte-Carlo</h3><p>Pelgrom offset σ distribution.</p></div>
+        <div class="card"><span class="tag">variation</span><h3>Noise / BER</h3><p>input-referred noise → error rate.</p></div>
+        <div class="card"><span class="tag">signoff</span><h3>PVT · Yield · Layout · Flow</h3><p>27 corners · mismatch×PVT · GDSII+DRC · end-to-end.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 · VCO -->
+  <section class="slide" data-t="VCO">
+    <div class="wrap">
+      <p class="eyebrow">domain 2 · ∿ VCO</p>
+      <h2>Current-starved ring VCO — 9 pages</h2>
+      <div class="grid g3" style="margin-bottom:18px">
+        <div class="metric"><span class="v">1.60<span style="font-size:.9rem"> GHz</span></span><span class="l">osc. @ V_ctrl 0.6</span></div>
+        <div class="metric"><span class="v">119<span style="font-size:.9rem"> %</span></span><span class="l">tuning range · Kvco 2.75 GHz/V</span></div>
+        <div class="metric"><span class="v">−102<span style="font-size:.9rem"> dBc/Hz</span></span><span class="l">phase noise @ 1 MHz</span></div>
+      </div>
+      <ul class="clean">
+        <li><b>Same optimization loop</b> as the comparator — DE + GP auto-size to a target frequency at min power, NSGA-II power↔frequency Pareto.</li>
+        <li><b>Full characterization</b> — oscillation waveform, tuning curve, supply pushing, PVT (27 corners), phase noise + jitter + FoM.</li>
+        <li><b>Same sign-off</b> — GDSII layout (bias mirror + N stages) + DRC, layout-parasitic re-sim, end-to-end full flow.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 6 · shared core -->
+  <section class="slide" data-t="Shared core">
+    <div class="wrap">
+      <p class="eyebrow">the connection</p>
+      <h2>Same regenerative core, two jobs</h2>
+      <div class="grid g2" style="align-items:center">
+        <div>
+          <p class="lead">The comparator's cross-coupled latch and the LC-VCO's −g<sub>m</sub> pair are the
+            <span class="ink">identical</span> positive-feedback structure.</p>
+          <ul class="clean" style="margin-top:22px">
+            <li>The comparator uses it to <b>decide once</b> — regenerate to a rail.</li>
+            <li>The VCO uses the same −g<sub>m</sub> to <b>oscillate forever</b> — cancel the tank loss.</li>
+          </ul>
+        </div>
+        <svg viewBox="0 0 300 200" role="img" aria-label="cross-coupled pair">
+          <g stroke="#35d0c2" stroke-width="2" fill="none" font-family="ui-monospace,monospace">
+            <line x1="80" y1="30" x2="80" y2="170"/><line x1="220" y1="30" x2="220" y2="170"/>
+            <line x1="60" y1="70" x2="60" y2="130"/><line x1="240" y1="70" x2="240" y2="130"/>
+            <path d="M80 60 L150 60 L150 45 L220 45 L220 70" stroke="#8b7bff"/>
+            <path d="M220 60 L150 60" stroke="none"/>
+            <path d="M220 140 L150 140 L150 155 L80 155 L80 130" stroke="#8b7bff"/>
+            <circle cx="80" cy="30" r="3" fill="#35d0c2"/><circle cx="220" cy="30" r="3" fill="#35d0c2"/>
+            <text x="55" y="24" fill="#57e0e0" font-size="12" text-anchor="end">out+</text>
+            <text x="245" y="24" fill="#57e0e0" font-size="12">out−</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 · optimization -->
+  <section class="slide" data-t="Optimizers">
+    <div class="wrap">
+      <p class="eyebrow">optimization algorithms</p>
+      <h2>Differential Evolution, made cheap</h2>
+      <div class="grid g3">
+        <div class="card ag"><span class="tag">global search</span><h3>Log-space DE</h3><p>Searches device widths in log space, minimizes power under penalty constraints — beats greedy descent.</p></div>
+        <div class="card ag"><span class="tag">fewer sims</span><h3>GP surrogate</h3><p>A Gaussian-process model on log(cost) pre-screens clearly-worse candidates → <span class="accent-ag">~35–45% fewer SPICE runs</span>.</p></div>
+        <div class="card ag"><span class="tag">trade-offs</span><h3>NSGA-II Pareto</h3><p>Deb constraint-domination + crowding → the full power ↔ performance front, per domain.</p></div>
+      </div>
+      <p style="margin-top:22px">All candidate evaluations run in parallel; the winner is confirmed with a full Monte-Carlo / tuning sweep.</p>
+    </div>
+  </section>
+
+  <!-- 8 · phase noise deep dive -->
+  <section class="slide" data-t="Phase noise">
+    <div class="wrap">
+      <p class="eyebrow">deep dive · vco phase noise</p>
+      <h2>Three views — and an honest wall</h2>
+      <div class="grid g3">
+        <div class="card si"><span class="tag">analytic</span><h3>Thermal L(Δf)</h3><p>√(kT·C)/I per transition → 1/f² region + FoM; a flicker 1/f³ term at an assumed corner.</p></div>
+        <div class="card si"><span class="tag">measured</span><h3>SPICE trnoise</h3><p>Inject physical device noise, measure period jitter over 4 seeds → agrees within <span class="accent">~1 dB</span>.</p></div>
+        <div class="card si"><span class="tag">measured</span><h3>Jitter slope</h3><p>σ<sub>Δt</sub>(τ) accumulation → 0.5 = thermal, 1.0 = flicker. Confirms thermal-limited.</p></div>
+      </div>
+      <p style="margin-top:22px"><span class="badge">honest scope</span>&nbsp; A brute-force transient resolves offsets only down to ≈ f₀/N<sub>cycles</sub> — the flicker corner is genuinely out of reach and needs a PSS/pnoise engine. The tool says so.</p>
+    </div>
+  </section>
+
+  <!-- 9 · performance -->
+  <section class="slide" data-t="Performance">
+    <div class="wrap">
+      <p class="eyebrow">engineering · performance</p>
+      <h2>Measured, then made fast</h2>
+      <div class="grid g4">
+        <div class="metric"><span class="v good">48×</span><span class="l">sky130 sim · 19.3s → 0.40s</span></div>
+        <div class="metric"><span class="v good">4×</span><span class="l">transient step 0.2p → 1p</span></div>
+        <div class="metric"><span class="v good">5–6×</span><span class="l">tuning / pushing sweeps (parallel)</span></div>
+        <div class="metric"><span class="v good">22×</span><span class="l">Monte-Carlo offset (parallel + fast lib)</span></div>
+      </div>
+      <ul class="clean" style="margin-top:28px">
+        <li>Root-caused via profiling: sky130's slowness was <b>re-parsing 51 PDK corners every process launch</b> — trimmed to one corner + dropped unused R/C banks (bit-identical).</li>
+        <li>ngspice subprocesses release the GIL → <b>ThreadPool parallelism</b> across DE, NSGA-II, PVT, tuning.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 10 · rigor -->
+  <section class="slide" data-t="Rigor">
+    <div class="wrap">
+      <p class="eyebrow">engineering · rigor</p>
+      <h2>Verified, reviewed, honest</h2>
+      <div class="grid g2">
+        <div class="card"><span class="tag">tests</span><h3>39-test pytest suite</h3><p>SPICE integration: functional, verdicts, τ, DRC clean, optimizer convergence, VCO oscillation + phase noise.</p></div>
+        <div class="card"><span class="tag">review</span><h3>Adversarial pass</h3><p>Found &amp; fixed real bugs — a cold-cache lib race, partial-payload KeyError, div-by-zero, sim-failure clamping.</p></div>
+        <div class="card"><span class="tag">honesty</span><h3>Labeled assumptions</h3><p>Analytic vs measured, PTM vs real PDK, PoC layout vs sign-off DRC — each stated, never overclaimed.</p></div>
+        <div class="card"><span class="tag">craft</span><h3>Virtuoso-styled UI</h3><p>Composer schematics, Layout-XL stipple, ViVA waveforms; KO/EN with beginner help on every page.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 · close -->
+  <section class="slide" data-t="Close">
+    <div class="scan"><i></i></div>
+    <div class="wrap">
+      <p class="eyebrow">built agent-driven</p>
+      <h1 style="font-size:clamp(2rem,5vw,3.6rem)">From one comparator<br>to a two-domain console.</h1>
+      <p class="lead">ngspice backend · DE + GP + NSGA-II · PVT / yield / phase noise · GDSII + DRC ·
+        React console · MCP · 39 tests — shipped via branch → PR → merge.</p>
+      <p class="foot" style="margin-top:40px">github.com/kos2001/strongarm-sizing-console &nbsp;·&nbsp; private &nbsp;·&nbsp; StrongARM comparator + ring VCO</p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const deck=document.querySelector('.deck'), slides=[...document.querySelectorAll('.slide')];
+  const bar=document.getElementById('bar'), dots=document.getElementById('dots'), idx=document.getElementById('idx');
+  slides.forEach((s,i)=>{const a=document.createElement('a');a.title=s.dataset.t||('slide '+(i+1));
+    a.onclick=()=>s.scrollIntoView({behavior:'smooth'});dots.appendChild(a);});
+  const dotEls=[...dots.children];
+  function upd(){
+    const st=deck.scrollTop, h=deck.scrollHeight-deck.clientHeight;
+    bar.style.width=(h>0?st/h*100:0)+'%';
+    let cur=0, best=1e9;
+    slides.forEach((s,i)=>{const d=Math.abs(s.offsetTop-st); if(d<best){best=d;cur=i;}});
+    dotEls.forEach((d,i)=>d.classList.toggle('on',i===cur));
+    idx.textContent=String(cur+1).padStart(2,'0')+' / '+String(slides.length).padStart(2,'0');
+  }
+  deck.addEventListener('scroll',upd,{passive:true}); upd();
+  addEventListener('keydown',e=>{
+    let cur=0,best=1e9; slides.forEach((s,i)=>{const d=Math.abs(s.offsetTop-deck.scrollTop);if(d<best){best=d;cur=i;}});
+    if(['ArrowDown','PageDown',' '].includes(e.key)){e.preventDefault();slides[Math.min(cur+1,slides.length-1)].scrollIntoView({behavior:'smooth'});}
+    if(['ArrowUp','PageUp'].includes(e.key)){e.preventDefault();slides[Math.max(cur-1,0)].scrollIntoView({behavior:'smooth'});}
+  });
+</script>
