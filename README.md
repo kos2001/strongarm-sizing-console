@@ -19,9 +19,10 @@ layout / waveform, KO/EN i18n) · MCP server · pytest suite. The sections below
 document the original comparator backend ("method 1"); see the VCO section for
 the ring-oscillator flow and `webapp/README.md` for the web console.
 
-📊 **Overview presentation:** `docs/presentation.html` — a self-contained
-scroll-deck (open in any browser) walking through the architecture, both
-domains, the optimizers, phase-noise, performance, and rigor.
+📊 **Overview presentation:** `docs/presentation.html` (English) /
+`docs/presentation.ko.html` (한국어) — a self-contained scroll-deck (open in any
+browser, EN⇄한 toggle) walking through the architecture, both domains, the
+optimizers, phase-noise, performance, and rigor.
 
 ## Files
 

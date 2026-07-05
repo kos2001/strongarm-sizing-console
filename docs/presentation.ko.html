@@ -1,0 +1,308 @@
+<meta charset="utf-8">
+<title>StrongARM 사이징 콘솔 — 제작 이야기</title>
+<style>
+  :root{
+    --bg:#05100e; --bg2:#081a16; --panel:#0b201b; --panel2:#0e2823;
+    --line:#173a34; --line2:#22514a;
+    --ink:#dff2ee; --dim:#83aca6; --faint:#4d7e78;
+    --si:#35d0c2; --si-deep:#0f9c8f; --ag:#8b7bff; --ag-deep:#6a5be0;
+    --good:#33c47a; --warn:#e6b23a; --bad:#ff6b6b; --amber:#ffb02e;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;line-height:1.55;word-break:keep-all;
+    background-image:radial-gradient(circle at 50% -10%, #0a201c 0%, var(--bg) 55%);}
+  .deck{scroll-snap-type:y mandatory;overflow-y:auto;height:100vh}
+  .slide{min-height:100vh;scroll-snap-align:start;display:flex;flex-direction:column;
+    justify-content:center;padding:64px 7vw;position:relative;border-bottom:1px solid var(--line);}
+  .wrap{width:100%;max-width:1080px;margin:0 auto}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.2em;text-transform:uppercase;
+    color:var(--si);margin:0 0 18px;display:flex;align-items:center;gap:10px}
+  .eyebrow::before{content:"";width:26px;height:1px;background:var(--si);display:inline-block}
+  h1{font-size:clamp(2.3rem,5.6vw,4.4rem);line-height:1.05;margin:0;font-weight:750;
+    letter-spacing:-.01em;text-wrap:balance}
+  h2{font-size:clamp(1.55rem,3.2vw,2.5rem);line-height:1.12;margin:0 0 22px;font-weight:700;
+    letter-spacing:-.01em;text-wrap:balance}
+  p.lead{font-size:1.14rem;color:var(--dim);max-width:60ch;margin:16px 0 0}
+  p{color:var(--dim);max-width:62ch}
+  .accent{color:var(--si)} .accent-ag{color:var(--ag)} .ink{color:var(--ink)}
+  .mono{font-family:var(--mono)}
+  .hero-stats{display:flex;flex-wrap:wrap;gap:14px 34px;margin-top:40px}
+  .hero-stats .s{display:flex;flex-direction:column}
+  .hero-stats .n{font-family:var(--mono);font-size:1.85rem;font-weight:700;color:var(--ink);line-height:1}
+  .hero-stats .k{font-family:var(--mono);font-size:.7rem;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);margin-top:6px}
+  .scan{position:absolute;left:0;right:0;top:0;height:2px;overflow:hidden;opacity:.8}
+  .scan i{position:absolute;top:0;left:-30%;width:30%;height:100%;
+    background:linear-gradient(90deg,transparent,var(--si),transparent);animation:scan 4.5s linear infinite}
+  @keyframes scan{to{left:130%}}
+  @media (prefers-reduced-motion:reduce){.scan i{animation:none;left:35%}}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:820px){.g2,.g3,.g4{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);
+    border-radius:14px;padding:18px 20px}
+  .card h3{margin:0 0 6px;font-size:1.02rem;color:var(--ink);font-weight:650}
+  .card p{margin:0;font-size:.92rem;color:var(--dim);max-width:none}
+  .card .tag{font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--si);display:block;margin-bottom:8px}
+  .card.ag{border-left:3px solid var(--ag)} .card.si{border-left:3px solid var(--si)}
+  ul.clean{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:12px}
+  ul.clean li{display:flex;gap:12px;align-items:flex-start;color:var(--dim);font-size:1rem}
+  ul.clean li::before{content:"▸";color:var(--si);font-family:var(--mono);margin-top:1px}
+  ul.clean li b{color:var(--ink);font-weight:600}
+  .metric{display:flex;flex-direction:column;gap:3px}
+  .metric .v{font-family:var(--mono);font-size:1.5rem;color:var(--si);font-weight:700}
+  .metric .v.ag{color:var(--ag)} .metric .v.good{color:var(--good)}
+  .metric .l{font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+  #bar{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--si),var(--ag));width:0;z-index:20;transition:width .15s}
+  #dots{position:fixed;right:22px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:11px;z-index:20}
+  #dots a{width:9px;height:9px;border-radius:50%;background:var(--line2);transition:.2s;cursor:pointer}
+  #dots a.on{background:var(--si);box-shadow:0 0 10px var(--si);transform:scale(1.25)}
+  #idx{position:fixed;left:22px;bottom:18px;font-family:var(--mono);font-size:.72rem;color:var(--faint);letter-spacing:.1em;z-index:20}
+  #lang{position:fixed;right:20px;top:14px;font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;
+    color:var(--dim);text-decoration:none;border:1px solid var(--line2);border-radius:20px;padding:4px 11px;z-index:21}
+  #lang:hover{color:var(--si);border-color:var(--si)}
+  @media(max-width:640px){#dots{display:none}}
+  .hint{font-family:var(--mono);font-size:.66rem;color:var(--faint);letter-spacing:.08em;margin-top:34px}
+  .foot{font-family:var(--mono);font-size:.72rem;color:var(--faint);letter-spacing:.05em}
+  .badge{display:inline-block;font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;
+    padding:3px 9px;border-radius:20px;border:1px solid var(--line2);color:var(--dim)}
+  svg{display:block;max-width:100%}
+</style>
+
+<div id="bar"></div>
+<nav id="dots"></nav>
+<div id="idx" class="mono">01</div>
+<a id="lang" href="presentation.html">EN ↗</a>
+
+<div class="deck">
+
+  <!-- 1 · 표지 -->
+  <section class="slide" data-t="소개">
+    <div class="scan"><i></i></div>
+    <div class="wrap">
+      <p class="eyebrow">아날로그 IC 사이징 &amp; 사인오프 · ngspice 기반</p>
+      <h1>StrongARM<br>사이징&nbsp;콘솔</h1>
+      <p class="lead">아날로그 설계 루프 —
+        <span class="accent mono">시뮬레이션 → 평가 → 최적화 → 사인오프</span> —
+        를 실제 SPICE로 닫는 에이전트 기반 도구. StrongARM 비교기<span class="ink">와</span> MOSFET 링 VCO를 모두 다룹니다.</p>
+      <div class="hero-stats">
+        <div class="s"><span class="n">2</span><span class="k">회로 도메인</span></div>
+        <div class="s"><span class="n">22</span><span class="k">콘솔 페이지</span></div>
+        <div class="s"><span class="n">39</span><span class="k">통과 테스트</span></div>
+        <div class="s"><span class="n">ngspice</span><span class="k">PTM 45nm · SKY130</span></div>
+      </div>
+      <p class="hint">↓ 스크롤 / 화살표 키 / 우측 도트 클릭</p>
+    </div>
+  </section>
+
+  <!-- 2 · 문제 -->
+  <section class="slide" data-t="문제">
+    <div class="wrap">
+      <p class="eyebrow">문제</p>
+      <h2>아날로그 회로 사이징은 손으로 도는 루프다</h2>
+      <p class="lead">모든 트랜지스터엔 폭(W)·길이(L)·핑거 수(M)가 있습니다.
+        <span class="ink">속도·전력·오프셋·노이즈</span> 목표를 맞추려면 넷리스트를 고치고, SPICE를 돌리고, 숫자를 읽고,
+        조정하기를 반복하고 — 그다음 공정 코너까지 다시 확인해야 합니다.</p>
+      <div class="grid g3" style="margin-top:34px">
+        <div class="card si"><span class="tag">요구</span><h3>루프를 닫는다</h3><p>사람 대신 최적화기가 시뮬→조정 사이클을 돌린다.</p></div>
+        <div class="card si"><span class="tag">요구</span><h3>사인오프</h3><p>PVT 코너·미스매치 수율·레이아웃+DRC — 공칭점 하나가 아니라.</p></div>
+        <div class="card si"><span class="tag">요구</span><h3>눈으로 본다</h3><p>회로도·파형·튜닝곡선·파레토 프론트를 보는 실제 콘솔.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · 아키텍처 -->
+  <section class="slide" data-t="아키텍처">
+    <div class="wrap">
+      <p class="eyebrow">아키텍처</p>
+      <h2>하나의 SPICE 백엔드, 두 개의 문</h2>
+      <svg viewBox="0 0 900 250" role="img" aria-label="아키텍처: ngspice 백엔드, HTTP 브리지, React 콘솔, MCP 서버" style="margin:8px 0 22px">
+        <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L8,4.5 L0,9 z" fill="#4d7e78"/></marker></defs>
+        <g font-family="ui-monospace,monospace" font-size="13">
+          <rect x="20" y="95" width="200" height="62" rx="10" fill="#0b201b" stroke="#22514a"/>
+          <text x="120" y="120" fill="#dff2ee" text-anchor="middle">ngspice · BSIM4</text>
+          <text x="120" y="140" fill="#83aca6" text-anchor="middle" font-size="11">run_sim · vco_sim · layout</text>
+          <rect x="300" y="95" width="200" height="62" rx="10" fill="#0b201b" stroke="#22514a"/>
+          <text x="400" y="120" fill="#dff2ee" text-anchor="middle">server.py 브리지</text>
+          <text x="400" y="140" fill="#83aca6" text-anchor="middle" font-size="11">DE · GP · NSGA-II · PVT</text>
+          <rect x="580" y="30" width="300" height="62" rx="10" fill="#0e2823" stroke="#35d0c2"/>
+          <text x="730" y="55" fill="#dff2ee" text-anchor="middle">React 19 웹 콘솔</text>
+          <text x="730" y="75" fill="#83aca6" text-anchor="middle" font-size="11">Virtuoso 스타일 · 한/영</text>
+          <rect x="580" y="160" width="300" height="62" rx="10" fill="#0e2823" stroke="#8b7bff"/>
+          <text x="730" y="185" fill="#dff2ee" text-anchor="middle">MCP 서버</text>
+          <text x="730" y="205" fill="#83aca6" text-anchor="middle" font-size="11">에이전트가 도구로 호출</text>
+          <line x1="222" y1="126" x2="298" y2="126" stroke="#4d7e78" stroke-width="1.5" marker-end="url(#ar)"/>
+          <line x1="502" y1="120" x2="576" y2="70" stroke="#4d7e78" stroke-width="1.5" marker-end="url(#ar)"/>
+          <line x1="502" y1="132" x2="576" y2="185" stroke="#4d7e78" stroke-width="1.5" marker-end="url(#ar)"/>
+        </g>
+      </svg>
+      <p>의존성 없는 파이썬 stdlib 브리지 — 프레임워크 없음. ngspice가 subprocess로 돌아 GIL을 놓으므로,
+        모든 최적화기와 코너 스윕이 <span class="accent">코어 전반에 병렬화</span>됩니다.</p>
+    </div>
+  </section>
+
+  <!-- 4 · 비교기 -->
+  <section class="slide" data-t="비교기">
+    <div class="wrap">
+      <p class="eyebrow">도메인 1 · ⚖ 비교기</p>
+      <h2>StrongARM 래치 — 13 페이지</h2>
+      <div class="grid g4">
+        <div class="card"><span class="tag">크기</span><h3>사이징 + 스펙</h3><p>W/L/M 편집기, P1/P2/P3 프로파일, PASS/FAIL 게이지.</p></div>
+        <div class="card"><span class="tag">특성화</span><h3>메타안정성</h3><p>판정시간 vs V<sub>in</sub> → 재생 τ ≈ 26 ps.</p></div>
+        <div class="card"><span class="tag">특성화</span><h3>최대 f_clk</h3><p>2 GHz, ~0.8 pJ/변환 FoM.</p></div>
+        <div class="card ag"><span class="tag">최적화</span><h3>자동 탐색</h3><p>DE + GP 대리모델 → 스펙 만족 최소 전력.</p></div>
+        <div class="card ag"><span class="tag">최적화</span><h3>파레토</h3><p>NSGA-II 전력 ↔ 판정시간 프론트.</p></div>
+        <div class="card"><span class="tag">변동</span><h3>몬테카를로</h3><p>Pelgrom 오프셋 σ 분포.</p></div>
+        <div class="card"><span class="tag">변동</span><h3>노이즈 / BER</h3><p>입력환산 노이즈 → 에러율.</p></div>
+        <div class="card"><span class="tag">사인오프</span><h3>PVT · 수율 · 레이아웃 · 플로우</h3><p>27코너 · 미스매치×PVT · GDSII+DRC · 엔드투엔드.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 · VCO -->
+  <section class="slide" data-t="VCO">
+    <div class="wrap">
+      <p class="eyebrow">도메인 2 · ∿ VCO</p>
+      <h2>Current-starved 링 VCO — 9 페이지</h2>
+      <div class="grid g3" style="margin-bottom:18px">
+        <div class="metric"><span class="v">1.60<span style="font-size:.9rem"> GHz</span></span><span class="l">발진 @ V_ctrl 0.6</span></div>
+        <div class="metric"><span class="v">119<span style="font-size:.9rem"> %</span></span><span class="l">튜닝 범위 · Kvco 2.75 GHz/V</span></div>
+        <div class="metric"><span class="v">−102<span style="font-size:.9rem"> dBc/Hz</span></span><span class="l">위상잡음 @ 1 MHz</span></div>
+      </div>
+      <ul class="clean">
+        <li><b>비교기와 동일한 최적화 루프</b> — DE + GP로 목표 주파수를 최소 전력에 맞추고, NSGA-II 전력↔주파수 파레토.</li>
+        <li><b>완전한 특성화</b> — 발진 파형, 튜닝 곡선, 전원 푸싱, PVT(27코너), 위상잡음 + 지터 + FoM.</li>
+        <li><b>동일한 사인오프</b> — GDSII 레이아웃(바이어스 미러 + N단) + DRC, 레이아웃 기생 재시뮬, 엔드투엔드 풀플로우.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 6 · 공유 코어 -->
+  <section class="slide" data-t="공유 코어">
+    <div class="wrap">
+      <p class="eyebrow">연결점</p>
+      <h2>같은 재생 코어, 다른 임무</h2>
+      <div class="grid g2" style="align-items:center">
+        <div>
+          <p class="lead">비교기의 교차결합 래치와 LC-VCO의 −g<sub>m</sub> 쌍은
+            <span class="ink">동일한</span> 양의 피드백 구조입니다.</p>
+          <ul class="clean" style="margin-top:22px">
+            <li>비교기는 이걸로 <b>한 번 판정</b>한다 — 레일로 재생.</li>
+            <li>VCO는 같은 −g<sub>m</sub>으로 <b>계속 발진</b>한다 — 탱크 손실을 상쇄.</li>
+          </ul>
+        </div>
+        <svg viewBox="0 0 300 200" role="img" aria-label="교차결합 쌍">
+          <g stroke="#35d0c2" stroke-width="2" fill="none" font-family="ui-monospace,monospace">
+            <line x1="80" y1="30" x2="80" y2="170"/><line x1="220" y1="30" x2="220" y2="170"/>
+            <line x1="60" y1="70" x2="60" y2="130"/><line x1="240" y1="70" x2="240" y2="130"/>
+            <path d="M80 60 L150 60 L150 45 L220 45 L220 70" stroke="#8b7bff"/>
+            <path d="M220 140 L150 140 L150 155 L80 155 L80 130" stroke="#8b7bff"/>
+            <circle cx="80" cy="30" r="3" fill="#35d0c2"/><circle cx="220" cy="30" r="3" fill="#35d0c2"/>
+            <text x="55" y="24" fill="#57e0e0" font-size="12" text-anchor="end">out+</text>
+            <text x="245" y="24" fill="#57e0e0" font-size="12">out−</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 · 최적화 -->
+  <section class="slide" data-t="최적화기">
+    <div class="wrap">
+      <p class="eyebrow">최적화 알고리즘</p>
+      <h2>차분진화, 값싸게</h2>
+      <div class="grid g3">
+        <div class="card ag"><span class="tag">전역 탐색</span><h3>로그공간 DE</h3><p>소자 폭을 로그공간에서 탐색, 페널티 제약 하에 전력 최소화 — 그리디 하강보다 우수.</p></div>
+        <div class="card ag"><span class="tag">sim 절감</span><h3>GP 대리모델</h3><p>log(cost) 위의 가우시안 프로세스 모델이 확실히 나쁜 후보를 사전 차단 → <span class="accent-ag">SPICE 호출 ~35–45% 감소</span>.</p></div>
+        <div class="card ag"><span class="tag">트레이드오프</span><h3>NSGA-II 파레토</h3><p>Deb 제약지배 + 혼잡거리 → 도메인별 전력 ↔ 성능 프론트 전체.</p></div>
+      </div>
+      <p style="margin-top:22px">모든 후보 평가는 병렬로 실행되고, 승자는 전체 몬테카를로/튜닝 스윕으로 확인합니다.</p>
+    </div>
+  </section>
+
+  <!-- 8 · 위상잡음 -->
+  <section class="slide" data-t="위상잡음">
+    <div class="wrap">
+      <p class="eyebrow">심화 · VCO 위상잡음</p>
+      <h2>세 가지 관점 — 그리고 정직한 벽</h2>
+      <div class="grid g3">
+        <div class="card si"><span class="tag">해석</span><h3>열잡음 L(Δf)</h3><p>전이당 √(kT·C)/I → 1/f² 영역 + FoM; 가정 코너의 플리커 1/f³ 항.</p></div>
+        <div class="card si"><span class="tag">실측</span><h3>SPICE trnoise</h3><p>물리 소자 노이즈 주입, 4시드로 주기 지터 측정 → <span class="accent">~1 dB 이내 일치</span>.</p></div>
+        <div class="card si"><span class="tag">실측</span><h3>지터 슬로프</h3><p>σ<sub>Δt</sub>(τ) 누적 → 0.5=열잡음, 1.0=플리커. 열잡음 지배 확인.</p></div>
+      </div>
+      <p style="margin-top:22px"><span class="badge">정직한 범위</span>&nbsp; 브루트포스 트랜지언트는 오프셋을 ≈ f₀/N<sub>cycles</sub> 까지만 분해합니다 — 플리커 코너는 원리적으로 도달 불가이며 PSS/pnoise 엔진이 필요합니다. 도구가 그렇게 명시합니다.</p>
+    </div>
+  </section>
+
+  <!-- 9 · 성능 -->
+  <section class="slide" data-t="성능">
+    <div class="wrap">
+      <p class="eyebrow">엔지니어링 · 성능</p>
+      <h2>먼저 측정, 그다음 빠르게</h2>
+      <div class="grid g4">
+        <div class="metric"><span class="v good">48×</span><span class="l">sky130 sim · 19.3s → 0.40s</span></div>
+        <div class="metric"><span class="v good">4×</span><span class="l">트랜지언트 스텝 0.2p → 1p</span></div>
+        <div class="metric"><span class="v good">5–6×</span><span class="l">튜닝 / 푸싱 스윕 (병렬)</span></div>
+        <div class="metric"><span class="v good">22×</span><span class="l">몬테카를로 오프셋 (병렬+빠른 lib)</span></div>
+      </div>
+      <ul class="clean" style="margin-top:28px">
+        <li>프로파일링으로 근본원인 규명: sky130의 느림은 <b>프로세스마다 51개 PDK 코너를 재파싱</b>하던 것 — 한 코너로 트리밍 + 미사용 R/C 뱅크 제거(비트 동일).</li>
+        <li>ngspice subprocess가 GIL을 놓음 → DE · NSGA-II · PVT · 튜닝에 <b>ThreadPool 병렬화</b>.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- 10 · 엄정성 -->
+  <section class="slide" data-t="엄정성">
+    <div class="wrap">
+      <p class="eyebrow">엔지니어링 · 엄정성</p>
+      <h2>검증 · 리뷰 · 정직</h2>
+      <div class="grid g2">
+        <div class="card"><span class="tag">테스트</span><h3>39개 pytest 스위트</h3><p>SPICE 통합: 기능 · 판정 · τ · DRC clean · 최적화 수렴 · VCO 발진 + 위상잡음.</p></div>
+        <div class="card"><span class="tag">리뷰</span><h3>적대적 검토</h3><p>실제 버그 발견·수정 — 콜드캐시 lib 레이스, 부분 페이로드 KeyError, 0-나눗셈, sim 실패 클램핑.</p></div>
+        <div class="card"><span class="tag">정직</span><h3>가정을 라벨링</h3><p>해석 vs 실측, PTM vs 실제 PDK, PoC 레이아웃 vs 사인오프 DRC — 각각 명시, 과장 없음.</p></div>
+        <div class="card"><span class="tag">장인정신</span><h3>Virtuoso 스타일 UI</h3><p>Composer 회로도, Layout-XL 스티플, ViVA 파형; 페이지마다 초보자 도움말이 있는 한/영.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 · 마무리 -->
+  <section class="slide" data-t="마무리">
+    <div class="scan"><i></i></div>
+    <div class="wrap">
+      <p class="eyebrow">에이전트 기반으로 제작</p>
+      <h1 style="font-size:clamp(1.9rem,4.6vw,3.4rem)">비교기 하나에서<br>두 도메인 콘솔까지.</h1>
+      <p class="lead">ngspice 백엔드 · DE + GP + NSGA-II · PVT / 수율 / 위상잡음 · GDSII + DRC ·
+        React 콘솔 · MCP · 39 테스트 — branch → PR → merge 로 배포.</p>
+      <p class="foot" style="margin-top:40px">github.com/kos2001/strongarm-sizing-console &nbsp;·&nbsp; private &nbsp;·&nbsp; StrongARM 비교기 + 링 VCO</p>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  const deck=document.querySelector('.deck'), slides=[...document.querySelectorAll('.slide')];
+  const bar=document.getElementById('bar'), dots=document.getElementById('dots'), idx=document.getElementById('idx');
+  slides.forEach((s,i)=>{const a=document.createElement('a');a.title=s.dataset.t||('슬라이드 '+(i+1));
+    a.onclick=()=>s.scrollIntoView({behavior:'smooth'});dots.appendChild(a);});
+  const dotEls=[...dots.children];
+  function upd(){
+    const st=deck.scrollTop, h=deck.scrollHeight-deck.clientHeight;
+    bar.style.width=(h>0?st/h*100:0)+'%';
+    let cur=0, best=1e9;
+    slides.forEach((s,i)=>{const d=Math.abs(s.offsetTop-st); if(d<best){best=d;cur=i;}});
+    dotEls.forEach((d,i)=>d.classList.toggle('on',i===cur));
+    idx.textContent=String(cur+1).padStart(2,'0')+' / '+String(slides.length).padStart(2,'0');
+  }
+  deck.addEventListener('scroll',upd,{passive:true}); upd();
+  addEventListener('keydown',e=>{
+    let cur=0,best=1e9; slides.forEach((s,i)=>{const d=Math.abs(s.offsetTop-deck.scrollTop);if(d<best){best=d;cur=i;}});
+    if(['ArrowDown','PageDown',' '].includes(e.key)){e.preventDefault();slides[Math.min(cur+1,slides.length-1)].scrollIntoView({behavior:'smooth'});}
+    if(['ArrowUp','PageUp'].includes(e.key)){e.preventDefault();slides[Math.max(cur-1,0)].scrollIntoView({behavior:'smooth'});}
+  });
+</script>
