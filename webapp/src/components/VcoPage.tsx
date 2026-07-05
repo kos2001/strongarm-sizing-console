@@ -17,7 +17,7 @@ const VCO_DEFAULTS: VcoParams = {
 const DKEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
 
-export default function VcoPage({ lang, theme }: { lang: Lang; theme: string }) {
+export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: 'main' | 'opt' }) {
   const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
   const [res, setRes] = useState<VcoResult | null>(null)
   const [tuning, setTuning] = useState<VcoTuning | null>(null)
@@ -91,20 +91,23 @@ export default function VcoPage({ lang, theme }: { lang: Lang; theme: string }) 
         </div>
 
         <div className="flex flex-col gap-2">
-          <button onClick={run} disabled={busy} className="py-2.5 rounded-xl font-medium disabled:opacity-50"
-            style={{ background: 'var(--si)', color: 'var(--bg)' }}>
-            {running ? T(lang, '시뮬레이션 중…', 'simulating…') : T(lang, '▶ VCO 실행 (튜닝 포함)', '▶ Run VCO (with tuning)')}
-          </button>
-          <div className="flex gap-2 items-center rounded-xl p-2.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
-            <input type="number" step={0.1} min={0.1} disabled={busy} value={targetF}
-              onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
-            <span className="mono text-[11px]" style={lab}>GHz</span>
-            <button onClick={optimize} disabled={busy} className="ml-auto mono text-xs px-3 py-1.5 rounded-full disabled:opacity-50"
-              style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
-              {optimizing ? T(lang, '탐색 중…', 'searching…') : T(lang, '◴ 자동 최적화', '◴ Auto-size')}
+          {view === 'main' ? (
+            <button onClick={run} disabled={busy} className="py-2.5 rounded-xl font-medium disabled:opacity-50"
+              style={{ background: 'var(--ag)', color: 'var(--bg)' }}>
+              {running ? T(lang, '시뮬레이션 중…', 'simulating…') : T(lang, '▶ VCO 실행 (튜닝 포함)', '▶ Run VCO (with tuning)')}
             </button>
-          </div>
+          ) : (
+            <div className="flex gap-2 items-center rounded-xl p-2.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+              <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
+              <input type="number" step={0.1} min={0.1} disabled={busy} value={targetF}
+                onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
+              <span className="mono text-[11px]" style={lab}>GHz</span>
+              <button onClick={optimize} disabled={busy} className="ml-auto mono text-xs px-3 py-1.5 rounded-full disabled:opacity-50"
+                style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
+                {optimizing ? T(lang, '탐색 중…', 'searching…') : T(lang, '◴ 자동 최적화 실행', '◴ Run auto-size')}
+              </button>
+            </div>
+          )}
         </div>
       </section>
 

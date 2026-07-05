@@ -63,8 +63,9 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
   },
 ]
 
-type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'layout' | 'flow' | 'vco'
-const NAV: { id: Page; glyph: string }[] = [
+type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'layout' | 'flow' | 'vco' | 'vcoopt'
+type Domain = 'comparator' | 'vco'
+const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
   { id: 'sizing', glyph: '▦' },
   { id: 'circuit', glyph: '⎓' },
   { id: 'metastability', glyph: '⧗' },
@@ -78,8 +79,14 @@ const NAV: { id: Page; glyph: string }[] = [
   { id: 'yield', glyph: '⊞' },
   { id: 'layout', glyph: '▧' },
   { id: 'flow', glyph: '⇉' },
-  { id: 'vco', glyph: '∿' },
 ]
+const NAV_VCO: { id: Page; glyph: string }[] = [
+  { id: 'vco', glyph: '∿' },
+  { id: 'vcoopt', glyph: '◴' },
+]
+const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vco' }
+const DOMAIN_OF: Record<string, Domain> = { vco: 'vco', vcoopt: 'vco' }
+const domainOf = (p: Page): Domain => DOMAIN_OF[p] ?? 'comparator'
 
 interface HistoryItem {
   id: number
@@ -437,6 +444,9 @@ export default function App() {
   const allPass = result && !result.error && Object.values(result.verdicts).every((v) => v === true)
 
   const pageTitle = t(lang, NAV_LABELS[page])
+  const domain = domainOf(page)
+  const navList = domain === 'vco' ? NAV_VCO : NAV_COMPARATOR
+  const accent = domain === 'vco' ? 'var(--ag)' : 'var(--si)'      // VCO world reads in indigo, comparator in teal
   return (
     <div className="min-h-full flex">
       {/* SIDEBAR */}
@@ -450,17 +460,31 @@ export default function App() {
             <div className="mono text-[10px]" style={{ color: 'var(--faint)' }}>{t(lang, UI.appSub)}</div>
           </div>
         </div>
-        <nav className="flex flex-col gap-1 p-2">
-          {NAV.map((n) => {
+        {/* domain switch — Comparator vs VCO are two separate worlds */}
+        <div className="grid grid-cols-2 gap-1.5 p-2" style={{ borderBottom: '1px solid var(--line-soft)' }}>
+          {([['comparator', '⚖', 'var(--si)', UI.domainComparator], ['vco', '∿', 'var(--ag)', UI.domainVco]] as const).map(([d, glyph, col, label]) => {
+            const on = domain === d
+            return (
+              <button key={d} onClick={() => setPage(DOMAIN_HOME[d])}
+                className="flex flex-col items-center gap-0.5 py-2 rounded-lg transition-colors"
+                style={{ background: on ? `color-mix(in srgb, ${col} 16%, transparent)` : 'var(--surface)', border: `1px solid ${on ? col : 'var(--line)'}` }}>
+                <span className="text-base" style={{ color: on ? col : 'var(--faint)' }}>{glyph}</span>
+                <span className="mono text-[10px] tracking-wide" style={{ color: on ? 'var(--text)' : 'var(--muted)' }}>{t(lang, label)}</span>
+              </button>
+            )
+          })}
+        </div>
+        <nav className="flex flex-col gap-1 p-2 overflow-y-auto">
+          {navList.map((n) => {
             const on = page === n.id
             return (
               <button
                 key={n.id}
                 onClick={() => setPage(n.id)}
                 className="flex items-start gap-2.5 px-3 py-2 rounded-lg text-left"
-                style={{ background: on ? 'color-mix(in srgb, var(--si) 13%, transparent)' : 'transparent', border: `1px solid ${on ? 'color-mix(in srgb, var(--si) 35%, var(--line))' : 'transparent'}` }}
+                style={{ background: on ? `color-mix(in srgb, ${accent} 13%, transparent)` : 'transparent', border: `1px solid ${on ? `color-mix(in srgb, ${accent} 35%, var(--line))` : 'transparent'}` }}
               >
-                <span className="mono text-sm mt-0.5" style={{ color: on ? 'var(--si)' : 'var(--faint)' }}>{n.glyph}</span>
+                <span className="mono text-sm mt-0.5" style={{ color: on ? accent : 'var(--faint)' }}>{n.glyph}</span>
                 <span className="min-w-0">
                   <span className="block text-sm" style={{ color: on ? 'var(--text)' : 'var(--muted)' }}>{t(lang, NAV_LABELS[n.id])}</span>
                   <span className="block mono text-[10px]" style={{ color: 'var(--faint)' }}>{t(lang, NAV_SUBS[n.id])}</span>
@@ -1014,7 +1038,7 @@ export default function App() {
             </div>
           )}
 
-          {page === 'vco' && <VcoPage lang={lang} theme={theme} />}
+          {(page === 'vco' || page === 'vcoopt') && <VcoPage view={page === 'vcoopt' ? 'opt' : 'main'} lang={lang} theme={theme} />}
 
           {page === 'flow' && (
             <div className="flex flex-col gap-4">

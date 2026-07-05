@@ -19,7 +19,8 @@ export const NAV_LABELS: Record<string, Bi> = {
   yield: { ko: '수율', en: 'Yield' },
   layout: { ko: '레이아웃', en: 'Layout' },
   flow: { ko: '전체 흐름', en: 'Full flow' },
-  vco: { ko: 'VCO (링)', en: 'VCO (ring)' },
+  vco: { ko: '사이징 · 튜닝', en: 'Sizing · tuning' },
+  vcoopt: { ko: '자동 사이징', en: 'Auto-size' },
 }
 export const NAV_SUBS: Record<string, Bi> = {
   sizing: { ko: '소자 · 실행 · 스펙', en: 'devices · run · spec' },
@@ -35,7 +36,8 @@ export const NAV_SUBS: Record<string, Bi> = {
   yield: { ko: '미스매치 × PVT', en: 'mismatch × PVT' },
   layout: { ko: 'GDS + DRC', en: 'GDS + DRC' },
   flow: { ko: '크기→PVT→GDS', en: 'size → PVT → GDS' },
-  vco: { ko: '발진 · 튜닝 · 자동사이징', en: 'oscillate · tune · auto-size' },
+  vco: { ko: '발진 · 튜닝 곡선', en: 'oscillate · tuning curve' },
+  vcoopt: { ko: '목표 f로 소자 최적화', en: 'size to target f' },
 }
 
 // Beginner-friendly "what does this page do?" explanation. `what` = plain-language
@@ -177,8 +179,18 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
       en: 'A voltage-controlled oscillator built from pure MOSFETs — a current-starved ring oscillator. An odd number of inverters in a loop oscillates continuously, and the control voltage V_ctrl adjusts the current to change frequency. Same SPICE + optimization loop as the comparator.',
     },
     read: {
-      ko: '실행하면 발진 주파수·전력과 튜닝 곡선(f vs V_ctrl)이 나옵니다. 곡선의 기울기가 Kvco. "자동 최적화"는 목표 주파수를 만족하면서 전력을 최소화하도록 소자 크기를 차분진화로 찾습니다. × 표시는 그 전압에서 발진하지 않음.',
-      en: 'Running shows the oscillation frequency, power, and the tuning curve (f vs V_ctrl) — the curve slope is Kvco. "Auto-size" runs Differential Evolution to size the devices to hit a target frequency at minimum power. An × marks a voltage where it does not oscillate.',
+      ko: '실행하면 발진 주파수·전력과 튜닝 곡선(f vs V_ctrl)이 나옵니다. 곡선의 기울기가 Kvco. × 표시는 그 전압에서 발진하지 않음. (목표 주파수 자동 사이징은 "자동 사이징" 페이지에서.)',
+      en: 'Running shows the oscillation frequency, power, and the tuning curve (f vs V_ctrl) — the curve slope is Kvco. An × marks a voltage where it does not oscillate. (Target-frequency auto-sizing lives on the "Auto-size" page.)',
+    },
+  },
+  vcoopt: {
+    what: {
+      ko: '목표 발진 주파수를 입력하면, 그 주파수를 만족하면서 전력을 최소화하도록 4개 소자군(코어 Mp/Mn, 스타빙 Mbp/Mbn)의 크기를 차분진화(DE)로 자동 탐색합니다. 비교기의 "자동 최적화"와 동일한 방식입니다.',
+      en: 'Enter a target oscillation frequency and Differential Evolution auto-sizes the four device groups (core Mp/Mn, starve Mbp/Mbn) to hit it at minimum power — the same method as the comparator\'s auto-find.',
+    },
+    read: {
+      ko: '탐색이 끝나면 결과가 편집기에 적용되고, 달성 주파수·전력·발진 여부와 갱신된 튜닝 곡선이 나옵니다. ✓ = 목표 ±10% 이내.',
+      en: 'When the search finishes, the result is applied to the editor and you see the achieved frequency, power, oscillation status, and the updated tuning curve. ✓ = within ±10% of target.',
     },
   },
 }
@@ -203,4 +215,6 @@ export const UI = {
   report: { ko: '리포트', en: 'report' },
   whatIsThis: { ko: '이 페이지는?', en: 'What is this?' },
   howToRead: { ko: '읽는 법', en: 'How to read it' },
+  domainComparator: { ko: '비교기', en: 'Comparator' },
+  domainVco: { ko: 'VCO', en: 'VCO' },
 }
