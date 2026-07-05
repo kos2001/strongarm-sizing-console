@@ -1,4 +1,4 @@
-import type { BerResult, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, Waveform, YieldResult } from './types'
+import type { BerResult, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoOptimizeResult, VcoParams, VcoResult, VcoTuning, Waveform, YieldResult } from './types'
 
 async function post<T>(path: string, params: Params): Promise<T> {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
@@ -8,6 +8,19 @@ export const metastability = (params: Params) => post<MetastabilityResult>('/api
 export const ber = (params: Params) => post<BerResult>('/api/ber', params)
 export const sensitivity = (params: Params) => post<SensitivityResult>('/api/sensitivity', params)
 export const maxfclk = (params: Params) => post<MaxFclkResult>('/api/maxfclk', params)
+
+export async function vcoSimulate(params: VcoParams, doTuning = false): Promise<VcoResult> {
+  const r = await fetch('/api/vco/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, do_tuning: doTuning }) })
+  return r.json()
+}
+export async function vcoTuning(params: VcoParams): Promise<VcoTuning> {
+  const r = await fetch('/api/vco/tuning', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
+  return r.json()
+}
+export async function vcoOptimize(params: VcoParams, targetFGhz: number): Promise<VcoOptimizeResult> {
+  const r = await fetch('/api/vco/optimize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, targets: { f_ghz: targetFGhz } }) })
+  return r.json()
+}
 export async function yieldRun(params: Params, targets: Record<string, number>, n = 48): Promise<YieldResult> {
   const r = await fetch('/api/yield', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, targets, n }) })
   return r.json()

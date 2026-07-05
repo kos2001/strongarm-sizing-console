@@ -13,6 +13,7 @@ import ParetoChart from './components/ParetoChart'
 import PageHelp from './components/PageHelp'
 import Schematic from './components/Schematic'
 import SensitivityChart from './components/SensitivityChart'
+import VcoPage from './components/VcoPage'
 import WaveformChart from './components/WaveformChart'
 import YieldView from './components/YieldView'
 import { NAV_LABELS, NAV_SUBS, t, UI, type Lang } from './i18n'
@@ -62,21 +63,22 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
   },
 ]
 
-type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'layout' | 'flow'
-const NAV: { id: Page; label: string; glyph: string; sub: string }[] = [
-  { id: 'sizing', label: 'Sizing', glyph: '▦', sub: 'devices · run · spec' },
-  { id: 'circuit', label: 'Circuit', glyph: '⎓', sub: 'schematic · transient' },
-  { id: 'metastability', label: 'Metastability', glyph: '⧗', sub: 'resolve time vs Vin · τ' },
-  { id: 'maxfclk', label: 'Max f_clk', glyph: '⎍', sub: 'clock rate · energy/conv' },
-  { id: 'optimizer', label: 'Optimizer', glyph: '◴', sub: 'DE + GP surrogate' },
-  { id: 'sensitivity', label: 'Sensitivity', glyph: '⇕', sub: 'device levers' },
-  { id: 'pareto', label: 'Pareto', glyph: '⤢', sub: 'power ↔ speed (NSGA-II)' },
-  { id: 'montecarlo', label: 'Monte-Carlo', glyph: '∿', sub: 'offset distribution' },
-  { id: 'ber', label: 'Noise / BER', glyph: '⊹', sub: 'error rate vs Vin' },
-  { id: 'pvt', label: 'PVT corners', glyph: '◫', sub: 'process · voltage · temp' },
-  { id: 'yield', label: 'Yield', glyph: '⊞', sub: 'mismatch × PVT' },
-  { id: 'layout', label: 'Layout', glyph: '▧', sub: 'GDS + DRC' },
-  { id: 'flow', label: 'Full flow', glyph: '⇉', sub: 'size → PVT → GDS' },
+type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'layout' | 'flow' | 'vco'
+const NAV: { id: Page; glyph: string }[] = [
+  { id: 'sizing', glyph: '▦' },
+  { id: 'circuit', glyph: '⎓' },
+  { id: 'metastability', glyph: '⧗' },
+  { id: 'maxfclk', glyph: '⎍' },
+  { id: 'optimizer', glyph: '◴' },
+  { id: 'sensitivity', glyph: '⇕' },
+  { id: 'pareto', glyph: '⤢' },
+  { id: 'montecarlo', glyph: '∿' },
+  { id: 'ber', glyph: '⊹' },
+  { id: 'pvt', glyph: '◫' },
+  { id: 'yield', glyph: '⊞' },
+  { id: 'layout', glyph: '▧' },
+  { id: 'flow', glyph: '⇉' },
+  { id: 'vco', glyph: '∿' },
 ]
 
 interface HistoryItem {
@@ -1011,6 +1013,8 @@ export default function App() {
               )}
             </div>
           )}
+
+          {page === 'vco' && <VcoPage lang={lang} theme={theme} />}
 
           {page === 'flow' && (
             <div className="flex flex-col gap-4">

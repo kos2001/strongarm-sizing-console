@@ -38,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 import run_sim  # noqa: E402
 import layout  # noqa: E402
+import vco_sim  # noqa: E402
 
 def _arg_port(default=8770):
     if len(sys.argv) > 1:
@@ -471,6 +472,94 @@ def parametric_yield(base, targets, n=48, seed=11):
             "targets": {"decision_time_ps": dec_t, "offset_mv": off_t}}
 
 
+def optimize_vco(base, targets, pop=12, gens=7, seed=41):
+    """Size the ring VCO's four device groups (log-space Differential Evolution)
+    to hit a target oscillation frequency at the nominal V_ctrl while minimizing
+    power — the same simulate->evaluate->optimize loop used for the comparator.
+    Objective: minimize power_uw + penalty(|f-f_target|) + big penalty if it does
+    not oscillate. The winner is re-characterized with a full V_ctrl tuning sweep."""
+    import random
+    rng = random.Random(seed)
+    f_t = float(targets.get("f_ghz", 1.5))
+    LO, HI = math.log10(0.5), math.log10(40.0)
+    keys = vco_sim.DEV_KEYS
+
+    def make(x):
+        p = copy.deepcopy(base)
+        for i, k in enumerate(keys):
+            p["devices"][k]["w_um"] = round(10 ** x[i], 2)
+        return p
+
+    cache, n_sims = {}, [0]
+
+    def _eval_raw(x):
+        p = make(x)
+        m = vco_sim.measure_vco(p)
+        f, pw, osc = m["f_osc_ghz"], m["power_uw"] or 1e6, m["oscillates"]
+        cost = pw
+        if not osc or f is None:
+            cost += 1e6
+        else:
+            df = abs(f - f_t) / f_t                       # frequency-match penalty:
+            cost += 20000.0 * df + 60000.0 * df * df      # steep so f is hit, then min power
+        return {"cost": cost, "x": list(x), "p": p, "m": m}
+
+    def evaluate_many(xs):
+        res = [None] * len(xs)
+        todo = []
+        for i, x in enumerate(xs):
+            hit = cache.get(tuple(round(v, 3) for v in x))
+            if hit is not None:
+                res[i] = hit
+            else:
+                todo.append(i)
+        for i, out in zip(todo, _pmap(_eval_raw, [xs[i] for i in todo])):
+            cache[tuple(round(v, 3) for v in out["x"])] = out
+            n_sims[0] += 1
+            res[i] = out
+        return res
+
+    base_x = [max(LO, min(HI, math.log10(base["devices"][k]["w_um"]))) for k in keys]
+    pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in keys] for _ in range(pop - 1)]
+    pop_e = evaluate_many(pop_x)
+    traj = []
+
+    def record(gen):
+        e = min(pop_e, key=lambda z: z["cost"])
+        m = e["m"]
+        traj.append({"action": f"DE gen {gen}: {m['f_osc_ghz']}GHz, {m['power_uw']}µW"
+                                + ("" if m["oscillates"] else " (no osc)"),
+                     "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
+                     "oscillates": m["oscillates"], "params": copy.deepcopy(e["p"]["devices"])})
+
+    record(0)
+    F, CR = 0.6, 0.9
+    for g in range(1, gens + 1):
+        trials = []
+        for i in range(pop):
+            a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
+            jr = rng.randrange(len(keys))
+            trial = [max(LO, min(HI, pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j]))) if (rng.random() < CR or j == jr) else pop_x[i][j]
+                     for j in range(len(keys))]
+            trials.append((i, trial))
+        for (i, trial), te in zip(trials, evaluate_many([t for _, t in trials])):
+            if te["cost"] <= pop_e[i]["cost"]:
+                pop_x[i], pop_e[i] = trial, te
+        record(g)
+
+    best = min(pop_e, key=lambda z: z["cost"])
+    fin = best["p"]
+    tuning = vco_sim.vco_tuning(fin)
+    m = best["m"]
+    success = bool(m["oscillates"] and m["f_osc_ghz"] is not None
+                   and abs(m["f_osc_ghz"] - f_t) / f_t <= 0.1)
+    traj.append({"action": f"confirm + tuning sweep · {n_sims[0]} SPICE evals",
+                 "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
+                 "oscillates": m["oscillates"], "params": copy.deepcopy(fin["devices"])})
+    return {"trajectory": traj, "final_params": fin, "nominal": m, "tuning": tuning,
+            "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0]}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -572,6 +661,17 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/maxfclk":
                 payload = self._read_json()
                 self._json(run_sim.max_fclk_sweep(payload.get("params", {})))
+            elif self.path == "/api/vco/simulate":
+                payload = self._read_json()
+                self._json(vco_sim.run_vco(payload.get("params", {}),
+                                           do_tuning=bool(payload.get("do_tuning", False))))
+            elif self.path == "/api/vco/tuning":
+                payload = self._read_json()
+                self._json(vco_sim.vco_tuning(payload.get("params", {})))
+            elif self.path == "/api/vco/optimize":
+                payload = self._read_json()
+                base = vco_sim._full(payload.get("params", {}))
+                self._json(optimize_vco(base, payload.get("targets") or {"f_ghz": 1.5}))
             elif self.path == "/api/yield":
                 payload = self._read_json()
                 targets = payload.get("targets") or {k: s["limit"] for k, s in SPEC_TARGETS.items()}

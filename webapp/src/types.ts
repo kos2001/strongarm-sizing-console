@@ -189,6 +189,51 @@ export interface OptimizeResult {
   error?: string
 }
 
+// ---- MOSFET ring VCO ----
+export type VcoDeviceKey = 'invp' | 'invn' | 'starvep' | 'starven'
+export interface VcoParams {
+  vdd: number
+  vctrl: number
+  n_stages: number
+  cload_ff: number
+  devices: Record<VcoDeviceKey, Device>
+}
+export interface VcoNominal {
+  f_osc_ghz: number | null
+  oscillates: boolean
+  power_uw: number | null
+  vpp_v: number | null
+  n_stages: number
+  vctrl_v: number
+}
+export interface VcoTuningPoint { vctrl_v: number; f_osc_ghz: number | null; power_uw: number | null; oscillates: boolean }
+export interface VcoTuning {
+  points: VcoTuningPoint[]
+  f_min_ghz: number | null
+  f_max_ghz: number | null
+  tuning_pct: number | null
+  kvco_ghz_per_v: number | null
+  center_ghz: number | null
+}
+export interface VcoResult { nominal: VcoNominal; tuning?: VcoTuning; params?: VcoParams; error?: string }
+export interface VcoOptStep { action: string; f_osc_ghz: number | null; power_uw: number | null; oscillates: boolean; params: Record<VcoDeviceKey, Device> }
+export interface VcoOptimizeResult {
+  trajectory: VcoOptStep[]
+  final_params: VcoParams
+  nominal: VcoNominal
+  tuning: VcoTuning
+  success: boolean
+  target_f_ghz: number
+  n_sims: number
+  error?: string
+}
+export const VCO_DEVICE_META: Record<VcoDeviceKey, { name: string; role: { ko: string; en: string } }> = {
+  invp: { name: 'Mp', role: { ko: '코어 PMOS — 상승', en: 'core PMOS — pull-up' } },
+  invn: { name: 'Mn', role: { ko: '코어 NMOS — 하강', en: 'core NMOS — pull-down' } },
+  starvep: { name: 'Mbp', role: { ko: 'PMOS 전류 스타빙', en: 'PMOS current-starve' } },
+  starven: { name: 'Mbn', role: { ko: 'NMOS 전류 스타빙 (V_ctrl)', en: 'NMOS current-starve (V_ctrl)' } },
+}
+
 export const DEVICE_META: Record<DeviceKey, { name: string; role: string; world: 'si' | 'ag' }> = {
   input: { name: 'Mn1 / Mn2', role: 'input pair — offset & noise', world: 'si' },
   tail: { name: 'Mtail', role: 'tail switch — speed', world: 'si' },

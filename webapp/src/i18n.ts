@@ -19,6 +19,7 @@ export const NAV_LABELS: Record<string, Bi> = {
   yield: { ko: '수율', en: 'Yield' },
   layout: { ko: '레이아웃', en: 'Layout' },
   flow: { ko: '전체 흐름', en: 'Full flow' },
+  vco: { ko: 'VCO (링)', en: 'VCO (ring)' },
 }
 export const NAV_SUBS: Record<string, Bi> = {
   sizing: { ko: '소자 · 실행 · 스펙', en: 'devices · run · spec' },
@@ -34,6 +35,7 @@ export const NAV_SUBS: Record<string, Bi> = {
   yield: { ko: '미스매치 × PVT', en: 'mismatch × PVT' },
   layout: { ko: 'GDS + DRC', en: 'GDS + DRC' },
   flow: { ko: '크기→PVT→GDS', en: 'size → PVT → GDS' },
+  vco: { ko: '발진 · 튜닝 · 자동사이징', en: 'oscillate · tune · auto-size' },
 }
 
 // Beginner-friendly "what does this page do?" explanation. `what` = plain-language
@@ -167,6 +169,16 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
     read: {
       ko: '각 단계마다 통과/실패가 표시되고, 마지막에 전체 사인오프 여부와 생성된 레이아웃이 나옵니다. 초보자가 "설계가 어떤 단계를 거치는지" 한눈에 보기 좋아요.',
       en: 'Each stage shows a pass/fail, and the end shows the overall sign-off verdict plus the generated layout. A good way for a beginner to see the stages a design goes through.',
+    },
+  },
+  vco: {
+    what: {
+      ko: '순수 MOSFET로 만든 전압제어발진기(VCO) — current-starved 링 오실레이터입니다. 홀수 개 인버터를 고리로 연결해 계속 발진하고, 제어전압 V_ctrl이 전류를 조절해 주파수를 바꿉니다. 비교기와 똑같은 SPICE·최적화 흐름을 씁니다.',
+      en: 'A voltage-controlled oscillator built from pure MOSFETs — a current-starved ring oscillator. An odd number of inverters in a loop oscillates continuously, and the control voltage V_ctrl adjusts the current to change frequency. Same SPICE + optimization loop as the comparator.',
+    },
+    read: {
+      ko: '실행하면 발진 주파수·전력과 튜닝 곡선(f vs V_ctrl)이 나옵니다. 곡선의 기울기가 Kvco. "자동 최적화"는 목표 주파수를 만족하면서 전력을 최소화하도록 소자 크기를 차분진화로 찾습니다. × 표시는 그 전압에서 발진하지 않음.',
+      en: 'Running shows the oscillation frequency, power, and the tuning curve (f vs V_ctrl) — the curve slope is Kvco. "Auto-size" runs Differential Evolution to size the devices to hit a target frequency at minimum power. An × marks a voltage where it does not oscillate.',
     },
   },
 }

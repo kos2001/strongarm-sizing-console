@@ -9,6 +9,7 @@ real ngspice.
 | File | Purpose |
 |------|---------|
 | `run_sim.py` | Core `run_sim(params) → measurements` wrapper. Generates a parameterized StrongARM netlist, runs ngspice in batch, returns JSON metrics. CLI + importable. |
+| `vco_sim.py` | MOSFET **current-starved ring VCO** backend, sharing the same ngspice plumbing: `measure_vco` (osc. frequency / power / does-it-oscillate), `vco_tuning` (f vs V_ctrl → range, Kvco). Same simulate→evaluate→optimize loop as the comparator. |
 | `mcp_server.py` | Minimal dependency-free MCP stdio server exposing `run_sim` as a native tool (`strongarm_run_sim`) for future-session agents. |
 | `models/ptm_45nm_bulk.txt` | Real BSIM4 (level=54) device model — PTM 45 nm bulk (`nmos`/`pmos`). |
 | `README.md` | This file. |
@@ -162,6 +163,33 @@ To use a **specific foundry PDK** (e.g. SkyWater sky130) instead, point
 
 Everything else — netlist topology, measurement setup, the agent loop — stays
 the same. Also update the Pelgrom `avt_mv_um` to the PDK's value.
+
+## MOSFET ring VCO (same optimization loop)
+
+Beyond the comparator, the tool now sizes a **pure-MOSFET current-starved ring
+VCO** with the identical simulate→evaluate→optimize flow (`vco_sim.py`, VCO page
+in the frontend, `/api/vco/*`):
+
+- **Topology** — N odd current-starved CMOS inverter stages in a ring; V_ctrl
+  sets the tail current (NMOS ref mirrored to a diode PMOS → vbp), hence the
+  per-stage delay `t_d ≈ C_L·VDD/I_D` and frequency `f = 1/(2N·t_d)`.
+- **Metrics** — `measure_vco`: oscillation frequency, does-it-oscillate, power,
+  swing. `vco_tuning`: sweeps V_ctrl → tuning range %, Kvco (GHz/V), center.
+- **Auto-size** — `optimize_vco` (log-space Differential Evolution + `_pmap`
+  parallelism) sizes the four device groups (core Mp/Mn, starve Mbp/Mbn) to hit
+  a **target frequency** at minimum power, subject to must-oscillate. On the PTM
+  seed it tunes ~0.57–2.24 GHz (≈119 %, Kvco ≈2.75 GHz/V) and hits a 2.0 GHz
+  target within a few percent.
+
+```bash
+python3 vco_sim.py            # nominal: f_osc / oscillates / power
+python3 vco_sim.py --tune     # V_ctrl tuning sweep -> range, Kvco
+```
+
+> The VCO's cross-region is conceptually the flip side of the comparator: both
+> lean on regenerative CMOS feedback — the comparator *decides once*, the VCO
+> *oscillates forever*. (LC-VCO's cross-coupled −gm core is literally the
+> StrongARM latch structure.)
 
 ## Extension points (documented, not stubbed)
 
