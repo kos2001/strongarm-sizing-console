@@ -71,6 +71,14 @@
   .foot{font-family:var(--mono);font-size:.72rem;color:var(--faint);letter-spacing:.05em}
   .badge{display:inline-block;font-family:var(--mono);font-size:.66rem;letter-spacing:.08em;
     padding:3px 9px;border-radius:20px;border:1px solid var(--line2);color:var(--dim)}
+  ol.tl{list-style:none;padding:0;margin:10px 0 0;display:flex;flex-direction:column;gap:13px}
+  ol.tl li{display:grid;grid-template-columns:40px 1fr;gap:14px;align-items:baseline;
+    padding-bottom:13px;border-bottom:1px solid var(--line)}
+  ol.tl li:last-child{border-bottom:none}
+  ol.tl .n{font-family:var(--mono);font-size:.82rem;color:var(--si);font-weight:700}
+  ol.tl .t{color:var(--ink);font-weight:650;font-size:1.02rem}
+  ol.tl .d{color:var(--dim);font-size:.92rem;margin-left:8px}
+  @media(max-width:640px){ol.tl li{grid-template-columns:30px 1fr}ol.tl .d{display:block;margin:2px 0 0}}
   svg{display:block;max-width:100%}
 </style>
 
@@ -271,7 +279,24 @@
     </div>
   </section>
 
-  <!-- 11 · 마무리 -->
+  <!-- 11 · 타임라인 -->
+  <section class="slide" data-t="타임라인">
+    <div class="wrap">
+      <p class="eyebrow">어떻게 자랐나 · 이번 빌드</p>
+      <h2>백엔드 → 두 도메인 콘솔, 단계적으로</h2>
+      <ol class="tl">
+        <li><span class="n">01</span><span><span class="t">비교기 코어</span><span class="d">— ngspice 백엔드 + 사이징 콘솔, 스펙 게이지·프리셋.</span></span></li>
+        <li><span class="n">02</span><span><span class="t">특성화 + 최적화</span><span class="d">— 메타안정성·f_clk·몬테카를로·BER·PVT·수율; DE + GP, NSGA-II.</span></span></li>
+        <li><span class="n">03</span><span><span class="t">레이아웃 &amp; 사인오프</span><span class="d">— GDSII + 규칙 DRC, 기생 추출, 엔드투엔드 풀플로우.</span></span></li>
+        <li><span class="n">04</span><span><span class="t">콘솔 완성도</span><span class="d">— 한/영 i18n + 초보자 도움말, Virtuoso 스타일 뷰, 스펙 프로파일, 리포트 내보내기, 스크롤 수정.</span></span></li>
+        <li><span class="n">05</span><span><span class="t">더 빠르고 안전하게</span><span class="d">— sky130 48× + 병렬화; 적대적 리뷰 + 수정; 39개 테스트 스위트.</span></span></li>
+        <li><span class="n">06</span><span><span class="t">VCO 도메인</span><span class="d">— 링 오실레이터: 튜닝/Kvco, DE+GP 자동사이징, NSGA-II 파레토, 푸싱, 레이아웃, 풀플로우.</span></span></li>
+        <li><span class="n">07</span><span><span class="t">위상잡음 &amp; 배포</span><span class="d">— 해석 + trnoise + 지터 슬로프; 비교기/VCO 도메인 분리; 영/한 덱을 branch → PR → merge로.</span></span></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 12 · 마무리 -->
   <section class="slide" data-t="마무리">
     <div class="scan"><i></i></div>
     <div class="wrap">
