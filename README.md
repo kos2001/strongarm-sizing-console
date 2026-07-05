@@ -168,10 +168,10 @@ the same. Also update the Pelgrom `avt_mv_um` to the PDK's value.
 
 Beyond the comparator, the tool sizes a **pure-MOSFET current-starved ring VCO**
 with the identical algorithm + flow depth. Its own **VCO domain** in the frontend
-mirrors the comparator's 8 pages — Circuit·waveform / Sizing·tuning / Auto-size
-(DE + GP surrogate) / **Pareto (NSGA-II, power↔frequency)** / PVT corners /
-Supply pushing / **Layout (GDSII + DRC)** / **Full flow** (`vco_sim.py`,
-`layout.generate_vco_layout`, `/api/vco/*`):
+has 9 pages — Circuit·waveform / Sizing·tuning / Auto-size (DE + GP surrogate) /
+**Pareto (NSGA-II, power↔frequency)** / **Phase noise (L(Δf) · jitter · FoM)** /
+PVT corners / Supply pushing / **Layout (GDSII + DRC)** / **Full flow**
+(`vco_sim.py`, `layout.generate_vco_layout`, `/api/vco/*`):
 
 - **Topology** — N odd current-starved CMOS inverter stages in a ring; V_ctrl
   sets the tail current (NMOS ref mirrored to a diode PMOS → vbp), hence the
@@ -190,6 +190,11 @@ Supply pushing / **Layout (GDSII + DRC)** / **Full flow** (`vco_sim.py`,
   GDSII (bias mirror + N stages, multi-finger MOS + guard ring) with rule DRC;
   `layout.extract_vco_parasitics` derives per-ring-node C from the drawn
   geometry, and the post-layout re-sim shows the frequency drop (~5%).
+- **Phase noise / jitter** — `phase_noise` gives a first-order thermal estimate:
+  each stage transition jitters by √(kT·C)/I, 2N per period accumulate →
+  L(Δf) = 10log₁₀(f₀³·σ_T²/Δf²) (the −20 dB/dec 1/f² region), plus period jitter
+  and the VCO FoM. Uses the frequency-consistent node cap C = I·t_d/VDD, so no
+  extra guess. Thermal-only, not a PSS/pnoise sign-off.
 - **Full flow** — `vco_fullflow` chains auto-size → post-layout re-sim → PVT
   sign-off → layout/DRC, mirroring the comparator's end-to-end flow.
 

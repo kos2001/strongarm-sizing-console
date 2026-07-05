@@ -228,6 +228,44 @@ def vco_pushing(params, points=7, span=0.15):
             "pushing_ghz_per_v": round(push, 3) if push is not None else None}
 
 
+def phase_noise(params, offsets_hz=None):
+    """First-order thermal phase-noise / jitter estimate for the ring VCO.
+
+    Each stage transition crosses threshold with timing uncertainty
+    sigma_t = sqrt(kT*C)/I (thermal noise / slew rate); 2N uncorrelated
+    transitions per period give period jitter sigma_T = sqrt(2N)*sigma_t. The
+    single-sideband phase noise follows L(Δf) = 10log10(f0^3 * sigma_T^2 / Δf^2)
+    (white-noise / 1-f^2 region). The effective node cap is derived self-
+    consistently from the measured frequency (C = I*t_d/VDD, t_d = 1/(2N*f0)),
+    so it needs no extra guess. Thermal-only, first-order — not a PSS/pnoise
+    sign-off, but tracks the right dependence on power, f0 and N."""
+    p = _full(params)
+    m = measure_vco(p)
+    f0g, pw = m["f_osc_ghz"], m["power_uw"]
+    if not (m["oscillates"] and f0g and pw):
+        return {"error": "no oscillation", "nominal": m}
+    f0 = f0g * 1e9
+    P = pw * 1e-6
+    N = int(p["n_stages"])
+    vdd = p["vdd"]
+    kT = 1.380649e-23 * (p.get("temp", 27) + 273.15)
+    i_stage = (P / vdd) / N                      # avg per-stage current
+    t_d = 1.0 / (2 * N * f0)                      # per-stage delay
+    c_eff = i_stage * t_d / vdd                   # node cap consistent with f0
+    sigma_t = math.sqrt(kT * c_eff) / i_stage     # per-edge timing jitter (s)
+    sigma_T = math.sqrt(2 * N) * sigma_t          # per-period jitter (s)
+    if offsets_hz is None:
+        offsets_hz = [1e4 * (10 ** (i / 2.0)) for i in range(0, 9)]   # 10 kHz .. 100 MHz
+    def _L(fo):
+        return 10.0 * math.log10(f0 ** 3 * sigma_T ** 2 / fo ** 2)
+    pts = [{"offset_hz": round(fo), "L_dbc": round(_L(fo), 1)} for fo in offsets_hz]
+    L_1m = _L(1e6)
+    fom = L_1m - 20 * math.log10(f0 / 1e6) + 10 * math.log10(P * 1e3)   # P in mW
+    return {"f0_ghz": round(f0 / 1e9, 4), "power_uw": round(pw, 2), "n_stages": N,
+            "period_jitter_fs": round(sigma_T * 1e15, 2), "c_eff_ff": round(c_eff * 1e15, 3),
+            "points": pts, "L_1mhz_dbc": round(L_1m, 1), "fom_db": round(fom, 1)}
+
+
 def run_vco(params, do_tuning=False):
     p = _full(params)
     r = {"nominal": measure_vco(params), "params": p}

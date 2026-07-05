@@ -77,6 +77,20 @@ def test_vco_layout_and_parasitics():
     assert pl < base
 
 
+def test_vco_phase_noise():
+    r = vco_sim.phase_noise({})
+    assert "error" not in r
+    assert r["period_jitter_fs"] > 0 and r["c_eff_ff"] > 0
+    assert -130 < r["L_1mhz_dbc"] < -70          # plausible ring-VCO range @1MHz
+    # 1/f^2 region: ~ -20 dB per decade of offset
+    pts = sorted(r["points"], key=lambda p: p["offset_hz"])
+    lo, hi = pts[0], pts[-1]
+    import math as _m
+    decades = _m.log10(hi["offset_hz"] / lo["offset_hz"])
+    slope = (hi["L_dbc"] - lo["L_dbc"]) / decades
+    assert -22 < slope < -18
+
+
 def test_vco_pareto_front():
     r = server.optimize_vco_pareto(vco_sim._full({}), pop=10, gens=3)
     assert len(r["front"]) >= 3

@@ -23,6 +23,7 @@ export const NAV_LABELS: Record<string, Bi> = {
   vco: { ko: '사이징 · 튜닝', en: 'Sizing · tuning' },
   vcoopt: { ko: '자동 사이징', en: 'Auto-size' },
   vcopareto: { ko: '파레토', en: 'Pareto' },
+  vcopn: { ko: '위상잡음', en: 'Phase noise' },
   vcopvt: { ko: 'PVT 코너', en: 'PVT corners' },
   vcopushing: { ko: '전원 푸싱', en: 'Supply pushing' },
   vcolayout: { ko: '레이아웃', en: 'Layout' },
@@ -46,6 +47,7 @@ export const NAV_SUBS: Record<string, Bi> = {
   vco: { ko: '발진 · 튜닝 곡선', en: 'oscillate · tuning curve' },
   vcoopt: { ko: '목표 f로 소자 최적화', en: 'size to target f' },
   vcopareto: { ko: '전력 ↔ 주파수 (NSGA-II)', en: 'power ↔ freq (NSGA-II)' },
+  vcopn: { ko: 'L(Δf) · 지터 · FoM', en: 'L(Δf) · jitter · FoM' },
   vcopvt: { ko: '공정 · 전압 · 온도', en: 'process · voltage · temp' },
   vcopushing: { ko: 'f vs VDD · GHz/V', en: 'f vs VDD · GHz/V' },
   vcolayout: { ko: 'GDS + DRC', en: 'GDS + DRC' },
@@ -213,6 +215,16 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
     read: {
       ko: '↻ 파형을 누르면 두 링 노드(o1·o2)의 실제 트랜지언트가 그려집니다 — 서로 지연된 위상으로 계속 진동. 회로도의 W×M은 현재 크기를 반영합니다.',
       en: 'Press ↻ waveform to plot the real transient of two ring nodes (o1·o2) — continuously oscillating at phase-shifted delays. The schematic W×M reflects the current sizing.',
+    },
+  },
+  vcopn: {
+    what: {
+      ko: 'VCO의 가장 중요한 스펙 — 위상잡음 L(Δf)과 지터를 추정합니다. 각 인버터 전이가 열잡음(sqrt(kT·C)/기울기)만큼 시간축에서 흔들리고, 이것이 주파수로 접혀 위상잡음이 됩니다.',
+      en: 'The most important VCO spec — phase noise L(Δf) and jitter. Each inverter transition jitters in time by the thermal noise / slew rate, which folds into frequency as phase noise.',
+    },
+    read: {
+      ko: '곡선은 오프셋 주파수(Δf)에 대한 위상잡음(dBc/Hz)으로, −20dB/decade(1/f²) 열잡음 영역입니다. 낮을수록 좋음. FoM은 전력·주파수까지 묶은 종합 지표(작을수록 우수). 전력을 키우거나 단수를 조절하면 개선됩니다. 1차 열잡음 추정(PSS/pnoise 사인오프 아님).',
+      en: 'The curve is phase noise (dBc/Hz) vs offset Δf — the −20 dB/decade (1/f²) thermal region; lower is better. FoM rolls in power + frequency (more negative is better). Raising power or tuning the stage count improves it. First-order thermal estimate (not a PSS/pnoise sign-off).',
     },
   },
   vcopvt: {

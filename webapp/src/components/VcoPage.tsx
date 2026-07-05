@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform } from '../types'
+import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform } from '../types'
 import { VCO_DEVICE_META } from '../types'
-import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform } from '../api'
+import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform } from '../api'
+import VcoPhaseNoiseChart from './VcoPhaseNoiseChart'
 import TuningChart from './TuningChart'
 import VcoSchematic from './VcoSchematic'
 import VcoWaveformChart from './VcoWaveformChart'
@@ -20,7 +21,7 @@ const VCO_DEFAULTS: VcoParams = {
 }
 const DKEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
-type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow'
+type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn'
 
 export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: View }) {
   const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
@@ -33,6 +34,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const [pareto, setPareto] = useState<VcoParetoResult | null>(null)
   const [lay, setLay] = useState<LayoutResult | null>(null)
   const [flow, setFlow] = useState<VcoFullflow | null>(null)
+  const [pn, setPn] = useState<VcoPhaseNoise | null>(null)
   const [load, setLoad] = useState('')
   const [targetF, setTargetF] = useState(1.5)
   const busy = load !== ''
@@ -50,6 +52,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const runPareto = () => guard('pareto', async () => { const r = await vcoPareto(params); if (!r.error) setPareto(r) })
   const runLayout = () => guard('layout', async () => { const r = await vcoLayout(params); if (!r.error) setLay(r) })
   const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, devices: r.final_params.devices })) } })
+  const runPn = () => guard('pn', async () => { const r = await vcoPhaseNoise(params); if (!r.error) setPn(r) })
 
   const nom = res?.nominal
   const box: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14 }
@@ -107,6 +110,31 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             <p className="mono text-[11px] mt-2" style={lab}>{T(lang, 'V_ctrl 고정, VDD를 흔들어 주파수가 얼마나 밀리는지 — 전원잡음 민감도.', 'Fixed V_ctrl; how much the supply moves the frequency — supply-noise sensitivity.')}</p>
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, 'VDD를 ±15% 스윕해 주파수 푸싱(GHz/V)을 측정합니다.', 'Sweep VDD ±15% to measure frequency pushing (GHz/V).')}</p>}
+      </div>
+    )
+  }
+
+  // ---- phase noise / jitter ----
+  if (view === 'pn') {
+    return (
+      <div className="p-5" style={box}>
+        {hd(T(lang, '위상잡음 · L(Δf) / 지터', 'phase noise · L(Δf) / jitter'), runBtn(runPn, 'pn', T(lang, '⌇ 위상잡음 계산', '⌇ compute phase noise')))}
+        {pn ? (
+          <>
+            <VcoPhaseNoiseChart pn={pn} theme={theme} />
+            <div className="grid grid-cols-4 gap-3 mt-3">
+              <Metric label="L(1MHz)" value={`${pn.L_1mhz_dbc} dBc/Hz`} big />
+              <Metric label={T(lang, '주기 지터', 'period jitter')} value={`${pn.period_jitter_fs} fs`} />
+              <Metric label="FoM" value={`${pn.fom_db} dB`} />
+              <Metric label={T(lang, '유효 노드 C', 'C_eff / node')} value={`${pn.c_eff_ff} fF`} />
+            </div>
+            <p className="mono text-[11px] mt-3 leading-relaxed" style={lab}>
+              {T(lang,
+                '열잡음 1차 추정: 각 전이가 sqrt(kT·C)/I 만큼 흔들리고, 주기당 2N 전이가 누적 → L(Δf)=10·log(f₀³·σ_T²/Δf²). −20dB/decade(1/f²) 영역. PSS/pnoise 사인오프가 아닌 1차 모델이며 전력·f₀·N 의존성을 정확히 따릅니다.',
+                'First-order thermal estimate: each transition jitters by sqrt(kT·C)/I, 2N per period accumulate → L(Δf)=10·log(f₀³·σ_T²/Δf²) — the −20dB/dec (1/f²) region. Not a PSS/pnoise sign-off, but tracks the right power / f₀ / N dependence.')}
+            </p>
+          </>
+        ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '측정된 전력·주파수·단수로부터 열잡음 기반 위상잡음 L(Δf)·지터·FoM을 추정합니다 — VCO의 핵심 스펙.', 'Estimates thermal phase noise L(Δf), jitter, and FoM from the measured power, frequency, and stage count — the key VCO spec.')}</p>}
       </div>
     )
   }

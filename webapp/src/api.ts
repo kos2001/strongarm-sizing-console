@@ -1,4 +1,4 @@
-import type { BerResult, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, YieldResult } from './types'
+import type { BerResult, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, YieldResult } from './types'
 
 async function post<T>(path: string, params: Params): Promise<T> {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
@@ -26,6 +26,7 @@ const vpost = <T,>(path: string, params: VcoParams): Promise<T> =>
 export const vcoWaveform = (p: VcoParams) => vpost<VcoWaveform>('/api/vco/waveform', p)
 export const vcoPvt = (p: VcoParams) => vpost<VcoPvtResult>('/api/vco/pvt', p)
 export const vcoPushing = (p: VcoParams) => vpost<VcoPushing>('/api/vco/pushing', p)
+export const vcoPhaseNoise = (p: VcoParams) => vpost<VcoPhaseNoise>('/api/vco/phasenoise', p)
 export const vcoLayout = (p: VcoParams) => vpost<LayoutResult>('/api/vco/layout', p)
 export const vcoPostlayout = (p: VcoParams) => vpost<VcoPostLayout>('/api/vco/postlayout', p)
 export const vcoPareto = (p: VcoParams) => vpost<VcoParetoResult>('/api/vco/pareto', p)

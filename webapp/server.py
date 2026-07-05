@@ -857,6 +857,9 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/vco/pushing":
                 payload = self._read_json()
                 self._json(vco_sim.vco_pushing(payload.get("params", {})))
+            elif self.path == "/api/vco/phasenoise":
+                payload = self._read_json()
+                self._json(vco_sim.phase_noise(payload.get("params", {})))
             elif self.path == "/api/vco/layout":
                 payload = self._read_json()
                 self._json(layout.generate_vco_layout(vco_sim._full(payload.get("params", {}))))
