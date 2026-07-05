@@ -131,6 +131,9 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             {pn.measured && (
               <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg" style={{ color: 'var(--si)', background: 'color-mix(in srgb, var(--si) 12%, transparent)' }}>
                 {T(lang, 'SPICE trnoise 실측 교차검증', 'SPICE trnoise cross-check')}: L(1MHz) {pn.measured.L_1mhz_dbc} dBc/Hz · {T(lang, '지터', 'jitter')} {pn.measured.period_jitter_fs}±{pn.measured.jitter_spread_fs} fs ({pn.measured.n_seeds} {T(lang, '시드', 'seeds')}) · {T(lang, '해석 1/f² 영역과', 'vs analytic 1/f²')} {Math.abs(pn.L_1mhz_dbc - pn.measured.L_1mhz_dbc).toFixed(1)} dB
+                {pn.measured.accum_slope != null && (
+                  <span> · {T(lang, '지터-누적 기울기', 'jitter-accum slope')} {pn.measured.accum_slope} → {pn.measured.noise_type} {T(lang, '(관측 대역)', '(observed band)')}</span>
+                )}
               </div>
             )}
             <p className="mono text-[11px] mt-3 leading-relaxed" style={lab}>

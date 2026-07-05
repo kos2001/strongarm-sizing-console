@@ -108,6 +108,11 @@ def test_vco_phase_noise_measured_agrees():
     assert "jitter_spread_fs" in m
     # two independent methods within a few dB at 1 MHz (thermal region)
     assert abs(r["L_1mhz_dbc"] - m["L_1mhz_dbc"]) < 6.0
+    # jitter-accumulation slope: white/thermal injection → well below the 1.0
+    # flicker regime, and σ_Δt(τ) grows monotonically
+    assert m["accum_slope"] is not None and m["accum_slope"] < 0.7
+    sig = [pt["sigma_fs"] for pt in m["accum"]]
+    assert all(sig[i] <= sig[i + 1] + 1e-9 for i in range(len(sig) - 1))
 
 
 def test_vco_pareto_front():

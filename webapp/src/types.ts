@@ -233,7 +233,7 @@ export interface VcoPvtCorner { process: string; temp: number; v_frac: number; v
 export interface VcoPvtResult { corners: VcoPvtCorner[]; base_vdd: number; f_min_ghz: number | null; f_max_ghz: number | null; any_nonosc: boolean; error?: string }
 export interface VcoPushingPoint { vdd: number; f_osc_ghz: number | null; oscillates: boolean }
 export interface VcoPushing { points: VcoPushingPoint[]; nominal_vdd: number; pushing_ghz_per_v: number | null; error?: string }
-export interface VcoPhaseNoiseMeasured { f0_ghz: number; period_jitter_fs: number; jitter_spread_fs: number; n_seeds: number; cycles: number; points: { offset_hz: number; L_dbc: number }[]; L_1mhz_dbc: number; method: string }
+export interface VcoPhaseNoiseMeasured { f0_ghz: number; period_jitter_fs: number; jitter_spread_fs: number; n_seeds: number; cycles: number; points: { offset_hz: number; L_dbc: number }[]; L_1mhz_dbc: number; accum: { tau_ns: number; sigma_fs: number }[]; accum_slope: number | null; noise_type: string; method: string }
 export interface VcoPhaseNoise {
   f0_ghz: number; power_uw: number; n_stages: number
   period_jitter_fs: number; c_eff_ff: number

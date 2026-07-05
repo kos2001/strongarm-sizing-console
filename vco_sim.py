@@ -349,7 +349,23 @@ def _measure_jitter_once(p, na, tstop_ns, ntstep_ps, seed):
     periods = [cross[i + 1] - cross[i] for i in range(len(cross) - 1)]
     if len(periods) < 10:
         return None
-    return 1.0 / (sum(periods) / len(periods)), statistics.pstdev(periods), len(periods)
+    return 1.0 / (sum(periods) / len(periods)), statistics.pstdev(periods), len(periods), cross
+
+
+def _jitter_accum(cross, T0):
+    """Accumulated timing jitter σ_Δt(τ) over intervals of m cycles (τ=m·T0):
+    σ_Δt(m) = std of (t_{k+m} − t_k − m·T0). Its log-log slope discriminates the
+    noise type — 0.5 = white (→ 1/f² phase noise), 1.0 = flicker (→ 1/f³)."""
+    n = len(cross)
+    mmax = max(4, n // 4)   # keep enough independent windows; beyond ~N/4 the
+    out = {}                # finite-record / mean-removal bias corrupts σ(τ)
+    for m in (1, 2, 4, 8, 16, 32, 64, 128):
+        if m > mmax:
+            break
+        diffs = [cross[i + m] - cross[i] - m * T0 for i in range(n - m)]
+        if len(diffs) >= 8:
+            out[m] = statistics.pstdev(diffs)
+    return out
 
 
 def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seeds=(1, 2, 3, 4)):
@@ -370,16 +386,35 @@ def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seeds=(1, 2, 3, 4
     if not runs:
         return {"error": "too few cycles measured"}
     f0 = sum(r[0] for r in runs) / len(runs)
+    T0 = 1.0 / f0
     sig = [r[1] for r in runs]
     sigma_T = sum(sig) / len(sig)                       # mean period jitter over seeds
     spread = statistics.pstdev(sig) if len(sig) > 1 else 0.0
     cycles = sum(r[2] for r in runs)
+    # jitter accumulation σ_Δt(τ), averaged over seeds → slope (0.5 white / 1.0 flicker)
+    accs = [_jitter_accum(r[3], T0) for r in runs]
+    ms = sorted(set().union(*[set(a) for a in accs])) if accs else []
+    accum = []
+    for m in ms:
+        vals = [a[m] for a in accs if m in a]
+        if vals:
+            accum.append({"tau_ns": round(m * T0 * 1e9, 4), "sigma_fs": round(sum(vals) / len(vals) * 1e15, 2)})
+    slope = None
+    if len(accum) >= 3:
+        xs = [math.log10(pt["tau_ns"]) for pt in accum]
+        ys = [math.log10(pt["sigma_fs"]) for pt in accum]
+        n = len(xs); sx = sum(xs); sy = sum(ys); sxx = sum(x * x for x in xs); sxy = sum(x * y for x, y in zip(xs, ys))
+        denom = n * sxx - sx * sx
+        slope = round((n * sxy - sx * sy) / denom, 3) if abs(denom) > 1e-12 else None
     offs = [1e4 * (10 ** (i / 2.0)) for i in range(0, 9)]
     pts = [{"offset_hz": round(fo), "L_dbc": round(10 * math.log10(f0 ** 3 * sigma_T ** 2 / fo ** 2), 1)} for fo in offs]
     return {"f0_ghz": round(f0 / 1e9, 4), "period_jitter_fs": round(sigma_T * 1e15, 2),
             "jitter_spread_fs": round(spread * 1e15, 2), "n_seeds": len(runs), "cycles": cycles, "points": pts,
             "L_1mhz_dbc": round(10 * math.log10(f0 ** 3 * sigma_T ** 2 / 1e12), 1),
-            "method": f"SPICE trnoise measured jitter, avg of {len(runs)} seeds"}
+            "accum": accum, "accum_slope": slope,
+            "noise_type": ("thermal (1/f²)" if slope is not None and slope < 0.7 else
+                           "flicker-influenced (1/f³)" if slope is not None else "n/a"),
+            "method": f"SPICE trnoise measured jitter + accumulation slope, avg of {len(runs)} seeds"}
 
 
 def run_vco(params, do_tuning=False):
