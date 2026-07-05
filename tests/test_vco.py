@@ -61,3 +61,11 @@ def test_optimize_vco_hits_target():
     assert r["nominal"]["f_osc_ghz"] is not None
     # within a reasonable band of the target after a short search
     assert abs(r["nominal"]["f_osc_ghz"] - 1.5) / 1.5 <= 0.2
+
+
+def test_optimize_vco_surrogate_skips():
+    """The GP surrogate should pre-screen at least some candidates (fewer SPICE
+    runs) once enough training points exist."""
+    r = server.optimize_vco(vco_sim._full({}), {"f_ghz": 1.5}, seed=3)
+    assert r["n_surrogate_skips"] >= 1
+    assert r["nominal"]["oscillates"] is True

@@ -225,6 +225,7 @@ export interface VcoOptimizeResult {
   success: boolean
   target_f_ghz: number
   n_sims: number
+  n_surrogate_skips?: number
   error?: string
 }
 export interface VcoWaveform { vdd: number; t_ns: number[]; o1: number[]; o2: number[]; period_ns: number | null; f_osc_ghz: number | null; error?: string }

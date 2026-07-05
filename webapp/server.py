@@ -484,6 +484,28 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
     LO, HI = math.log10(0.5), math.log10(40.0)
     keys = vco_sim.DEV_KEYS
 
+    # GP surrogate on log10(cost) to pre-screen clearly-worse candidates (fewer SPICE runs)
+    X_train, Y_train, gp, n_skip = [], [], {"m": None}, [0]
+    try:
+        import numpy as _np
+        from sklearn.gaussian_process import GaussianProcessRegressor as _GPR
+        from sklearn.gaussian_process.kernels import RBF as _RBF, WhiteKernel as _WK, ConstantKernel as _CK
+        _have_gp = True
+    except Exception:
+        _have_gp = False
+
+    def _fit_gp():
+        if not _have_gp or len(X_train) < 12:
+            return
+        k = _CK(1.0) * _RBF(length_scale=[0.6] * len(keys)) + _WK(0.02)
+        gp["m"] = _GPR(kernel=k, normalize_y=True, alpha=1e-6, n_restarts_optimizer=0).fit(_np.array(X_train), _np.array(Y_train))
+
+    def _reject(x, incumbent_cost):
+        if gp["m"] is None:
+            return False
+        mu, sd = gp["m"].predict(_np.array([x]), return_std=True)
+        return (mu[0] - 1.0 * sd[0]) > math.log10(max(incumbent_cost, 1e-3))
+
     def make(x):
         p = copy.deepcopy(base)
         for i, k in enumerate(keys):
@@ -516,6 +538,8 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
         for i, out in zip(todo, _pmap(_eval_raw, [xs[i] for i in todo])):
             cache[tuple(round(v, 3) for v in out["x"])] = out
             n_sims[0] += 1
+            X_train.append(out["x"])
+            Y_train.append(math.log10(max(out["cost"], 1e-3)))
             res[i] = out
         return res
 
@@ -535,12 +559,16 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
     record(0)
     F, CR = 0.6, 0.9
     for g in range(1, gens + 1):
+        _fit_gp()   # refit surrogate on all SPICE-evaluated points so far
         trials = []
         for i in range(pop):
             a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
             jr = rng.randrange(len(keys))
             trial = [max(LO, min(HI, pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j]))) if (rng.random() < CR or j == jr) else pop_x[i][j]
                      for j in range(len(keys))]
+            if _reject(trial, pop_e[i]["cost"]):
+                n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
+                continue
             trials.append((i, trial))
         for (i, trial), te in zip(trials, evaluate_many([t for _, t in trials])):
             if te["cost"] <= pop_e[i]["cost"]:
@@ -553,11 +581,12 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
     m = best["m"]
     success = bool(m["oscillates"] and m["f_osc_ghz"] is not None
                    and abs(m["f_osc_ghz"] - f_t) / f_t <= 0.1)
-    traj.append({"action": f"confirm + tuning sweep · {n_sims[0]} SPICE evals",
+    skip_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
+    traj.append({"action": f"confirm + tuning sweep · {n_sims[0]} SPICE evals{skip_note}",
                  "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
                  "oscillates": m["oscillates"], "params": copy.deepcopy(fin["devices"])})
     return {"trajectory": traj, "final_params": fin, "nominal": m, "tuning": tuning,
-            "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0]}
+            "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0]}
 
 
 def vco_pvt(params):
