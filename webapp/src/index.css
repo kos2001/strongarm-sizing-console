@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+/* ---- instrument palette (shared with the project's viz aesthetic) ---- */
+:root {
+  --bg: #0a0f1a;
+  --surface: #111826;
+  --surface-2: #0d1420;
+  --line: #1f2b3f;
+  --line-soft: #17202f;
+  --text: #dce6f2;
+  --muted: #8296b0;
+  --faint: #5a6b86;
+  --si: #35d0c0;
+  --si-dim: #1c8f86;
+  --ag: #8b7dff;
+  --good: #46d18a;
+  --warn: #f0b24a;
+  --bad: #ff6b6b;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+/* fallback first paint when JS hasn't set data-theme yet (no-JS / pre-hydration) */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #eef1f7; --surface: #ffffff; --surface-2: #f5f7fb;
+    --line: #dbe2ee; --line-soft: #e7ecf4;
+    --text: #17223c; --muted: #56658a; --faint: #7d8aa6;
+    --si: #0f9c8f; --si-dim: #7ad2c9; --ag: #6a5be0;
+    --good: #17a566; --warn: #c07d12; --bad: #d94141;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #eef1f7; --surface: #ffffff; --surface-2: #f5f7fb;
+  --line: #dbe2ee; --line-soft: #e7ecf4;
+  --text: #17223c; --muted: #56658a; --faint: #7d8aa6;
+  --si: #0f9c8f; --si-dim: #7ad2c9; --ag: #6a5be0;
+  --good: #17a566; --warn: #c07d12; --bad: #d94141;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono { font-family: var(--mono); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* number inputs: strip spinners, instrument look */
+input[type="number"] {
+  font-family: var(--mono);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 8px;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+input[type="number"]:focus-visible {
+  outline: 2px solid var(--si);
+  outline-offset: 1px;
+  border-color: var(--si);
+}
+::-webkit-inner-spin-button, ::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+button { font-family: var(--sans); cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--si); outline-offset: 2px; }
+
+@keyframes sweep { to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .animate-sweep { animation: none !important; } }

@@ -1,0 +1,96 @@
+import type { BerResult, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, Waveform, YieldResult } from './types'
+
+async function post<T>(path: string, params: Params): Promise<T> {
+  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
+  return r.json()
+}
+export const metastability = (params: Params) => post<MetastabilityResult>('/api/metastability', params)
+export const ber = (params: Params) => post<BerResult>('/api/ber', params)
+export const sensitivity = (params: Params) => post<SensitivityResult>('/api/sensitivity', params)
+export const maxfclk = (params: Params) => post<MaxFclkResult>('/api/maxfclk', params)
+export async function yieldRun(params: Params, targets: Record<string, number>, n = 48): Promise<YieldResult> {
+  const r = await fetch('/api/yield', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, targets, n }) })
+  return r.json()
+}
+
+export async function health(): Promise<{ ok: boolean; ngspice: string }> {
+  const r = await fetch('/api/health')
+  return r.json()
+}
+
+export async function getDefaults(): Promise<{ defaults: Params; targets: Record<string, Target> }> {
+  const r = await fetch('/api/defaults')
+  return r.json()
+}
+
+export async function simulate(params: Params, doOffset: boolean): Promise<SimResult> {
+  const r = await fetch('/api/simulate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params, do_offset: doOffset }),
+  })
+  return r.json()
+}
+
+export async function optimize(params: Params, targets: Record<string, number>): Promise<OptimizeResult> {
+  const r = await fetch('/api/optimize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params, targets }),
+  })
+  return r.json()
+}
+
+export async function waveform(params: Params): Promise<Waveform> {
+  const r = await fetch('/api/waveform', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params }),
+  })
+  return r.json()
+}
+
+export async function postlayout(params: Params): Promise<PostLayout> {
+  const r = await fetch('/api/postlayout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params }),
+  })
+  return r.json()
+}
+
+export async function pvt(params: Params): Promise<PvtResult> {
+  const r = await fetch('/api/pvt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params }),
+  })
+  return r.json()
+}
+
+export async function pareto(params: Params, targets: Record<string, number>): Promise<ParetoResult> {
+  const r = await fetch('/api/pareto', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params, targets }),
+  })
+  return r.json()
+}
+
+export async function fullflow(params: Params, targets: Record<string, number>): Promise<FlowResult> {
+  const r = await fetch('/api/fullflow', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params, targets }),
+  })
+  return r.json()
+}
+
+export async function layout(params: Params): Promise<LayoutResult> {
+  const r = await fetch('/api/layout', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params }),
+  })
+  return r.json()
+}

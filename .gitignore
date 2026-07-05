@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ngspice / simulation artifacts
+out/
+*.gds
+*.out
+bsim4v5.out
+
+# scratch / local example inputs
+cand.json
+
+# Node / Vite (frontend)
+node_modules/
+webapp/node_modules/
+webapp/dist/
+webapp/.vite/
+*.log
+
+# OS / editor
+.DS_Store
+.playwright-mcp/

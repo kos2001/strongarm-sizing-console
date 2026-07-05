@@ -1,0 +1,580 @@
+<title>StrongARM Comparator — Agent-Sized in SPICE</title>
+<style>
+  :root {
+    --bg: #0a0f1a;
+    --surface: #111826;
+    --surface-2: #0d1420;
+    --line: #1f2b3f;
+    --line-soft: #17202f;
+    --text: #dce6f2;
+    --muted: #8296b0;
+    --faint: #5a6b86;
+    --si: #35d0c0;        /* silicon / signal */
+    --si-dim: #1c8f86;
+    --ag: #8b7dff;        /* agents */
+    --ag-dim: #5f52c9;
+    --good: #46d18a;
+    --warn: #f0b24a;
+    --bad: #ff6b6b;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --maxw: 1080px;
+    --r: 14px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #eef1f7; --surface: #ffffff; --surface-2: #f5f7fb;
+      --line: #dbe2ee; --line-soft: #e7ecf4;
+      --text: #17223c; --muted: #56658a; --faint: #7d8aa6;
+      --si: #0f9c8f; --si-dim: #7ad2c9; --ag: #6a5be0; --ag-dim: #b4acf2;
+      --good: #17a566; --warn: #c07d12; --bad: #d94141;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0f1a; --surface: #111826; --surface-2: #0d1420;
+    --line: #1f2b3f; --line-soft: #17202f;
+    --text: #dce6f2; --muted: #8296b0; --faint: #5a6b86;
+    --si: #35d0c0; --si-dim: #1c8f86; --ag: #8b7dff; --ag-dim: #5f52c9;
+    --good: #46d18a; --warn: #f0b24a; --bad: #ff6b6b;
+  }
+  :root[data-theme="light"] {
+    --bg: #eef1f7; --surface: #ffffff; --surface-2: #f5f7fb;
+    --line: #dbe2ee; --line-soft: #e7ecf4;
+    --text: #17223c; --muted: #56658a; --faint: #7d8aa6;
+    --si: #0f9c8f; --si-dim: #7ad2c9; --ag: #6a5be0; --ag-dim: #b4acf2;
+    --good: #17a566; --warn: #c07d12; --bad: #d94141;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--si); margin: 0 0 10px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow.ag { color: var(--ag); }
+  .eyebrow::before { content: ""; width: 22px; height: 1px; background: currentColor; opacity: .6; }
+
+  h1, h2, h3 { text-wrap: balance; line-height: 1.15; margin: 0; }
+  section { padding: 64px 0; border-top: 1px solid var(--line-soft); }
+  .lead { color: var(--muted); max-width: 62ch; font-size: 17px; }
+
+  /* ---------- hero ---------- */
+  header.hero { padding: 0; border: 0; position: relative; overflow: hidden; }
+  .scope-wrap { position: relative; }
+  #scope { display: block; width: 100%; height: 460px; }
+  .hero-overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    justify-content: center; padding: 0 24px; pointer-events: none;
+  }
+  .hero-inner { max-width: var(--maxw); margin: 0 auto; width: 100%; }
+  .hero h1 {
+    font-size: clamp(34px, 6vw, 62px); font-weight: 720;
+    letter-spacing: -.02em; max-width: 16ch;
+  }
+  .hero h1 em { font-style: normal; color: var(--si); }
+  .hero .sub { color: var(--muted); font-size: clamp(15px,2.2vw,19px); margin-top: 16px; max-width: 48ch; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 26px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .04em;
+    padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 70%, transparent);
+    color: var(--muted); backdrop-filter: blur(6px);
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+
+  /* ---------- generic blocks ---------- */
+  .grid { display: grid; gap: 18px; }
+  .cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .cols-4 { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 860px) { .cols-2,.cols-3,.cols-4 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--r); padding: 22px;
+  }
+  .card h3 { font-size: 17px; margin-bottom: 6px; }
+  .card p { color: var(--muted); font-size: 14.5px; margin: 6px 0 0; }
+  .k { font-family: var(--mono); color: var(--si); }
+  .k.ag { color: var(--ag); }
+
+  /* phase strip */
+  .phases { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-top: 26px; }
+  @media (max-width: 720px){ .phases { grid-template-columns: repeat(2,1fr);} }
+  .phase { border: 1px solid var(--line); border-radius: 12px; padding: 16px; background: var(--surface-2); position: relative; }
+  .phase .n { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+  .phase h4 { margin: 6px 0 4px; font-size: 15px; }
+  .phase p { margin: 0; font-size: 13px; color: var(--muted); }
+  .phase.reset { border-left: 3px solid var(--faint); }
+  .phase.samp  { border-left: 3px solid var(--ag); }
+  .phase.regen { border-left: 3px solid var(--si); }
+  .phase.latch { border-left: 3px solid var(--good); }
+
+  /* mapping table */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line-soft); }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-weight: 500; }
+  td.dev { font-family: var(--mono); color: var(--text); white-space: nowrap; }
+  td .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+
+  /* topology stack */
+  .topo { display: grid; gap: 8px; font-family: var(--mono); font-size: 13px; }
+  .rail { text-align: center; color: var(--faint); font-size: 11px; letter-spacing: .1em; }
+  .blk { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .blk .lbl { color: var(--text); }
+  .blk .role { color: var(--muted); font-family: var(--sans); font-size: 12px; }
+  .blk.si { border-color: color-mix(in srgb, var(--si) 45%, var(--line)); }
+  .blk.hot { border-color: color-mix(in srgb, var(--si) 70%, var(--line)); box-shadow: inset 0 0 0 1px color-mix(in srgb,var(--si) 20%, transparent); }
+  .wire { text-align: center; color: var(--line); line-height: 1; }
+
+  /* agent flow */
+  .flow { display: flex; flex-direction: column; gap: 10px; }
+  .frow { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+  .node {
+    flex: 1 1 0; min-width: 150px; border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; background: var(--surface); position: relative;
+  }
+  .node .tag { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .node h4 { font-size: 14.5px; margin: 5px 0 3px; }
+  .node p { margin: 0; font-size: 12.5px; color: var(--muted); }
+  .node.ag { border-top: 3px solid var(--ag); }
+  .node.si { border-top: 3px solid var(--si); }
+  .loop-band {
+    border: 1px dashed color-mix(in srgb, var(--si) 55%, var(--line));
+    border-radius: 14px; padding: 14px; background: color-mix(in srgb, var(--si) 6%, transparent);
+  }
+  .loop-band .loop-label { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--si); margin-bottom: 10px; display:flex; gap:8px; align-items:center;}
+  .arrow-down { text-align:center; color: var(--faint); font-family: var(--mono); font-size: 15px; }
+
+  /* profile cards */
+  .prof { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); overflow: hidden; }
+  .prof .top { padding: 18px 20px; border-bottom: 1px solid var(--line-soft); }
+  .prof .node-badge { font-family: var(--mono); font-size: 11px; color: var(--si); letter-spacing:.08em; }
+  .prof h3 { font-size: 16px; margin-top: 6px; }
+  .prof .specs { padding: 8px 20px 18px; display: grid; gap: 0; }
+  .spec-row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-size: 13.5px; }
+  .spec-row:last-child { border-bottom: 0; }
+  .spec-row .lab { color: var(--muted); }
+  .spec-row .val { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--text); }
+
+  /* metric bars */
+  .metric { margin: 18px 0; }
+  .metric .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .metric .name { font-size: 14px; }
+  .metric .name span { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+  .metric .verdict { font-family: var(--mono); font-size: 12px; padding: 3px 9px; border-radius: 999px; letter-spacing: .05em; }
+  .v-pass { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+  .v-fail { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .track { position: relative; height: 34px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line-soft); overflow: hidden; }
+  .fill { position: absolute; top:0; bottom:0; left:0; border-radius: 8px 0 0 8px; opacity:.85; }
+  .fill.pass { background: linear-gradient(90deg, var(--si-dim), var(--si)); }
+  .fill.fail { background: linear-gradient(90deg, color-mix(in srgb,var(--bad) 60%, #000), var(--bad)); }
+  .target-mark { position: absolute; top:-4px; bottom:-4px; width: 2px; background: var(--warn); }
+  .target-mark::after { content: "target"; position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-family: var(--mono); font-size: 9.5px; color: var(--warn); white-space: nowrap; letter-spacing:.05em;}
+  .track .reading { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text); }
+
+  .note { font-size: 13px; color: var(--muted); border-left: 2px solid var(--warn); padding: 8px 0 8px 14px; margin-top: 6px; }
+  .note b { color: var(--text); }
+
+  /* shift table generic->ptm */
+  .shift { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--surface); }
+  .shift > div { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); font-size: 14px; }
+  .shift .hd { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); background: var(--surface-2); }
+  .shift .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .shift .rowlab { color: var(--muted); }
+
+  /* invocation paths */
+  .path { border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); padding: 20px; }
+  .path .step { font-family: var(--mono); font-size: 11px; color: var(--ag); letter-spacing: .08em; }
+  .path h3 { font-size: 15px; margin: 8px 0 8px; }
+  pre { margin: 0; background: var(--surface-2); border: 1px solid var(--line-soft); border-radius: 10px; padding: 12px 14px; overflow-x: auto; }
+  code { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+  .cmt { color: var(--faint); }
+  .tok { color: var(--si); }
+  .tok.ag { color: var(--ag); }
+
+  footer { padding: 44px 0 70px; border-top: 1px solid var(--line-soft); color: var(--faint); font-size: 13px; }
+  footer .stack { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  footer .stack span { font-family: var(--mono); font-size: 11.5px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; color: var(--muted); }
+
+  .toggle {
+    position: fixed; top: 16px; right: 16px; z-index: 20;
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    border: 1px solid var(--line); border-radius: 999px; padding: 7px 13px;
+    cursor: pointer; backdrop-filter: blur(8px);
+  }
+  .toggle:hover { color: var(--text); border-color: var(--si); }
+  .toggle:focus-visible { outline: 2px solid var(--si); outline-offset: 2px; }
+  a { color: var(--si); }
+</style>
+
+<button class="toggle" id="themeToggle" aria-label="Toggle light and dark theme">◐ theme</button>
+
+<header class="hero">
+  <div class="scope-wrap">
+    <canvas id="scope" aria-label="Oscilloscope trace: comparator outputs precharge high then split to opposite rails after the clock edge"></canvas>
+    <div class="hero-overlay">
+      <div class="hero-inner">
+        <p class="eyebrow">StrongARM latch · ngspice · agent-driven sizing</p>
+        <h1>Sizing a comparator by letting <em>agents</em> run SPICE.</h1>
+        <p class="sub">A closed-loop system that decides transistor widths and multipliers for a StrongARM latch comparator — explore specs, size with gm/I<sub>D</sub>, simulate, and re-tune until every target is met.</p>
+        <div class="chips">
+          <span class="chip"><b>ngspice&nbsp;46</b></span>
+          <span class="chip">model&nbsp;<b>BSIM4 · PTM&nbsp;45nm</b></span>
+          <span class="chip">exposed via&nbsp;<b>hermes api_server</b></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- HOW IT WORKS -->
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">The device</p>
+      <h2>Four phases, one clock, zero static power</h2>
+      <p class="lead">The StrongARM latch precharges its nodes high, integrates the input difference onto them, then positive feedback slams the outputs to opposite rails. The trace above is exactly that: two lines held high, splitting at the clock edge.</p>
+      <div class="phases">
+        <div class="phase reset"><div class="n">Ø / clk = 0</div><h4>Reset</h4><p>Precharge PMOS pull every node to V<sub>DD</sub>; tail off. No DC path.</p></div>
+        <div class="phase samp"><div class="n">clk ↑</div><h4>Sample</h4><p>Input pair discharges the internal nodes at rates set by V<sub>in+</sub> / V<sub>in−</sub>.</p></div>
+        <div class="phase regen"><div class="n">τ = C/g<sub>m</sub></div><h4>Regenerate</h4><p>Cross-coupled latch adds positive feedback — the difference grows exponentially.</p></div>
+        <div class="phase latch"><div class="n">decide</div><h4>Latch</h4><p>Outputs settle to V<sub>DD</sub> / GND and hold. Decision made.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- THE PROBLEM -->
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">The sizing problem</p>
+      <h2>Every spec maps to the device that dominates it</h2>
+      <p class="lead">There is no closed-form gain equation for a clocked comparator, so the method is to pin each performance metric to the transistor that controls it — then tune only that device when the metric misses.</p>
+      <div class="grid cols-2" style="margin-top:26px; align-items:start;">
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Device</th><th>Sets</th><th>Direction</th></tr></thead>
+            <tbody>
+              <tr><td class="dev">Mn1/Mn2 · input</td><td>offset σ, noise</td><td class="num">↑ area ⇒ ↓ offset</td></tr>
+              <tr><td class="dev">Mtail · tail</td><td>decision speed</td><td class="num">↑ W ⇒ ↑ current</td></tr>
+              <tr><td class="dev">Mn3/4 · latch N</td><td>regeneration τ</td><td class="num">↑ g<sub>m</sub> ⇒ ↓ τ</td></tr>
+              <tr><td class="dev">Mp3/4 · latch P</td><td>regeneration τ</td><td class="num">balance N/P</td></tr>
+              <tr><td class="dev">Mp1/2 · precharge</td><td>reset time</td><td class="num">R<sub>on</sub>·C window</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div class="topo">
+            <div class="rail">─────  V<sub>DD</sub>  ─────</div>
+            <div class="blk si"><span class="lbl">Mp1/2 precharge</span><span class="role">reset → V<sub>DD</sub></span></div>
+            <div class="wire">│</div>
+            <div class="blk hot"><span class="lbl">Mp3/4 ⋈ Mn3/4 latch</span><span class="role">regeneration</span></div>
+            <div class="wire">│&nbsp;&nbsp;Out<sub>p</sub> / Out<sub>n</sub></div>
+            <div class="blk si"><span class="lbl">Mn1/Mn2 input pair</span><span class="role">V<sub>in+</sub> / V<sub>in−</sub></span></div>
+            <div class="wire">│</div>
+            <div class="blk"><span class="lbl">Mtail switch</span><span class="role">← CLK</span></div>
+            <div class="rail">─────  GND  ─────</div>
+          </div>
+          <p class="note">Devices stack between the rails — the trait that makes StrongARM compact but headroom-limited at low V<sub>DD</sub>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AGENT SYSTEM -->
+  <section>
+    <div class="wrap">
+      <p class="eyebrow ag">The agent system</p>
+      <h2>Discover the spec, size it, then close the loop against SPICE</h2>
+      <p class="lead">No spec was fixed up front, so the first agent invents realistic ones. Sizing is a first cut; the truth comes from simulation. The tuning loop is the only part an LLM can't do alone — it drives ngspice through the <span class="k ag">run_sim</span> backend.</p>
+
+      <div class="flow" style="margin-top:26px;">
+        <div class="frow">
+          <div class="node ag"><div class="tag">Agent · explore</div><h4>Spec Explorer</h4><p>Invents application-driven target sets (offset, noise, speed, power, node).</p></div>
+          <div class="node ag"><div class="tag">Agent · design</div><h4>Topology + Sizing</h4><p>gm/I<sub>D</sub> first-cut W/L/M per device from the targets.</p></div>
+        </div>
+        <div class="arrow-down">↓</div>
+        <div class="loop-band">
+          <div class="loop-label">◴ closed loop — repeats until specs pass</div>
+          <div class="frow">
+            <div class="node si"><div class="tag">Tool · ngspice</div><h4>Simulation Runner</h4><p>Transient decision time, power, Monte-Carlo offset.</p></div>
+            <div class="node ag"><div class="tag">Agent · judge</div><h4>Evaluator</h4><p>Compares measured vs target; flags the violated metric.</p></div>
+            <div class="node ag"><div class="tag">Agent · act</div><h4>Tuning Orchestrator</h4><p>Adjusts the dominant device — one metric at a time.</p></div>
+          </div>
+        </div>
+        <div class="arrow-down">↓</div>
+        <div class="frow">
+          <div class="node ag"><div class="tag">Agent · close</div><h4>Critic + Synthesis</h4><p>Cross-checks trade-offs and confirms the final lean sizing.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SPEC PROFILES -->
+  <section>
+    <div class="wrap">
+      <p class="eyebrow ag">Explored specs</p>
+      <h2>Three worlds, three different sizings</h2>
+      <p class="lead">The Spec Explorer proposed profiles that pull the design in opposite directions — resolution vs raw speed vs noise floor.</p>
+      <div class="grid cols-3" style="margin-top:26px;">
+        <div class="prof">
+          <div class="top"><div class="node-badge">28 nm · 0.9 V · P1</div><h3>SAR ADC comparator</h3></div>
+          <div class="specs">
+            <div class="spec-row"><span class="lab">offset σ</span><span class="val">≤ 5 mV</span></div>
+            <div class="spec-row"><span class="lab">input noise</span><span class="val">≤ 250 µV</span></div>
+            <div class="spec-row"><span class="lab">decision</span><span class="val">≤ 400 ps</span></div>
+            <div class="spec-row"><span class="lab">power</span><span class="val">≤ 100 µW</span></div>
+          </div>
+        </div>
+        <div class="prof">
+          <div class="top"><div class="node-badge">7 nm · 0.8 V · P2</div><h3>32 Gb/s SerDes slicer</h3></div>
+          <div class="specs">
+            <div class="spec-row"><span class="lab">offset σ</span><span class="val">≤ 10 mV</span></div>
+            <div class="spec-row"><span class="lab">input noise</span><span class="val">≤ 800 µV</span></div>
+            <div class="spec-row"><span class="lab">decision</span><span class="val">≤ 50 ps</span></div>
+            <div class="spec-row"><span class="lab">power</span><span class="val">≤ 1.5 mW</span></div>
+          </div>
+        </div>
+        <div class="prof">
+          <div class="top"><div class="node-badge">180 nm · 1.2 V · P3</div><h3>Biopotential SAR</h3></div>
+          <div class="specs">
+            <div class="spec-row"><span class="lab">offset σ</span><span class="val">≤ 1 mV</span></div>
+            <div class="spec-row"><span class="lab">input noise</span><span class="val">≤ 30 µV</span></div>
+            <div class="spec-row"><span class="lab">decision</span><span class="val">≤ 10 ns</span></div>
+            <div class="spec-row"><span class="lab">power</span><span class="val">≤ 5 µW</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CLOSED LOOP RESULT -->
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Closed-loop run · target P1</p>
+      <h2>From a failing seed to a lean pass</h2>
+      <p class="lead">The Tuning Orchestrator started from a deliberately under-sized design that violated offset, and converged in a handful of ngspice calls. Offset was the only binding constraint — so only the input pair was touched.</p>
+
+      <div class="grid cols-2" style="margin-top:26px; align-items:start;">
+        <div class="card">
+          <h3>Iteration 0 <span class="k">seed · input 2.0 µm ×2</span></h3>
+          <div class="metric">
+            <div class="head"><div class="name">Offset σ <span>target ≤ 5 mV</span></div><div class="verdict v-fail">FAIL</div></div>
+            <div class="track"><div class="fill fail" style="width:92%"></div><div class="target-mark" style="left:63%"></div><div class="reading">7.26 mV</div></div>
+          </div>
+          <div class="metric">
+            <div class="head"><div class="name">Decision <span>target ≤ 400 ps</span></div><div class="verdict v-pass">OK</div></div>
+            <div class="track"><div class="fill pass" style="width:45%"></div><div class="target-mark" style="left:99%"></div><div class="reading">181.8 ps</div></div>
+          </div>
+          <div class="metric" style="margin-bottom:0;">
+            <div class="head"><div class="name">Power <span>target ≤ 100 µW</span></div><div class="verdict v-pass">OK</div></div>
+            <div class="track"><div class="fill pass" style="width:20%"></div><div class="target-mark" style="left:99%"></div><div class="reading">19.6 µW</div></div>
+          </div>
+        </div>
+
+        <div class="card" style="border-color: color-mix(in srgb, var(--good) 40%, var(--line));">
+          <h3>Iteration 1 <span class="k">input 6.0 µm ×2 · confirmed n<sub>MC</sub>=24</span></h3>
+          <div class="metric">
+            <div class="head"><div class="name">Offset σ <span>target ≤ 5 mV</span></div><div class="verdict v-pass">PASS</div></div>
+            <div class="track"><div class="fill pass" style="width:53%"></div><div class="target-mark" style="left:63%"></div><div class="reading">4.21 mV</div></div>
+          </div>
+          <div class="metric">
+            <div class="head"><div class="name">Decision <span>target ≤ 400 ps</span></div><div class="verdict v-pass">PASS</div></div>
+            <div class="track"><div class="fill pass" style="width:26%"></div><div class="target-mark" style="left:99%"></div><div class="reading">105.5 ps</div></div>
+          </div>
+          <div class="metric" style="margin-bottom:0;">
+            <div class="head"><div class="name">Power <span>target ≤ 100 µW</span></div><div class="verdict v-pass">PASS</div></div>
+            <div class="track"><div class="fill pass" style="width:19%"></div><div class="target-mark" style="left:99%"></div><div class="reading">18.7 µW</div></div>
+          </div>
+        </div>
+      </div>
+      <p class="note" style="margin-top:20px;"><b>Nice side effect:</b> widening the input pair 3× (area 160 → 480) not only fixed offset — the higher g<sub>m</sub> cut decision time from 182 → 106 ps at slightly lower power, so speed and power never needed tuning. <span style="color:var(--faint)">Numbers above are from the closed-loop run on the initial generic device model.</span></p>
+    </div>
+  </section>
+
+  <!-- REAL MODEL -->
+  <section>
+    <div class="wrap">
+      <p class="eyebrow">Model fidelity</p>
+      <h2>Swapped the toy model for a real BSIM4 card</h2>
+      <p class="lead">The generic Level-1 model was replaced with a genuine <span class="k">PTM 45 nm bulk</span> BSIM4 (level 54) card that ngspice runs natively. Same netlist, same loop — the numbers just became 45 nm-real.</p>
+      <div class="shift" style="margin-top:24px;">
+        <div class="hd">Metric · seed sizing</div><div class="hd">Generic Level-1</div><div class="hd">PTM 45 nm BSIM4</div>
+        <div class="rowlab">decision time</div><div class="mono">65.8 ps</div><div class="mono">181.3 ps</div>
+        <div class="rowlab">power</div><div class="mono">19.2 µW</div><div class="mono" style="color:var(--warn)">263 µW</div>
+        <div class="rowlab">offset σ (Pelgrom)</div><div class="mono">1.85 mV</div><div class="mono">1.85 mV</div>
+        <div class="rowlab" style="border-bottom:0;">functional</div><div class="mono" style="border-bottom:0; color:var(--good)">✓ rails</div><div class="mono" style="border-bottom:0; color:var(--good)">✓ rails</div>
+      </div>
+      <p class="note" style="margin-top:16px;"><b>Honest read:</b> power jumping to 263 µW is real 45 nm physics, not a regression — the seed sizing was drawn for a 28 nm / 0.9 V target, so on the 45 nm / 1.0 V node it now over-shoots the 100 µW budget and is a candidate for re-optimization. Raw SkyWater sky130 was tried first but its spectre-format models reference instance params inside <span class="k">.model</span> cards, which ngspice rejects without an open_pdks conversion.</p>
+    </div>
+  </section>
+
+  <!-- INTEGRATION -->
+  <section>
+    <div class="wrap">
+      <p class="eyebrow ag">Delivery</p>
+      <h2>Three ways to run the same optimizer</h2>
+      <p class="lead">The <span class="k">run_sim</span> backend is callable directly, as an MCP tool, and — the goal — through the hermes-agent OpenAI-compatible api_server behind the gateway.</p>
+      <div class="grid cols-3" style="margin-top:26px; align-items:start;">
+        <div class="path">
+          <div class="step">01 · local</div>
+          <h3>CLI</h3>
+          <pre><code><span class="cmt"># direct SPICE call</span>
+python3 <span class="tok">run_sim.py</span> cand.json</code></pre>
+        </div>
+        <div class="path">
+          <div class="step">02 · tool</div>
+          <h3>MCP server</h3>
+          <pre><code><span class="cmt"># native tool</span>
+tool: <span class="tok">strongarm_run_sim</span>
+args: { devices: {…} }</code></pre>
+        </div>
+        <div class="path">
+          <div class="step">03 · api</div>
+          <h3>hermes api_server</h3>
+          <pre><code><span class="cmt"># model alias via :8700</span>
+POST /v1/chat/completions
+model: <span class="tok ag">ai-fde</span>
+"optimize a StrongARM…"</code></pre>
+        </div>
+      </div>
+      <p class="note" style="margin-top:18px;">Registered with <span class="k">hermes mcp add</span> into the active profile; enabled MCP servers are appended to every session toolset, so the tool is exposed on the api_server platform — verified by <span class="k">hermes mcp test</span> (connect 43 ms) and a live MCP <span class="k">tools/call</span> that ran ngspice.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="eyebrow">Stack</p>
+    <div class="stack">
+      <span>ngspice 46</span><span>BSIM4 · PTM 45nm</span><span>Python 3</span>
+      <span>Monte-Carlo offset</span><span>gm/ID sizing</span><span>MCP stdio</span>
+      <span>hermes-agent</span><span>gateway :8700</span>
+    </div>
+    <p style="margin-top:18px; max-width:60ch;">A demonstration of agent-driven analog sizing: LLM agents propose and evaluate, SPICE decides, and the loop closes until the transistor widths and multipliers meet spec.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // ---- theme toggle ----
+  var root = document.documentElement, btn = document.getElementById('themeToggle');
+  btn.addEventListener('click', function () {
+    var cur = root.getAttribute('data-theme');
+    if (!cur) cur = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+    draw(1); // repaint scope with new palette
+  });
+
+  // ---- oscilloscope hero ----
+  var cv = document.getElementById('scope'), ctx = cv.getContext('2d');
+  var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var W = 0, H = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  function css(v){ return getComputedStyle(root).getPropertyValue(v).trim(); }
+
+  function resize() {
+    var r = cv.getBoundingClientRect();
+    W = r.width; H = r.height;
+    cv.width = W * dpr; cv.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function trace(prog, up) {
+    // returns y for x in [0,1]; precharge high, split at clkX
+    var top = H * 0.30, bot = H * 0.72, mid = (top + bot) / 2;
+    var clkX = 0.34;
+    var pts = [];
+    for (var i = 0; i <= 220; i++) {
+      var x = i / 220;
+      var y;
+      if (x < clkX) { y = mid - (mid - top) * 0.15; } // both near-high, tiny offset
+      else {
+        var t = (x - clkX) / (1 - clkX);              // 0..1 after edge
+        var t2 = Math.min(t / 0.55, 1);
+        var ease = 1 - Math.pow(1 - t2, 3);            // regeneration curve
+        var targetY = up ? top : bot;
+        var startY = mid - (mid - top) * 0.15;
+        y = startY + (targetY - startY) * ease;
+      }
+      // reveal by prog
+      if (x > prog) { pts.push(null); }
+      else { pts.push([x * W, y]); }
+    }
+    return pts;
+  }
+
+  function grid() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = css('--line-soft'); ctx.lineWidth = 1;
+    var gx = 10, gy = 6;
+    ctx.globalAlpha = 0.7;
+    for (var i = 1; i < gx; i++) { var x = W * i / gx; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for (var j = 1; j < gy; j++) { var y = H * j / gy; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+    ctx.globalAlpha = 1;
+    // clock edge marker
+    ctx.strokeStyle = css('--ag'); ctx.setLineDash([4,5]); ctx.globalAlpha = .55;
+    var cx = W * 0.34; ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.font = '11px ui-monospace, monospace'; ctx.fillStyle = css('--ag');
+    ctx.fillText('clk ↑', cx + 6, H - 12);
+  }
+
+  function line(pts, color, glow) {
+    ctx.beginPath();
+    var started = false;
+    for (var i = 0; i < pts.length; i++) {
+      if (!pts[i]) continue;
+      if (!started) { ctx.moveTo(pts[i][0], pts[i][1]); started = true; }
+      else ctx.lineTo(pts[i][0], pts[i][1]);
+    }
+    ctx.strokeStyle = color; ctx.lineWidth = 2.4;
+    ctx.shadowColor = color; ctx.shadowBlur = glow ? 14 : 0;
+    ctx.lineJoin = 'round'; ctx.stroke();
+    ctx.shadowBlur = 0;
+    // endpoint dot
+    for (var k = pts.length - 1; k >= 0; k--) {
+      if (pts[k]) { ctx.beginPath(); ctx.arc(pts[k][0], pts[k][1], 3.2, 0, 7); ctx.fillStyle = color; ctx.fill(); break; }
+    }
+  }
+
+  function draw(prog) {
+    grid();
+    var si = css('--si');
+    var warn = css('--warn');
+    line(trace(prog, true), si, true);          // Out_p -> high
+    line(trace(prog, false), css('--muted'), false); // Out_n -> low
+    // labels
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.fillStyle = si; ctx.fillText('Out_p', W - 58, H * 0.30 - 8);
+    ctx.fillStyle = css('--muted'); ctx.fillText('Out_n', W - 58, H * 0.72 + 18);
+  }
+
+  var p = 0, raf = null;
+  function loop() {
+    p += 0.006;
+    if (p >= 1) { draw(1); setTimeout(function(){ p = 0; raf = requestAnimationFrame(loop); }, 1400); return; }
+    draw(p);
+    raf = requestAnimationFrame(loop);
+  }
+
+  function start() {
+    resize();
+    if (reduce) { draw(1); }
+    else { if (raf) cancelAnimationFrame(raf); p = 0; raf = requestAnimationFrame(loop); }
+  }
+
+  var rt;
+  window.addEventListener('resize', function(){ clearTimeout(rt); rt = setTimeout(function(){ resize(); if (reduce) draw(1); }, 150); });
+  start();
+})();
+</script>
