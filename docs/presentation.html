@@ -81,6 +81,14 @@
   svg{display:block;max-width:100%}
   .badge{display:inline-block;font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;
     padding:3px 9px;border-radius:20px;border:1px solid var(--line2);color:var(--dim)}
+  ol.tl{list-style:none;padding:0;margin:10px 0 0;display:flex;flex-direction:column;gap:13px}
+  ol.tl li{display:grid;grid-template-columns:40px 1fr;gap:14px;align-items:baseline;
+    padding-bottom:13px;border-bottom:1px solid var(--line)}
+  ol.tl li:last-child{border-bottom:none}
+  ol.tl .n{font-family:var(--mono);font-size:.82rem;color:var(--si);font-weight:700}
+  ol.tl .t{color:var(--ink);font-weight:650;font-size:1.02rem}
+  ol.tl .d{color:var(--dim);font-size:.92rem;margin-left:8px}
+  @media(max-width:640px){ol.tl li{grid-template-columns:30px 1fr}ol.tl .d{display:block;margin:2px 0 0}}
 </style>
 
 <div id="bar"></div>
@@ -281,7 +289,24 @@
     </div>
   </section>
 
-  <!-- 11 · close -->
+  <!-- 11 · timeline -->
+  <section class="slide" data-t="Timeline">
+    <div class="wrap">
+      <p class="eyebrow">how it grew · this build</p>
+      <h2>Backend → two-domain console, iteratively</h2>
+      <ol class="tl">
+        <li><span class="n">01</span><span><span class="t">Comparator core</span><span class="d">— ngspice backend + sizing console, spec gauges &amp; presets.</span></span></li>
+        <li><span class="n">02</span><span><span class="t">Characterize + optimize</span><span class="d">— metastability, f_clk, Monte-Carlo, BER, PVT, yield; DE + GP, NSGA-II.</span></span></li>
+        <li><span class="n">03</span><span><span class="t">Layout &amp; sign-off</span><span class="d">— GDSII + rule DRC, parasitic extraction, end-to-end full flow.</span></span></li>
+        <li><span class="n">04</span><span><span class="t">Console craft</span><span class="d">— KO/EN i18n + beginner help, Virtuoso-styled views, spec profiles, report export, scroll fix.</span></span></li>
+        <li><span class="n">05</span><span><span class="t">Faster &amp; safer</span><span class="d">— sky130 48× + parallelization; adversarial review + fixes; 39-test suite.</span></span></li>
+        <li><span class="n">06</span><span><span class="t">VCO domain</span><span class="d">— ring oscillator: tuning/Kvco, DE+GP auto-size, NSGA-II Pareto, pushing, layout, full flow.</span></span></li>
+        <li><span class="n">07</span><span><span class="t">Phase noise &amp; ship</span><span class="d">— analytic + trnoise + jitter slope; comparator/VCO domain split; EN/KO decks via branch → PR → merge.</span></span></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- 12 · close -->
   <section class="slide" data-t="Close">
     <div class="scan"><i></i></div>
     <div class="wrap">
