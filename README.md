@@ -1,8 +1,23 @@
-# StrongARM Comparator — Agent-Driven Sizing Backend (Method 1)
+# StrongARM Sizing Console — analog IC sizing & sign-off over ngspice
 
-Programmatic SPICE backend that lets an agent close the sizing loop for a
-StrongARM latch comparator: **simulate → evaluate → adjust → repeat**, against
-real ngspice.
+An agent-driven analog design tool that closes the loop **simulate → evaluate →
+optimize → sign-off** against real ngspice, with a React web console. Two circuit
+domains share the same backend and algorithms:
+
+- **Comparator** (StrongARM latch, 13 pages) — sizing, transient, metastability
+  (τ), max f_clk + energy, DE + GP-surrogate auto-find, sensitivity, NSGA-II
+  Pareto, Monte-Carlo offset, noise/BER, PVT (27 corners), parametric yield,
+  GDSII layout + DRC, full flow.
+- **VCO** (current-starved ring, 9 pages) — oscillation + waveform, tuning (Kvco),
+  DE + GP auto-size, NSGA-II Pareto (power↔freq), phase noise / jitter / FoM
+  (analytic + SPICE trnoise cross-check), PVT, supply pushing, GDSII layout + DRC,
+  full flow.
+
+Stack: ngspice (BSIM4 PTM 45 nm + real SkyWater SKY130) · dependency-free stdlib
+HTTP bridge · React 19 + Vite + TypeScript (Cadence Virtuoso-styled schematic /
+layout / waveform, KO/EN i18n) · MCP server · pytest suite. The sections below
+document the original comparator backend ("method 1"); see the VCO section for
+the ring-oscillator flow and `webapp/README.md` for the web console.
 
 ## Files
 
