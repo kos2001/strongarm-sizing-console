@@ -453,7 +453,7 @@ export default function App() {
   const navList = domain === 'vco' ? NAV_VCO : NAV_COMPARATOR
   const accent = domain === 'vco' ? 'var(--ag)' : 'var(--si)'      // VCO world reads in indigo, comparator in teal
   return (
-    <div className="min-h-full flex">
+    <div className="min-h-screen flex">
       {/* SIDEBAR */}
       <aside className="shrink-0 sticky top-0 self-start h-screen flex flex-col" style={{ width: 210, borderRight: '1px solid var(--line-soft)', background: 'var(--surface-2)' }}>
         <div className="px-4 py-4 flex items-center gap-2.5" style={{ borderBottom: '1px solid var(--line-soft)' }}>

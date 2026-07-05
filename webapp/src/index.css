@@ -37,7 +37,10 @@
   --good: #17a566; --warn: #c07d12; --bad: #d94141;
 }
 
-html, body, #root { height: 100%; }
+/* Let the document grow with content and scroll naturally. Forcing height:100%
+   here caps the scroll region to the viewport, so tall pages become unreachable
+   (the sidebar stays sticky via position:sticky, not a fixed-height ancestor). */
+html, body, #root { min-height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
