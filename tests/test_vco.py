@@ -33,6 +33,27 @@ def test_partial_vco_device_merge():
     assert p["devices"]["invp"] == {"w_um": 3, "l_nm": 45, "m": 2}
 
 
+def test_vco_waveform_captured():
+    w = vco_sim.capture_vco_waveform({})
+    assert "error" not in w
+    assert len(w["t_ns"]) > 50 and len(w["o1"]) == len(w["t_ns"])
+    assert w["f_osc_ghz"] is not None and w["f_osc_ghz"] > 0
+
+
+def test_vco_pvt_corners():
+    r = server.vco_pvt({})
+    assert len(r["corners"]) == 27
+    osc = [c for c in r["corners"] if c["oscillates"]]
+    assert len(osc) >= 20                       # oscillates across most corners
+    assert r["f_max_ghz"] >= r["f_min_ghz"] > 0
+
+
+def test_vco_pushing():
+    r = vco_sim.vco_pushing({})
+    assert len(r["points"]) == 7
+    assert r["pushing_ghz_per_v"] is not None    # a finite pushing figure
+
+
 def test_optimize_vco_hits_target():
     base = vco_sim._full({})
     r = server.optimize_vco(base, {"f_ghz": 1.5}, pop=10, gens=5, seed=3)

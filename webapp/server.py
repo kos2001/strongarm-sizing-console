@@ -560,6 +560,30 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
             "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0]}
 
 
+def vco_pvt(params):
+    """VCO across 27 PVT corners: process SS/TT/FF (±50mV Vth via delvto) ×
+    temp −40/27/125 × VDD 0.9/1.0/1.1×. Frequency + does-it-oscillate per corner."""
+    p = vco_sim._full(params)
+    base_vdd = float(p["vdd"])
+    specs = []
+    for proc, ps in (("SS", 0.05), ("TT", 0.0), ("FF", -0.05)):
+        for t in (-40, 27, 125):
+            for vf in (0.9, 1.0, 1.1):
+                specs.append((proc, t, vf, round(base_vdd * vf, 3), ps))
+
+    def _corner(s):
+        proc, t, vf, vdd, ps = s
+        m = vco_sim.measure_vco({**params, "vdd": vdd, "temp": t, "pskew": ps})
+        return {"process": proc, "temp": t, "v_frac": vf, "vdd": vdd,
+                "f_osc_ghz": m["f_osc_ghz"], "oscillates": m["oscillates"], "power_uw": m["power_uw"]}
+
+    corners = _pmap(_corner, specs)
+    fs = [c["f_osc_ghz"] for c in corners if c["f_osc_ghz"] is not None]
+    return {"corners": corners, "base_vdd": base_vdd,
+            "f_min_ghz": min(fs) if fs else None, "f_max_ghz": max(fs) if fs else None,
+            "any_nonosc": any(not c["oscillates"] for c in corners)}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -672,6 +696,15 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 base = vco_sim._full(payload.get("params", {}))
                 self._json(optimize_vco(base, payload.get("targets") or {"f_ghz": 1.5}))
+            elif self.path == "/api/vco/waveform":
+                payload = self._read_json()
+                self._json(vco_sim.capture_vco_waveform(payload.get("params", {})))
+            elif self.path == "/api/vco/pvt":
+                payload = self._read_json()
+                self._json(vco_pvt(payload.get("params", {})))
+            elif self.path == "/api/vco/pushing":
+                payload = self._read_json()
+                self._json(vco_sim.vco_pushing(payload.get("params", {})))
             elif self.path == "/api/yield":
                 payload = self._read_json()
                 targets = payload.get("targets") or {k: s["limit"] for k, s in SPEC_TARGETS.items()}

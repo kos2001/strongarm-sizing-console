@@ -167,8 +167,9 @@ the same. Also update the Pelgrom `avt_mv_um` to the PDK's value.
 ## MOSFET ring VCO (same optimization loop)
 
 Beyond the comparator, the tool now sizes a **pure-MOSFET current-starved ring
-VCO** with the identical simulate→evaluate→optimize flow (`vco_sim.py`, VCO page
-in the frontend, `/api/vco/*`):
+VCO** with the identical simulate→evaluate→optimize flow (`vco_sim.py`, its own
+**VCO domain** in the frontend — Circuit·waveform / Sizing·tuning / Auto-size /
+PVT corners / Supply pushing — `/api/vco/*`):
 
 - **Topology** — N odd current-starved CMOS inverter stages in a ring; V_ctrl
   sets the tail current (NMOS ref mirrored to a diode PMOS → vbp), hence the

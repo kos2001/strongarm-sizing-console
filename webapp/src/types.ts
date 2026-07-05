@@ -227,6 +227,12 @@ export interface VcoOptimizeResult {
   n_sims: number
   error?: string
 }
+export interface VcoWaveform { vdd: number; t_ns: number[]; o1: number[]; o2: number[]; period_ns: number | null; f_osc_ghz: number | null; error?: string }
+export interface VcoPvtCorner { process: string; temp: number; v_frac: number; vdd: number; f_osc_ghz: number | null; oscillates: boolean; power_uw: number | null }
+export interface VcoPvtResult { corners: VcoPvtCorner[]; base_vdd: number; f_min_ghz: number | null; f_max_ghz: number | null; any_nonosc: boolean; error?: string }
+export interface VcoPushingPoint { vdd: number; f_osc_ghz: number | null; oscillates: boolean }
+export interface VcoPushing { points: VcoPushingPoint[]; nominal_vdd: number; pushing_ghz_per_v: number | null; error?: string }
+
 export const VCO_DEVICE_META: Record<VcoDeviceKey, { name: string; role: { ko: string; en: string } }> = {
   invp: { name: 'Mp', role: { ko: '코어 PMOS — 상승', en: 'core PMOS — pull-up' } },
   invn: { name: 'Mn', role: { ko: '코어 NMOS — 하강', en: 'core NMOS — pull-down' } },

@@ -1,66 +1,111 @@
 import { useState } from 'react'
-import type { VcoDeviceKey, VcoOptimizeResult, VcoParams, VcoResult, VcoTuning } from '../types'
+import type { VcoDeviceKey, VcoOptimizeResult, VcoParams, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform } from '../types'
 import { VCO_DEVICE_META } from '../types'
-import { vcoOptimize, vcoSimulate } from '../api'
+import { vcoOptimize, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform } from '../api'
 import TuningChart from './TuningChart'
+import VcoSchematic from './VcoSchematic'
+import VcoWaveformChart from './VcoWaveformChart'
+import VcoPvtView from './VcoPvtView'
+import VcoPushingChart from './VcoPushingChart'
 import type { Lang } from '../i18n'
 
 const VCO_DEFAULTS: VcoParams = {
   vdd: 1.0, vctrl: 0.6, n_stages: 5, cload_ff: 3.0,
   devices: {
-    invp: { w_um: 2.0, l_nm: 45, m: 2 },
-    invn: { w_um: 1.0, l_nm: 45, m: 2 },
-    starvep: { w_um: 2.0, l_nm: 45, m: 2 },
-    starven: { w_um: 1.0, l_nm: 45, m: 1 },
+    invp: { w_um: 2.0, l_nm: 45, m: 2 }, invn: { w_um: 1.0, l_nm: 45, m: 2 },
+    starvep: { w_um: 2.0, l_nm: 45, m: 2 }, starven: { w_um: 1.0, l_nm: 45, m: 1 },
   },
 }
 const DKEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
+type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing'
 
-export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: 'main' | 'opt' }) {
+export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: View }) {
   const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
   const [res, setRes] = useState<VcoResult | null>(null)
   const [tuning, setTuning] = useState<VcoTuning | null>(null)
   const [opt, setOpt] = useState<VcoOptimizeResult | null>(null)
-  const [running, setRunning] = useState(false)
-  const [optimizing, setOptimizing] = useState(false)
+  const [wf, setWf] = useState<VcoWaveform | null>(null)
+  const [pvt, setPvt] = useState<VcoPvtResult | null>(null)
+  const [push, setPush] = useState<VcoPushing | null>(null)
+  const [load, setLoad] = useState('')
   const [targetF, setTargetF] = useState(1.5)
+  const busy = load !== ''
 
   const setDev = (k: VcoDeviceKey, f: 'w_um' | 'l_nm' | 'm', v: number) =>
     setParams((p) => ({ ...p, devices: { ...p.devices, [k]: { ...p.devices[k], [f]: v } } }))
-  const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff' | 'vdd', v: number) =>
-    setParams((p) => ({ ...p, [f]: v }))
+  const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff', v: number) => setParams((p) => ({ ...p, [f]: v }))
 
-  const run = async () => {
-    setRunning(true); setOpt(null)
-    try {
-      const r = await vcoSimulate(params, true)
-      if (!r.error) { setRes(r); setTuning(r.tuning ?? null) }
-      else setRes(r)
-    } catch (e) { setRes({ nominal: {} as VcoResult['nominal'], error: String(e) }) }
-    finally { setRunning(false) }
-  }
-
-  const optimize = async () => {
-    setOptimizing(true)
-    try {
-      const r = await vcoOptimize(params, targetF)
-      if (!r.error) {
-        setOpt(r); setParams((p) => ({ ...p, devices: r.final_params.devices }))
-        setRes({ nominal: r.nominal }); setTuning(r.tuning)
-      }
-    } catch { /* ignore */ }
-    finally { setOptimizing(false) }
-  }
+  const guard = async (tag: string, fn: () => Promise<void>) => { setLoad(tag); try { await fn() } catch { /* ignore */ } finally { setLoad('') } }
+  const run = () => guard('run', async () => { const r = await vcoSimulate(params, true); setRes(r); setTuning(r.tuning ?? null) })
+  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, devices: r.final_params.devices })); setRes({ nominal: r.nominal }); setTuning(r.tuning) } })
+  const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
+  const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
+  const runPush = () => guard('push', async () => { const r = await vcoPushing(params); if (!r.error) setPush(r) })
 
   const nom = res?.nominal
-  const busy = running || optimizing
   const box: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14 }
   const lab = { color: 'var(--faint)' }
+  const A = 'var(--ag)'
+  const runBtn = (onClick: () => void, tag: string, label: string) => (
+    <button onClick={onClick} disabled={busy} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50"
+      style={{ color: A, border: `1px solid color-mix(in srgb, ${A} 40%, var(--line))` }}>{load === tag ? T(lang, '실행 중…', 'running…') : label}</button>
+  )
+  const hd = (title: string, action?: React.ReactNode) => (
+    <div className="flex items-center justify-between gap-3 mb-3">
+      <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{title}</div>{action}
+    </div>
+  )
 
+  // ---- circuit · waveform ----
+  if (view === 'circuit') {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="p-5" style={box}>
+          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform')))}
+          <VcoSchematic devices={params.devices} nStages={params.n_stages} />
+          {wf ? (
+            <div className="mt-4">
+              <VcoWaveformChart wf={wf} theme={theme} />
+              <p className="mono text-[11px] mt-2" style={lab}>{T(lang, '두 링 노드(o1·o2)의 실제 발진 — 주기', 'real oscillation of two ring nodes (o1·o2) — period')} {wf.period_ns} ns → {wf.f_osc_ghz} GHz</p>
+            </div>
+          ) : <p className="text-sm mt-3" style={{ color: 'var(--muted)' }}>{T(lang, '↻ 파형을 눌러 실제 발진 트랜지언트를 캡처하세요.', 'Press ↻ waveform to capture the real oscillation transient.')}</p>}
+        </div>
+      </div>
+    )
+  }
+
+  // ---- PVT ----
+  if (view === 'pvt') {
+    return (
+      <div className="p-5" style={box}>
+        {hd(T(lang, 'PVT 코너 · 주파수 / 발진', 'PVT corners · frequency / oscillation'), runBtn(runPvt, 'pvt', T(lang, '◫ 27코너 실행', '◫ run 27 corners')))}
+        {pvt ? <VcoPvtView pvt={pvt} lang={lang} /> : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '공정·전압·온도 27코너에서 발진 주파수와 발진 여부를 확인합니다.', 'Check oscillation frequency and startup across 27 process/voltage/temperature corners.')}</p>}
+      </div>
+    )
+  }
+
+  // ---- supply pushing ----
+  if (view === 'pushing') {
+    return (
+      <div className="p-5" style={box}>
+        {hd(T(lang, '전원 푸싱 · f vs VDD', 'supply pushing · f vs VDD'), runBtn(runPush, 'push', T(lang, '⇅ 스윕 실행', '⇅ run sweep')))}
+        {push ? (
+          <>
+            <VcoPushingChart push={push} theme={theme} />
+            <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg inline-block" style={{ color: A, background: `color-mix(in srgb, ${A} 12%, transparent)` }}>
+              {T(lang, '푸싱', 'pushing')} = {push.pushing_ghz_per_v} GHz/V @ {push.nominal_vdd}V
+            </div>
+            <p className="mono text-[11px] mt-2" style={lab}>{T(lang, 'V_ctrl 고정, VDD를 흔들어 주파수가 얼마나 밀리는지 — 전원잡음 민감도.', 'Fixed V_ctrl; how much the supply moves the frequency — supply-noise sensitivity.')}</p>
+          </>
+        ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, 'VDD를 ±15% 스윕해 주파수 푸싱(GHz/V)을 측정합니다.', 'Sweep VDD ±15% to measure frequency pushing (GHz/V).')}</p>}
+      </div>
+    )
+  }
+
+  // ---- main (sizing · tuning) & opt (auto-size): 2-column with editor ----
   return (
     <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0,400px) 1fr' }}>
-      {/* ---- controls ---- */}
       <section className="flex flex-col gap-4">
         <div className="p-4" style={box}>
           <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{T(lang, '링 VCO · 소자 크기', 'ring VCO · sizing')}</div>
@@ -68,7 +113,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             <span>{T(lang, '소자', 'Device')}</span><span>W (µm)</span><span>L (nm)</span><span>M</span>
           </div>
           {DKEYS.map((k) => (
-            <div key={k} className="grid gap-2 items-center rounded-xl p-2.5 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: '3px solid var(--si)' }}>
+            <div key={k} className="grid gap-2 items-center rounded-xl p-2.5 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: `3px solid ${A}` }}>
               <div className="min-w-0">
                 <div className="mono text-sm" style={{ color: 'var(--text)' }}>{VCO_DEVICE_META[k].name}</div>
                 <div className="text-xs truncate" style={{ color: 'var(--muted)' }}>{VCO_DEVICE_META[k].role[lang]}</div>
@@ -83,35 +128,25 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             {([['vctrl', 'V_ctrl (V)', 0.05], ['n_stages', T(lang, '단수 N', 'stages N'), 2], ['cload_ff', 'C_L (fF)', 0.5]] as const).map(([f, label, step]) => (
               <label key={f} className="mono text-[10px]" style={lab}>{label}
                 <input type="number" step={step as number} min={f === 'n_stages' ? 3 : 0} disabled={busy}
-                  value={params[f as 'vctrl' | 'n_stages' | 'cload_ff']} onChange={(e) => setTop(f as 'vctrl' | 'n_stages' | 'cload_ff', parseFloat(e.target.value) || 0)}
-                  style={{ width: '100%', marginTop: 3 }} />
+                  value={params[f as 'vctrl' | 'n_stages' | 'cload_ff']} onChange={(e) => setTop(f as 'vctrl' | 'n_stages' | 'cload_ff', parseFloat(e.target.value) || 0)} style={{ width: '100%', marginTop: 3 }} />
               </label>
             ))}
           </div>
         </div>
-
-        <div className="flex flex-col gap-2">
-          {view === 'main' ? (
-            <button onClick={run} disabled={busy} className="py-2.5 rounded-xl font-medium disabled:opacity-50"
-              style={{ background: 'var(--ag)', color: 'var(--bg)' }}>
-              {running ? T(lang, '시뮬레이션 중…', 'simulating…') : T(lang, '▶ VCO 실행 (튜닝 포함)', '▶ Run VCO (with tuning)')}
-            </button>
-          ) : (
-            <div className="flex gap-2 items-center rounded-xl p-2.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-              <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
-              <input type="number" step={0.1} min={0.1} disabled={busy} value={targetF}
-                onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
-              <span className="mono text-[11px]" style={lab}>GHz</span>
-              <button onClick={optimize} disabled={busy} className="ml-auto mono text-xs px-3 py-1.5 rounded-full disabled:opacity-50"
-                style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
-                {optimizing ? T(lang, '탐색 중…', 'searching…') : T(lang, '◴ 자동 최적화 실행', '◴ Run auto-size')}
-              </button>
-            </div>
-          )}
-        </div>
+        {view === 'main' ? (
+          <button onClick={run} disabled={busy} className="py-2.5 rounded-xl font-medium disabled:opacity-50" style={{ background: A, color: 'var(--bg)' }}>
+            {load === 'run' ? T(lang, '시뮬레이션 중…', 'simulating…') : T(lang, '▶ VCO 실행 (튜닝 포함)', '▶ Run VCO (with tuning)')}
+          </button>
+        ) : (
+          <div className="flex gap-2 items-center rounded-xl p-2.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
+            <input type="number" step={0.1} min={0.1} disabled={busy} value={targetF} onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
+            <span className="mono text-[11px]" style={lab}>GHz</span>
+            {runBtn(optimize, 'opt', T(lang, '◴ 자동 사이징 실행', '◴ Run auto-size'))}
+          </div>
+        )}
       </section>
 
-      {/* ---- results ---- */}
       <section className="flex flex-col gap-4">
         <div className="p-5" style={box}>
           <div className="mono text-[11px] uppercase tracking-[0.16em] mb-4" style={lab}>{T(lang, '발진 측정', 'oscillation metrics')}</div>
@@ -124,13 +159,12 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
               {!res && <p className="col-span-2 text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '소자 크기를 정하고 VCO를 실행하면 발진 주파수·전력·튜닝 곡선이 나옵니다.', 'Set the device sizes and run the VCO to see oscillation frequency, power, and the tuning curve.')}</p>}
             </div>
           )}
-          {opt && (
+          {view === 'opt' && opt && (
             <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg" style={{ color: opt.success ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${opt.success ? 'var(--good)' : 'var(--warn)'} 12%, transparent)` }}>
               {opt.success ? '✓' : '≈'} {T(lang, '목표', 'target')} {opt.target_f_ghz} GHz → {opt.nominal.f_osc_ghz} GHz · {opt.nominal.power_uw} µW · {opt.n_sims} SPICE evals
             </div>
           )}
         </div>
-
         {tuning && (
           <div className="p-5" style={box}>
             <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{T(lang, '튜닝 곡선 · f vs V_ctrl', 'tuning curve · f vs V_ctrl')}</div>
@@ -141,9 +175,6 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
               <Metric label={T(lang, '튜닝 범위', 'tuning range')} value={tuning.tuning_pct != null ? `${tuning.tuning_pct}%` : '—'} />
               <Metric label="Kvco" value={tuning.kvco_ghz_per_v != null ? `${tuning.kvco_ghz_per_v} GHz/V` : '—'} />
             </div>
-            <p className="mono text-[11px] mt-3 leading-relaxed" style={{ color: 'var(--faint)' }}>
-              {T(lang, 'V_ctrl이 스타빙 전류 → 지연 → 주파수를 조절. × = 그 전압에선 발진 안 함.', 'V_ctrl sets the starve current → delay → frequency. × = does not oscillate at that voltage.')}
-            </p>
           </div>
         )}
       </section>

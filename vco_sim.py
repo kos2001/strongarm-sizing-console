@@ -48,37 +48,41 @@ def _full(params):
     return p
 
 
-def _dev(d):
-    return f"W={d['w_um']}u L={d['l_nm']}n M={d['m']}"
+def _dev(d, vt):
+    # delvto = process-corner Vth shift (0 nominal), set via .param dvtn/dvtp
+    return f"W={d['w_um']}u L={d['l_nm']}n M={d['m']} delvto={{{vt}}}"
 
 
-def gen_vco_netlist(p, vctrl=None, tstop_ns=25.0, tstep_ps=2.0):
+def gen_vco_netlist(p, vctrl=None, tstop_ns=25.0, tstep_ps=2.0, wavefile=None):
     d = p["devices"]
     vdd = p["vdd"]
     vc = p["vctrl"] if vctrl is None else vctrl
     N = int(p["n_stages"])
     cl = p["cload_ff"]
+    pskew = p.get("pskew", 0.0)             # process corner: +slow (SS), -fast (FF)
     hdr = run_sim._model_header(p)          # PTM .include (or sky130 .lib)
-    invp, invn = _dev(d["invp"]), _dev(d["invn"])
-    sp, sn = _dev(d["starvep"]), _dev(d["starven"])
+    invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
+    sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
+    wave = f"wrdata {wavefile} v(o1) v(o2)" if wavefile else ""
 
     lines = [
         "MOSFET current-starved ring VCO (generated)",
         f".option temp={p.get('temp', 27)}",
+        f".param dvtn={pskew} dvtp={-pskew}",
         hdr,
         f"Vdd vdd 0 {vdd}",
         f"Vc vctrl 0 {vc}",
         "* bias: Vctrl -> tail current, mirrored to a diode PMOS -> vbp",
-        f"Mpref vbp vbp vdd vdd pmos {sp}",
-        f"Mnref vbp vctrl 0 0 nmos {sn}",
+        f"Mpref vbp vbp vdd vdd pmos {sp_p}",
+        f"Mnref vbp vctrl 0 0 nmos {sn_n}",
     ]
     for i in range(1, N + 1):
         prev = N if i == 1 else i - 1      # ring: in_1 = o_N
         lines += [
-            f"Mbp{i} a{i} vbp vdd vdd pmos {sp}",
+            f"Mbp{i} a{i} vbp vdd vdd pmos {sp_p}",
             f"Mp{i}  o{i} o{prev} a{i} vdd pmos {invp}",
             f"Mn{i}  o{i} o{prev} b{i} 0 nmos {invn}",
-            f"Mbn{i} b{i} vctrl 0 0 nmos {sn}",
+            f"Mbn{i} b{i} vctrl 0 0 nmos {sn_n}",
             f"Co{i} o{i} 0 {cl}f",
         ]
     # kick-start: alternate node initial conditions
@@ -92,6 +96,7 @@ def gen_vco_netlist(p, vctrl=None, tstop_ns=25.0, tstep_ps=2.0):
         f"meas tran per TRIG v(o1) VAL='{vdd/2.0}' RISE=3 TARG v(o1) VAL='{vdd/2.0}' RISE=8",
         "meas tran vpp PP v(o1)",
         f"meas tran iavg AVG i(Vdd) FROM={tstop_ns*0.2}n TO={tstop_ns}n",
+        wave,
         ".endc",
         ".end",
     ]
@@ -150,6 +155,68 @@ def vco_tuning(params, points=9):
             "kvco_ghz_per_v": round(kvco, 3) if kvco is not None else None,
         })
     return out
+
+
+def capture_vco_waveform(params, npoints=400, tstop_ns=8.0):
+    """Real transient of two ring nodes (o1, o2) so the UI can plot the actual
+    oscillation. Returns downsampled t_ns / o1 / o2 arrays + measured period."""
+    import os
+    import tempfile as _tf
+    p = _full(params)
+    vdd = p["vdd"]
+    fd, wf = _tf.mkstemp(suffix=".txt")
+    os.close(fd)
+    try:
+        out = run_sim._run(gen_vco_netlist(p, tstop_ns=tstop_ns, wavefile=wf))
+        per = run_sim._parse(out, "per")
+        rows = []
+        with open(wf) as fh:
+            for line in fh:
+                c = line.split()
+                if len(c) >= 4:
+                    try:
+                        rows.append((float(c[0]), float(c[1]), float(c[3])))
+                    except ValueError:
+                        continue
+    finally:
+        try:
+            os.unlink(wf)
+        except OSError:
+            pass
+    if not rows:
+        return {"error": "no oscillation captured", "t_ns": [], "o1": [], "o2": []}
+    step = max(1, len(rows) // npoints)
+    s = rows[::step]
+    return {
+        "vdd": vdd,
+        "t_ns": [round(r[0] * 1e9, 4) for r in s],
+        "o1": [round(r[1], 4) for r in s],
+        "o2": [round(r[2], 4) for r in s],
+        "period_ns": round(per / 5.0 * 1e9, 4) if per else None,
+        "f_osc_ghz": round(5.0 / per / 1e9, 4) if per else None,
+    }
+
+
+def vco_pushing(params, points=7, span=0.15):
+    """Supply pushing: oscillation frequency vs VDD at fixed V_ctrl. Reports the
+    pushing figure (GHz/V) — how much the supply moves the frequency."""
+    p = _full(params)
+    v0 = p["vdd"]
+    vs = [round(v0 * (1 - span + 2 * span * i / (points - 1)), 4) for i in range(points)]
+    pts = []
+    for v in vs:
+        m = measure_vco({**params, "vdd": v})
+        pts.append({"vdd": v, "f_osc_ghz": m["f_osc_ghz"], "oscillates": m["oscillates"]})
+    fs = [(pt["vdd"], pt["f_osc_ghz"]) for pt in pts if pt["f_osc_ghz"]]
+    push = None
+    if len(fs) >= 2:
+        n = len(fs)
+        sx = sum(v for v, _ in fs); sy = sum(f for _, f in fs)
+        sxx = sum(v * v for v, _ in fs); sxy = sum(v * f for v, f in fs)
+        denom = n * sxx - sx * sx
+        push = (n * sxy - sx * sy) / denom if abs(denom) > 1e-12 else None
+    return {"points": pts, "nominal_vdd": v0,
+            "pushing_ghz_per_v": round(push, 3) if push is not None else None}
 
 
 def run_vco(params, do_tuning=False):

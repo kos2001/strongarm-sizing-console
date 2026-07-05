@@ -19,8 +19,11 @@ export const NAV_LABELS: Record<string, Bi> = {
   yield: { ko: '수율', en: 'Yield' },
   layout: { ko: '레이아웃', en: 'Layout' },
   flow: { ko: '전체 흐름', en: 'Full flow' },
+  vcocircuit: { ko: '회로 · 파형', en: 'Circuit · wave' },
   vco: { ko: '사이징 · 튜닝', en: 'Sizing · tuning' },
   vcoopt: { ko: '자동 사이징', en: 'Auto-size' },
+  vcopvt: { ko: 'PVT 코너', en: 'PVT corners' },
+  vcopushing: { ko: '전원 푸싱', en: 'Supply pushing' },
 }
 export const NAV_SUBS: Record<string, Bi> = {
   sizing: { ko: '소자 · 실행 · 스펙', en: 'devices · run · spec' },
@@ -36,8 +39,11 @@ export const NAV_SUBS: Record<string, Bi> = {
   yield: { ko: '미스매치 × PVT', en: 'mismatch × PVT' },
   layout: { ko: 'GDS + DRC', en: 'GDS + DRC' },
   flow: { ko: '크기→PVT→GDS', en: 'size → PVT → GDS' },
+  vcocircuit: { ko: '회로도 · 발진 파형', en: 'schematic · waveform' },
   vco: { ko: '발진 · 튜닝 곡선', en: 'oscillate · tuning curve' },
   vcoopt: { ko: '목표 f로 소자 최적화', en: 'size to target f' },
+  vcopvt: { ko: '공정 · 전압 · 온도', en: 'process · voltage · temp' },
+  vcopushing: { ko: 'f vs VDD · GHz/V', en: 'f vs VDD · GHz/V' },
 }
 
 // Beginner-friendly "what does this page do?" explanation. `what` = plain-language
@@ -191,6 +197,36 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
     read: {
       ko: '탐색이 끝나면 결과가 편집기에 적용되고, 달성 주파수·전력·발진 여부와 갱신된 튜닝 곡선이 나옵니다. ✓ = 목표 ±10% 이내.',
       en: 'When the search finishes, the result is applied to the editor and you see the achieved frequency, power, oscillation status, and the updated tuning curve. ✓ = within ±10% of target.',
+    },
+  },
+  vcocircuit: {
+    what: {
+      ko: '링 VCO의 트랜지스터 회로도(current-starved 인버터 + 링 루프)와 실제 시뮬레이션한 발진 파형을 함께 보여줍니다.',
+      en: 'Shows the ring VCO transistor schematic (current-starved inverter + ring loop) alongside the real simulated oscillation waveform.',
+    },
+    read: {
+      ko: '↻ 파형을 누르면 두 링 노드(o1·o2)의 실제 트랜지언트가 그려집니다 — 서로 지연된 위상으로 계속 진동. 회로도의 W×M은 현재 크기를 반영합니다.',
+      en: 'Press ↻ waveform to plot the real transient of two ring nodes (o1·o2) — continuously oscillating at phase-shifted delays. The schematic W×M reflects the current sizing.',
+    },
+  },
+  vcopvt: {
+    what: {
+      ko: '공정(SS/TT/FF)·전압·온도 27개 코너에서 VCO가 발진하는지와 주파수가 얼마나 변하는지 확인합니다. 비교기 PVT와 같은 방식.',
+      en: 'Checks whether the VCO oscillates and how much its frequency shifts across 27 process/voltage/temperature corners — same as the comparator PVT.',
+    },
+    read: {
+      ko: '표의 각 칸 = 그 코너의 발진 주파수. 진할수록 빠름, ✗ = 발진 실패. 최악 코너에서도 발진해야 하고, 주파수 변동폭이 튜닝으로 커버돼야 합니다.',
+      en: 'Each cell = osc. frequency at that corner. Deeper = faster, ✗ = fails to start. It must still oscillate at the worst corner, and the frequency spread must be coverable by tuning.',
+    },
+  },
+  vcopushing: {
+    what: {
+      ko: 'V_ctrl을 고정한 채 전원 전압 VDD를 흔들어, 주파수가 얼마나 밀리는지(pushing, GHz/V)를 측정합니다.',
+      en: 'Holds V_ctrl fixed and sweeps the supply VDD to measure how much the frequency moves (pushing, GHz/V).',
+    },
+    read: {
+      ko: '기울기가 pushing 값입니다. 작을수록 전원 잡음에 둔감 = 좋음. PLL에서 전원 리플이 위상잡음으로 새는 주요 경로예요.',
+      en: 'The slope is the pushing figure. Smaller = less sensitive to supply noise = better. In a PLL this is a key path for supply ripple to leak into phase noise.',
     },
   },
 }

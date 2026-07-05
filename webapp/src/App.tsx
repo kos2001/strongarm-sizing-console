@@ -63,7 +63,8 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
   },
 ]
 
-type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'layout' | 'flow' | 'vco' | 'vcoopt'
+type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'layout' | 'flow'
+  | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopvt' | 'vcopushing'
 type Domain = 'comparator' | 'vco'
 const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
   { id: 'sizing', glyph: '▦' },
@@ -81,11 +82,15 @@ const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
   { id: 'flow', glyph: '⇉' },
 ]
 const NAV_VCO: { id: Page; glyph: string }[] = [
+  { id: 'vcocircuit', glyph: '⎓' },
   { id: 'vco', glyph: '∿' },
   { id: 'vcoopt', glyph: '◴' },
+  { id: 'vcopvt', glyph: '◫' },
+  { id: 'vcopushing', glyph: '⇅' },
 ]
-const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vco' }
-const DOMAIN_OF: Record<string, Domain> = { vco: 'vco', vcoopt: 'vco' }
+const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vcocircuit' }
+const DOMAIN_OF: Record<string, Domain> = { vcocircuit: 'vco', vco: 'vco', vcoopt: 'vco', vcopvt: 'vco', vcopushing: 'vco' }
+const VCO_VIEW: Record<string, 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing'> = { vcocircuit: 'circuit', vco: 'main', vcoopt: 'opt', vcopvt: 'pvt', vcopushing: 'pushing' }
 const domainOf = (p: Page): Domain => DOMAIN_OF[p] ?? 'comparator'
 
 interface HistoryItem {
@@ -1038,7 +1043,7 @@ export default function App() {
             </div>
           )}
 
-          {(page === 'vco' || page === 'vcoopt') && <VcoPage view={page === 'vcoopt' ? 'opt' : 'main'} lang={lang} theme={theme} />}
+          {domain === 'vco' && <VcoPage view={VCO_VIEW[page]} lang={lang} theme={theme} />}
 
           {page === 'flow' && (
             <div className="flex flex-col gap-4">
