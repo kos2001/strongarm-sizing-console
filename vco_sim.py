@@ -21,8 +21,21 @@ is a documented extension: swap the M-lines for X-subckt instantiation.)
 """
 import copy
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 import run_sim  # reuse _run, _parse, _model_header, MODEL_PATH, NGSPICE
+
+_WORKERS = max(2, min(8, (os.cpu_count() or 4)))
+
+
+def _pmap(fn, items):
+    """Parallel map (ngspice subprocess releases the GIL) preserving order."""
+    items = list(items)
+    if len(items) <= 1:
+        return [fn(x) for x in items]
+    with ThreadPoolExecutor(max_workers=_WORKERS) as ex:
+        return list(ex.map(fn, items))
 
 VCO_DEFAULTS = {
     "vdd": 1.0,
@@ -53,7 +66,7 @@ def _dev(d, vt):
     return f"W={d['w_um']}u L={d['l_nm']}n M={d['m']} delvto={{{vt}}}"
 
 
-def gen_vco_netlist(p, vctrl=None, tstop_ns=25.0, tstep_ps=2.0, wavefile=None):
+def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
     d = p["devices"]
     vdd = p["vdd"]
     vc = p["vctrl"] if vctrl is None else vctrl
@@ -129,11 +142,9 @@ def vco_tuning(params, points=9):
     vdd = p["vdd"]
     vlo, vhi = 0.30 * vdd, 0.98 * vdd
     vs = [round(vlo + (vhi - vlo) * i / (points - 1), 4) for i in range(points)]
-    pts = []
-    for v in vs:
-        m = measure_vco(params, vctrl=v)
-        pts.append({"vctrl_v": v, "f_osc_ghz": m["f_osc_ghz"],
-                    "power_uw": m["power_uw"], "oscillates": m["oscillates"]})
+    ms = _pmap(lambda v: measure_vco(params, vctrl=v), vs)   # points are independent
+    pts = [{"vctrl_v": v, "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"], "oscillates": m["oscillates"]}
+           for v, m in zip(vs, ms)]
     fs = [(pt["vctrl_v"], pt["f_osc_ghz"]) for pt in pts if pt["f_osc_ghz"]]
     out = {"points": pts, "f_min_ghz": None, "f_max_ghz": None,
            "tuning_pct": None, "kvco_ghz_per_v": None, "center_ghz": None}
@@ -203,10 +214,8 @@ def vco_pushing(params, points=7, span=0.15):
     p = _full(params)
     v0 = p["vdd"]
     vs = [round(v0 * (1 - span + 2 * span * i / (points - 1)), 4) for i in range(points)]
-    pts = []
-    for v in vs:
-        m = measure_vco({**params, "vdd": v})
-        pts.append({"vdd": v, "f_osc_ghz": m["f_osc_ghz"], "oscillates": m["oscillates"]})
+    ms = _pmap(lambda v: measure_vco({**params, "vdd": v}), vs)   # points are independent
+    pts = [{"vdd": v, "f_osc_ghz": m["f_osc_ghz"], "oscillates": m["oscillates"]} for v, m in zip(vs, ms)]
     fs = [(pt["vdd"], pt["f_osc_ghz"]) for pt in pts if pt["f_osc_ghz"]]
     push = None
     if len(fs) >= 2:
