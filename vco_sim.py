@@ -22,6 +22,9 @@ is a documented extension: swap the M-lines for X-subckt instantiation.)
 import copy
 import math
 import os
+import re
+import statistics
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
 import run_sim  # reuse _run, _parse, _model_header, MODEL_PATH, NGSPICE
@@ -228,7 +231,7 @@ def vco_pushing(params, points=7, span=0.15):
             "pushing_ghz_per_v": round(push, 3) if push is not None else None}
 
 
-def phase_noise(params, offsets_hz=None):
+def phase_noise(params, offsets_hz=None, measured=True):
     """First-order thermal phase-noise / jitter estimate for the ring VCO.
 
     Each stage transition crosses threshold with timing uncertainty
@@ -261,9 +264,107 @@ def phase_noise(params, offsets_hz=None):
     pts = [{"offset_hz": round(fo), "L_dbc": round(_L(fo), 1)} for fo in offsets_hz]
     L_1m = _L(1e6)
     fom = L_1m - 20 * math.log10(f0 / 1e6) + 10 * math.log10(P * 1e3)   # P in mW
-    return {"f0_ghz": round(f0 / 1e9, 4), "power_uw": round(pw, 2), "n_stages": N,
-            "period_jitter_fs": round(sigma_T * 1e15, 2), "c_eff_ff": round(c_eff * 1e15, 3),
-            "points": pts, "L_1mhz_dbc": round(L_1m, 1), "fom_db": round(fom, 1)}
+    out = {"f0_ghz": round(f0 / 1e9, 4), "power_uw": round(pw, 2), "n_stages": N,
+           "period_jitter_fs": round(sigma_T * 1e15, 2), "c_eff_ff": round(c_eff * 1e15, 3),
+           "points": pts, "L_1mhz_dbc": round(L_1m, 1), "fom_db": round(fom, 1)}
+    # SPICE-measured cross-check (trnoise jitter); best-effort
+    if measured:
+        try:
+            m = phase_noise_measured(params)
+            if "error" not in m:
+                out["measured"] = m
+        except Exception:
+            pass
+    return out
+
+
+def _ring_gm(p):
+    """Finite-difference gm (S) of the core inverter NMOS at mid-transition."""
+    d = p["devices"]["invn"]
+    vdd = p["vdd"]
+
+    def idn(vg):
+        out = run_sim._run(f'.include "{run_sim.MODEL_PATH}"\nVd d 0 {vdd/2.0}\nVg g 0 {vg}\n'
+                           f'M1 d g 0 0 nmos W={d["w_um"]}u L={d["l_nm"]}n M={d["m"]}\n'
+                           '.control\nop\nprint i(Vd)\n.endc\n.end\n')
+        m = re.search(r"i\(vd\)\s*=\s*([-\d.eE+]+)", out, re.IGNORECASE)
+        return abs(float(m.group(1))) if m else None
+
+    i0, i1 = idn(vdd / 2.0), idn(vdd / 2.0 + 0.005)
+    return (i1 - i0) / 0.005 if (i0 is not None and i1 is not None and i1 > i0) else None
+
+
+def _gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wavefile):
+    """Ring VCO netlist with a per-stage input-referred trnoise voltage source
+    (amplitude `na`) in series with each inverter gate — for measured jitter."""
+    d = p["devices"]
+    vdd, N = p["vdd"], int(p["n_stages"])
+    invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
+    sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
+    lines = ["ring VCO + per-stage input-referred trnoise",
+             f".option temp={p.get('temp', 27)}", ".param dvtn=0 dvtp=0",
+             run_sim._model_header(p), f"Vdd vdd 0 {vdd}", f"Vc vctrl 0 {p['vctrl']}",
+             f"Mpref vbp vbp vdd vdd pmos {sp_p}", f"Mnref vbp vctrl 0 0 nmos {sn_n}"]
+    for i in range(1, N + 1):
+        prev = N if i == 1 else i - 1
+        lines += [f"Vn{i} og{i} o{prev} 0 trnoise({na} {ntstep_ps}p 0 0)",
+                  f"Mbp{i} a{i} vbp vdd vdd pmos {sp_p}",
+                  f"Mp{i}  o{i} og{i} a{i} vdd pmos {invp}",
+                  f"Mn{i}  o{i} og{i} b{i} 0 nmos {invn}",
+                  f"Mbn{i} b{i} vctrl 0 0 nmos {sn_n}",
+                  f"Co{i} o{i} 0 {p['cload_ff']}f"]
+    ic = " ".join(f"v(o{i})={vdd if i % 2 else 0}" for i in range(1, N + 1))
+    lines += [f".ic {ic}", ".control", "set noaskquit", f"setseed {seed}",
+              f"tran {ntstep_ps}p {tstop_ns}n uic", f"wrdata {wavefile} v(o1)", ".endc", ".end"]
+    return "\n".join(lines) + "\n"
+
+
+def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seed=1):
+    """SPICE-measured phase noise: inject the physical per-stage input-referred
+    device noise (S_v = 4kTγ/gm, γ=2/3, via ngspice trnoise), run a long noisy
+    transient, and measure the period jitter directly from the oscillation. A
+    real cross-check of the analytic estimate — the circuit itself converts the
+    injected noise through its actual switching."""
+    p = _full(params)
+    vdd, N = p["vdd"], int(p["n_stages"])
+    gm = _ring_gm(p)
+    if not gm:
+        return {"error": "gm extraction failed"}
+    kT = 1.380649e-23 * (p.get("temp", 27) + 273.15)
+    na = math.sqrt(4 * kT * (2.0 / 3.0) / gm / (ntstep_ps * 1e-12))   # trnoise amplitude for S_v
+    fd, wf = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    try:
+        run_sim._run(_gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wf))
+        ts, vs = [], []
+        with open(wf) as fh:
+            for line in fh:
+                c = line.split()
+                if len(c) >= 2:
+                    try:
+                        ts.append(float(c[0])); vs.append(float(c[1]))
+                    except ValueError:
+                        pass
+    finally:
+        try:
+            os.unlink(wf)
+        except OSError:
+            pass
+    th = vdd / 2.0
+    cross = [ts[k - 1] + (th - vs[k - 1]) * (ts[k] - ts[k - 1]) / (vs[k] - vs[k - 1])
+             for k in range(1, len(vs)) if vs[k - 1] < th <= vs[k]]
+    cross = [c for c in cross if c > 0.15 * tstop_ns * 1e-9]   # drop startup
+    periods = [cross[i + 1] - cross[i] for i in range(len(cross) - 1)]
+    if len(periods) < 10:
+        return {"error": "too few cycles measured"}
+    f0 = 1.0 / (sum(periods) / len(periods))
+    sigma_T = statistics.pstdev(periods)
+    offs = [1e4 * (10 ** (i / 2.0)) for i in range(0, 9)]
+    pts = [{"offset_hz": round(fo), "L_dbc": round(10 * math.log10(f0 ** 3 * sigma_T ** 2 / fo ** 2), 1)} for fo in offs]
+    return {"f0_ghz": round(f0 / 1e9, 4), "period_jitter_fs": round(sigma_T * 1e15, 2),
+            "cycles": len(periods), "points": pts,
+            "L_1mhz_dbc": round(10 * math.log10(f0 ** 3 * sigma_T ** 2 / 1e12), 1),
+            "method": "SPICE transient-noise (trnoise) measured jitter"}
 
 
 def run_vco(params, do_tuning=False):

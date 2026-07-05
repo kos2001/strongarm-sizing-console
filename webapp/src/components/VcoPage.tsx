@@ -128,6 +128,11 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
               <Metric label="FoM" value={`${pn.fom_db} dB`} />
               <Metric label={T(lang, '유효 노드 C', 'C_eff / node')} value={`${pn.c_eff_ff} fF`} />
             </div>
+            {pn.measured && (
+              <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg" style={{ color: 'var(--si)', background: 'color-mix(in srgb, var(--si) 12%, transparent)' }}>
+                {T(lang, 'SPICE trnoise 실측 교차검증', 'SPICE trnoise cross-check')}: L(1MHz) {pn.measured.L_1mhz_dbc} dBc/Hz · {T(lang, '지터', 'jitter')} {pn.measured.period_jitter_fs} fs · {pn.measured.cycles} {T(lang, '사이클', 'cycles')} · {T(lang, '해석값과', 'vs analytic')} {Math.abs(pn.L_1mhz_dbc - pn.measured.L_1mhz_dbc).toFixed(1)} dB
+              </div>
+            )}
             <p className="mono text-[11px] mt-3 leading-relaxed" style={lab}>
               {T(lang,
                 '열잡음 1차 추정: 각 전이가 sqrt(kT·C)/I 만큼 흔들리고, 주기당 2N 전이가 누적 → L(Δf)=10·log(f₀³·σ_T²/Δf²). −20dB/decade(1/f²) 영역. PSS/pnoise 사인오프가 아닌 1차 모델이며 전력·f₀·N 의존성을 정확히 따릅니다.',

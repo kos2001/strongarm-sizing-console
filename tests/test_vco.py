@@ -91,6 +91,15 @@ def test_vco_phase_noise():
     assert -22 < slope < -18
 
 
+def test_vco_phase_noise_measured_agrees():
+    """The SPICE trnoise-measured jitter should corroborate the analytic estimate."""
+    r = vco_sim.phase_noise({})
+    m = r.get("measured")
+    assert m is not None and m["cycles"] >= 30
+    # two independent methods within a few dB at 1 MHz
+    assert abs(r["L_1mhz_dbc"] - m["L_1mhz_dbc"]) < 6.0
+
+
 def test_vco_pareto_front():
     r = server.optimize_vco_pareto(vco_sim._full({}), pop=10, gens=3)
     assert len(r["front"]) >= 3

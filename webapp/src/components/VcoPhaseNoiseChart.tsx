@@ -34,10 +34,20 @@ export default function VcoPhaseNoiseChart({ pn, theme }: { pn: VcoPhaseNoise; t
       // y labels (dBc/Hz)
       ctx.fillStyle = '#4f7f7d'
       for (let i = 0; i <= 4; i++) { const v = ymin + (ymax - ymin) * i / 4; ctx.fillText(Math.round(v).toString(), 6, Y(v) + 3) }
-      // curve
+      // measured (trnoise) cross-check — dashed cyan, drawn under the analytic
+      const meas = pn.measured?.points
+      if (meas && meas.length) {
+        ctx.beginPath(); meas.forEach((p, i) => { const x = X(Math.log10(p.offset_hz)), y = Y(p.L_dbc); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y) })
+        ctx.strokeStyle = '#39d7d7'; ctx.lineWidth = 1.6; ctx.setLineDash([5, 3]); ctx.stroke(); ctx.setLineDash([])
+      }
+      // analytic curve
       ctx.beginPath(); pts.forEach((p, i) => { const x = X(Math.log10(p.offset_hz)), y = Y(p.L_dbc); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y) })
       ctx.strokeStyle = '#8f6fff'; ctx.lineWidth = 2.2; ctx.shadowColor = '#8f6fff'; ctx.shadowBlur = 7; ctx.stroke(); ctx.shadowBlur = 0
       for (const p of pts) { ctx.beginPath(); ctx.arc(X(Math.log10(p.offset_hz)), Y(p.L_dbc), 2.6, 0, 7); ctx.fillStyle = '#8f6fff'; ctx.fill() }
+      // legend
+      ctx.font = '9px ui-monospace, monospace'
+      ctx.fillStyle = '#8f6fff'; ctx.fillText('— analytic', W - 130, padT + 10)
+      if (meas && meas.length) { ctx.fillStyle = '#39d7d7'; ctx.fillText('-- SPICE trnoise', W - 130, padT + 22) }
       // 1 MHz marker
       const x1m = X(6)
       ctx.strokeStyle = '#e6c84f'; ctx.setLineDash([4, 3]); ctx.globalAlpha = 0.8
