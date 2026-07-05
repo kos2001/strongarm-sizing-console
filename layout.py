@@ -50,30 +50,25 @@ def _device_block(x0, name, dev, kind):
     return rects, dw
 
 
-def generate_layout(params, gds_path=None):
-    devices = params.get("devices", {})
-    order = ["tail", "input", "ncc", "pcc", "pre"]
-    kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p"}
-    merged = {k: v for k, v in devices.items()}
+def _build_layout(blocks, cell_name, gds_path, gds_default):
+    """Place an ordered list of (name, device, kind) as a row of multi-finger MOS
+    blocks + PMOS nwell + substrate guard ring, write GDS, run rule DRC. Shared by
+    the comparator and the ring-VCO layout generators."""
     layer_rects = {k: [] for k in LAYERS}
     x = GR + GAP
     labels = []
-    for k in order:
-        if k not in merged:
-            continue
-        rb, w = _device_block(x, k, merged[k], kind[k])
+    for name, dev, kind in blocks:
+        rb, w = _device_block(x, name, dev, kind)
         for lyr, rs in rb.items():
             layer_rects[lyr].extend(rs)
-        labels.append({"name": k, "x": round(x, 3), "w": w, "kind": kind[k]})
+        labels.append({"name": name, "x": round(x, 3), "w": w, "kind": kind})
         x += w + GAP
 
     cell_w = round(x - GAP + GR, 3)
-    # tallest block for the ring height
     top = max((r[1] + r[3] for rs in layer_rects.values() for r in rs), default=2.0)
     bot = min((r[1] for rs in layer_rects.values() for r in rs), default=0.0)
     ring_h = round(top - bot + 2 * GR, 3)
     y0 = round(bot - GR, 3)
-    # substrate guard ring (tap + met1) as 4 rects
     for x1, y1, w1, h1 in [
         [0, y0, cell_w, GR], [0, y0 + ring_h - GR, cell_w, GR],
         [0, y0, GR, ring_h], [cell_w - GR, y0, GR, ring_h],
@@ -82,12 +77,12 @@ def generate_layout(params, gds_path=None):
         layer_rects["met1"].append([round(x1, 3), round(y1, 3), round(w1, 3), round(h1, 3)])
 
     area = round(cell_w * ring_h, 3)
-    gds = gds_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", "strongarm.gds")
+    gds = gds_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "out", gds_default)
     try:
         import gdstk
         os.makedirs(os.path.dirname(gds), exist_ok=True)
         lib = gdstk.Library()
-        cell = lib.new_cell("STRONGARM_COMPARATOR")
+        cell = lib.new_cell(cell_name)
         for lyr, (ln, dt, _c, _z) in LAYERS.items():
             for (rx, ry, rw, rh) in layer_rects[lyr]:
                 cell.add(gdstk.rectangle((rx, ry), (rx + rw, ry + rh), layer=ln, datatype=dt))
@@ -105,6 +100,39 @@ def generate_layout(params, gds_path=None):
         "gds_path": gds_written,
         "drc": _drc(layer_rects),
     }
+
+
+def generate_layout(params, gds_path=None):
+    devices = params.get("devices", {})
+    order = ["tail", "input", "ncc", "pcc", "pre"]
+    kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p"}
+    blocks = [(k, devices[k], kind[k]) for k in order if k in devices]
+    return _build_layout(blocks, "STRONGARM_COMPARATOR", gds_path, "strongarm.gds")
+
+
+def generate_vco_layout(params, gds_path=None):
+    """Ring VCO layout: bias mirror (Mpref/Mnref) + N current-starved stages
+    (Mbp/Mp/Mn/Mbn each) as a row of multi-finger MOS blocks + guard ring + DRC."""
+    d = params.get("devices", {})
+    n = int(params.get("n_stages", 5))
+    blocks = [("biasP", d["starvep"], "p"), ("biasN", d["starven"], "n")]
+    for i in range(1, n + 1):
+        blocks += [(f"Mbp{i}", d["starvep"], "p"), (f"Mp{i}", d["invp"], "p"),
+                   (f"Mn{i}", d["invn"], "n"), (f"Mbn{i}", d["starven"], "n")]
+    return _build_layout(blocks, "RING_VCO", gds_path, "ring_vco.gds")
+
+
+def extract_vco_parasitics(params):
+    """Layout-derived added capacitance per ring output node (fF): each o_i sees
+    the drains of its stage's Mp/Mn plus the next stage's gates. Real drawn
+    diffusion+met1 geometry × SKY130-class cap densities — PoC extraction."""
+    d = params.get("devices", {})
+    cap_p = _device_cap_ff(d["invp"], "p")
+    cap_n = _device_cap_ff(d["invn"], "n")
+    c_node = 0.5 * (cap_p + cap_n)   # drain share at the output node
+    return {"c_node_ff": round(c_node, 3),
+            "per_device_ff": {"invp": round(cap_p, 3), "invn": round(cap_n, 3)},
+            "method": "drawn diffusion+met1 area/perimeter × SKY130-class cap densities"}
 
 
 # areal / fringe cap densities (SKY130-class, order-of-magnitude) used to turn

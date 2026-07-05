@@ -613,6 +613,129 @@ def vco_pvt(params):
             "any_nonosc": any(not c["oscillates"] for c in corners)}
 
 
+def optimize_vco_pareto(base, pop=16, gens=6, seed=9):
+    """Multi-objective **NSGA-II** for the ring VCO: the power ↔ frequency
+    trade-off (minimize [power, -f_osc]) subject to must-oscillate. Returns the
+    non-dominated front so the UI can plot best-power-per-frequency."""
+    import random
+    rng = random.Random(seed)
+    LO, HI = math.log10(0.5), math.log10(40.0)
+    keys = vco_sim.DEV_KEYS
+
+    def make(x):
+        p = copy.deepcopy(base)
+        for i, k in enumerate(keys):
+            p["devices"][k]["w_um"] = round(10 ** x[i], 2)
+        return p
+
+    def ev(x):
+        p = make(x)
+        m = vco_sim.measure_vco(p)
+        f, pw, osc = m["f_osc_ghz"], m["power_uw"] or 1e6, m["oscillates"]
+        cv = 0.0 if (osc and f is not None) else 1.0
+        return {"x": list(x), "p": p, "f": [pw, -(f or 0.0)], "cv": cv, "m": m}
+
+    def dominates(a, b):
+        if a["cv"] != b["cv"]:
+            return a["cv"] < b["cv"]
+        le = all(af <= bf for af, bf in zip(a["f"], b["f"]))
+        lt = any(af < bf for af, bf in zip(a["f"], b["f"]))
+        return le and lt
+
+    def nondom_sort(P):
+        fronts, S, n = [[]], {}, {}
+        for i, pi in enumerate(P):
+            S[i] = [j for j, pj in enumerate(P) if dominates(pi, pj)]
+            n[i] = sum(1 for j, pj in enumerate(P) if dominates(pj, pi))
+            if n[i] == 0:
+                fronts[0].append(i)
+        k = 0
+        while fronts[k]:
+            nxt = []
+            for i in fronts[k]:
+                for j in S[i]:
+                    n[j] -= 1
+                    if n[j] == 0:
+                        nxt.append(j)
+            k += 1
+            fronts.append(nxt)
+        return [f for f in fronts if f]
+
+    def crowding(P, idxs):
+        dist = {i: 0.0 for i in idxs}
+        for m in range(2):
+            order = sorted(idxs, key=lambda i: P[i]["f"][m])
+            dist[order[0]] = dist[order[-1]] = float("inf")
+            lo, hi = P[order[0]]["f"][m], P[order[-1]]["f"][m]
+            span = (hi - lo) or 1.0
+            for r in range(1, len(order) - 1):
+                dist[order[r]] += (P[order[r + 1]]["f"][m] - P[order[r - 1]]["f"][m]) / span
+        return dist
+
+    init = [[max(LO, min(HI, math.log10(base["devices"][k]["w_um"]))) for k in keys]]
+    init += [[rng.uniform(LO, HI) for _ in keys] for _ in range(pop - 1)]
+    pop_e = _pmap(ev, init)
+    for _ in range(gens):
+        trials = []
+        for _ in range(pop):
+            a, b, c = rng.sample(range(pop), 3)
+            trials.append([max(LO, min(HI, pop_e[a]["x"][j] + 0.6 * (pop_e[b]["x"][j] - pop_e[c]["x"][j]))) for j in range(len(keys))])
+        kids = _pmap(ev, trials)
+        comb = pop_e + kids
+        fronts = nondom_sort(comb)
+        newp = []
+        for fr in fronts:
+            if len(newp) + len(fr) <= pop:
+                newp += fr
+            else:
+                d = crowding(comb, fr)
+                newp += sorted(fr, key=lambda i: -d[i])[:pop - len(newp)]
+                break
+        pop_e = [comb[i] for i in newp]
+
+    front = [pop_e[i] for i in nondom_sort(pop_e)[0] if pop_e[i]["cv"] == 0.0]
+    front.sort(key=lambda e: e["f"][0])
+    pts = [{"power_uw": e["m"]["power_uw"], "f_osc_ghz": e["m"]["f_osc_ghz"],
+            "devices": copy.deepcopy(e["p"]["devices"])} for e in front]
+    allpts = [{"power_uw": e["m"]["power_uw"], "f_osc_ghz": e["m"]["f_osc_ghz"], "feasible": e["cv"] == 0.0} for e in pop_e]
+    return {"front": pts, "all": allpts}
+
+
+def vco_fullflow(base, targets):
+    """End-to-end VCO sign-off: DE+GP auto-size → post-layout parasitic re-sim →
+    PVT sign-off → GDSII layout + rule DRC — mirrors the comparator full flow."""
+    opt = optimize_vco(base, targets)
+    fin = opt["final_params"]
+    stages = [{"name": "Auto-size — DE + GP surrogate", "ok": bool(opt["success"]),
+               "detail": f"{opt['nominal']['f_osc_ghz']}GHz, {opt['nominal']['power_uw']}µW, {opt['n_sims']} SPICE evals"}]
+    # post-layout parasitic re-sim
+    pc = layout.extract_vco_parasitics(fin)
+    sch = vco_sim.measure_vco(fin)
+    pl = vco_sim.measure_vco({**fin, "cload_ff": fin["cload_ff"] + pc["c_node_ff"]})
+    stages.append({"name": "Post-layout parasitics", "ok": bool(pl["oscillates"]),
+                   "detail": f"f {sch['f_osc_ghz']}→{pl['f_osc_ghz']}GHz (+{pc['c_node_ff']}fF/node)"})
+    # PVT sign-off (representative corners)
+    reps = [("SS", 0.05, 125, 0.9), ("TT", 0.0, 27, 1.0), ("FF", -0.05, -40, 1.1)]
+    bv = float(fin["vdd"])
+
+    def _rep(r):
+        proc, ps, t, vf = r
+        m = vco_sim.measure_vco({**fin, "vdd": round(bv * vf, 3), "temp": t, "pskew": ps})
+        return {"process": proc, "temp": t, "v_frac": vf, "f_osc_ghz": m["f_osc_ghz"], "oscillates": m["oscillates"]}
+
+    pvt_c = _pmap(_rep, reps)
+    pvt_ok = all(c["oscillates"] for c in pvt_c)
+    stages.append({"name": "PVT sign-off (3 corners)", "ok": pvt_ok,
+                   "detail": "oscillates at all corners" if pvt_ok else "fails to oscillate at a corner"})
+    # layout + DRC
+    lay = layout.generate_vco_layout(fin)
+    lay_ok = bool(lay["drc"]["clean"])
+    stages.append({"name": "Layout + DRC (GDSII)", "ok": lay_ok,
+                   "detail": f"cell {lay['area_um2']}µm², {'DRC clean' if lay_ok else str(lay['drc']['n_violations']) + ' DRC violations'}"})
+    return {"stages": stages, "final_params": fin, "nominal": opt["nominal"], "tuning": opt["tuning"],
+            "overall": all(s["ok"] for s in stages), "layout": lay, "pvt": pvt_c, "par_caps": pc}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -734,6 +857,22 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/vco/pushing":
                 payload = self._read_json()
                 self._json(vco_sim.vco_pushing(payload.get("params", {})))
+            elif self.path == "/api/vco/layout":
+                payload = self._read_json()
+                self._json(layout.generate_vco_layout(vco_sim._full(payload.get("params", {}))))
+            elif self.path == "/api/vco/postlayout":
+                payload = self._read_json()
+                p = vco_sim._full(payload.get("params", {}))
+                pc = layout.extract_vco_parasitics(p)
+                sch = vco_sim.capture_vco_waveform(p)
+                pl = vco_sim.capture_vco_waveform({**p, "cload_ff": p["cload_ff"] + pc["c_node_ff"]})
+                self._json({"schematic": sch, "postlayout": pl, "par_caps": pc})
+            elif self.path == "/api/vco/pareto":
+                payload = self._read_json()
+                self._json(optimize_vco_pareto(vco_sim._full(payload.get("params", {}))))
+            elif self.path == "/api/vco/fullflow":
+                payload = self._read_json()
+                self._json(vco_fullflow(vco_sim._full(payload.get("params", {})), payload.get("targets") or {"f_ghz": 1.5}))
             elif self.path == "/api/yield":
                 payload = self._read_json()
                 targets = payload.get("targets") or {k: s["limit"] for k, s in SPEC_TARGETS.items()}

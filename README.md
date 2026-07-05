@@ -166,10 +166,12 @@ the same. Also update the Pelgrom `avt_mv_um` to the PDK's value.
 
 ## MOSFET ring VCO (same optimization loop)
 
-Beyond the comparator, the tool now sizes a **pure-MOSFET current-starved ring
-VCO** with the identical simulate→evaluate→optimize flow (`vco_sim.py`, its own
-**VCO domain** in the frontend — Circuit·waveform / Sizing·tuning / Auto-size /
-PVT corners / Supply pushing — `/api/vco/*`):
+Beyond the comparator, the tool sizes a **pure-MOSFET current-starved ring VCO**
+with the identical algorithm + flow depth. Its own **VCO domain** in the frontend
+mirrors the comparator's 8 pages — Circuit·waveform / Sizing·tuning / Auto-size
+(DE + GP surrogate) / **Pareto (NSGA-II, power↔frequency)** / PVT corners /
+Supply pushing / **Layout (GDSII + DRC)** / **Full flow** (`vco_sim.py`,
+`layout.generate_vco_layout`, `/api/vco/*`):
 
 - **Topology** — N odd current-starved CMOS inverter stages in a ring; V_ctrl
   sets the tail current (NMOS ref mirrored to a diode PMOS → vbp), hence the
@@ -181,6 +183,15 @@ PVT corners / Supply pushing — `/api/vco/*`):
   a **target frequency** at minimum power, subject to must-oscillate. On the PTM
   seed it tunes ~0.57–2.24 GHz (≈119 %, Kvco ≈2.75 GHz/V) and hits a 2.0 GHz
   target within a few percent.
+- **Pareto (NSGA-II)** — `optimize_vco_pareto` maps the power ↔ frequency
+  trade-off (min power, max frequency, must-oscillate); the front gives the
+  min-power sizing at each frequency.
+- **Layout + parasitics** — `layout.generate_vco_layout` synthesizes the ring's
+  GDSII (bias mirror + N stages, multi-finger MOS + guard ring) with rule DRC;
+  `layout.extract_vco_parasitics` derives per-ring-node C from the drawn
+  geometry, and the post-layout re-sim shows the frequency drop (~5%).
+- **Full flow** — `vco_fullflow` chains auto-size → post-layout re-sim → PVT
+  sign-off → layout/DRC, mirroring the comparator's end-to-end flow.
 
 ```bash
 python3 vco_sim.py            # nominal: f_osc / oscillates / power

@@ -233,6 +233,20 @@ export interface VcoPvtCorner { process: string; temp: number; v_frac: number; v
 export interface VcoPvtResult { corners: VcoPvtCorner[]; base_vdd: number; f_min_ghz: number | null; f_max_ghz: number | null; any_nonosc: boolean; error?: string }
 export interface VcoPushingPoint { vdd: number; f_osc_ghz: number | null; oscillates: boolean }
 export interface VcoPushing { points: VcoPushingPoint[]; nominal_vdd: number; pushing_ghz_per_v: number | null; error?: string }
+export interface VcoParetoPoint { power_uw: number | null; f_osc_ghz: number | null; devices: Record<VcoDeviceKey, Device> }
+export interface VcoParetoResult { front: VcoParetoPoint[]; all: { power_uw: number | null; f_osc_ghz: number | null; feasible: boolean }[]; error?: string }
+export interface VcoPostLayout { schematic: VcoWaveform; postlayout: VcoWaveform; par_caps: { c_node_ff: number; per_device_ff: Record<string, number>; method: string }; error?: string }
+export interface VcoFlowStage { name: string; ok: boolean; detail: string }
+export interface VcoFullflow {
+  stages: VcoFlowStage[]
+  final_params: VcoParams
+  nominal: VcoNominal
+  tuning: VcoTuning
+  overall: boolean
+  layout?: LayoutResult
+  par_caps?: { c_node_ff: number }
+  error?: string
+}
 
 export const VCO_DEVICE_META: Record<VcoDeviceKey, { name: string; role: { ko: string; en: string } }> = {
   invp: { name: 'Mp', role: { ko: '코어 PMOS — 상승', en: 'core PMOS — pull-up' } },

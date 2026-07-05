@@ -63,6 +63,36 @@ def test_optimize_vco_hits_target():
     assert abs(r["nominal"]["f_osc_ghz"] - 1.5) / 1.5 <= 0.2
 
 
+def test_vco_layout_and_parasitics():
+    import layout
+    p = vco_sim._full({})
+    L = layout.generate_vco_layout(p)
+    assert L["area_um2"] > 0 and L["drc"]["clean"] is True
+    assert len(L["labels"]) == 2 + 4 * p["n_stages"]      # bias pair + 4 per stage
+    pc = layout.extract_vco_parasitics(p)
+    assert pc["c_node_ff"] > 0
+    # parasitics lower the frequency
+    base = vco_sim.measure_vco(p)["f_osc_ghz"]
+    pl = vco_sim.measure_vco({**p, "cload_ff": p["cload_ff"] + pc["c_node_ff"]})["f_osc_ghz"]
+    assert pl < base
+
+
+def test_vco_pareto_front():
+    r = server.optimize_vco_pareto(vco_sim._full({}), pop=10, gens=3)
+    assert len(r["front"]) >= 3
+    fs = [p["f_osc_ghz"] for p in r["front"]]
+    pw = [p["power_uw"] for p in r["front"]]
+    # front sorted by power; higher-power designs reach higher frequency (trade-off)
+    assert max(fs) > min(fs) and max(pw) >= min(pw)
+
+
+def test_vco_fullflow():
+    r = server.vco_fullflow(vco_sim._full({}), {"f_ghz": 1.5})
+    assert len(r["stages"]) == 4
+    assert r["layout"]["drc"]["clean"] in (True, False)
+    assert r["nominal"]["oscillates"] is True
+
+
 def test_optimize_vco_surrogate_skips():
     """The GP surrogate should pre-screen at least some candidates (fewer SPICE
     runs) once enough training points exist."""

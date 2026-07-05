@@ -22,8 +22,11 @@ export const NAV_LABELS: Record<string, Bi> = {
   vcocircuit: { ko: '회로 · 파형', en: 'Circuit · wave' },
   vco: { ko: '사이징 · 튜닝', en: 'Sizing · tuning' },
   vcoopt: { ko: '자동 사이징', en: 'Auto-size' },
+  vcopareto: { ko: '파레토', en: 'Pareto' },
   vcopvt: { ko: 'PVT 코너', en: 'PVT corners' },
   vcopushing: { ko: '전원 푸싱', en: 'Supply pushing' },
+  vcolayout: { ko: '레이아웃', en: 'Layout' },
+  vcoflow: { ko: '전체 흐름', en: 'Full flow' },
 }
 export const NAV_SUBS: Record<string, Bi> = {
   sizing: { ko: '소자 · 실행 · 스펙', en: 'devices · run · spec' },
@@ -42,8 +45,11 @@ export const NAV_SUBS: Record<string, Bi> = {
   vcocircuit: { ko: '회로도 · 발진 파형', en: 'schematic · waveform' },
   vco: { ko: '발진 · 튜닝 곡선', en: 'oscillate · tuning curve' },
   vcoopt: { ko: '목표 f로 소자 최적화', en: 'size to target f' },
+  vcopareto: { ko: '전력 ↔ 주파수 (NSGA-II)', en: 'power ↔ freq (NSGA-II)' },
   vcopvt: { ko: '공정 · 전압 · 온도', en: 'process · voltage · temp' },
   vcopushing: { ko: 'f vs VDD · GHz/V', en: 'f vs VDD · GHz/V' },
+  vcolayout: { ko: 'GDS + DRC', en: 'GDS + DRC' },
+  vcoflow: { ko: '크기→기생→PVT→GDS', en: 'size → parasitics → GDS' },
 }
 
 // Beginner-friendly "what does this page do?" explanation. `what` = plain-language
@@ -227,6 +233,36 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
     read: {
       ko: '기울기가 pushing 값입니다. 작을수록 전원 잡음에 둔감 = 좋음. PLL에서 전원 리플이 위상잡음으로 새는 주요 경로예요.',
       en: 'The slope is the pushing figure. Smaller = less sensitive to supply noise = better. In a PLL this is a key path for supply ripple to leak into phase noise.',
+    },
+  },
+  vcopareto: {
+    what: {
+      ko: '전력과 주파수는 상충합니다(고주파일수록 전류=전력↑). 그 최선의 절충 곡선을 NSGA-II 다목적 최적화로 그립니다 — 비교기의 파레토와 같은 알고리즘.',
+      en: 'Power and frequency trade off (higher frequency needs more current = power). NSGA-II maps the best trade-off curve — the same multi-objective algorithm as the comparator Pareto.',
+    },
+    read: {
+      ko: '프론트 위의 점들은 "더 낫게 만들 수 없는" 설계입니다 — 각 주파수에서의 최소 전력. 왼쪽-위가 우수(고주파·저전력). 점을 클릭해 그 설계를 로드.',
+      en: 'Points on the front cannot be improved without a trade-off — the min power at each frequency. Upper-left is best (high f, low power). Click a point to load that design.',
+    },
+  },
+  vcolayout: {
+    what: {
+      ko: '현재 소자 크기로부터 링 VCO의 실제 트랜지스터 레벨 GDSII 레이아웃(바이어스 미러 + N단)을 자동 생성하고 규칙 DRC를 돌립니다. 비교기 레이아웃과 같은 방식.',
+      en: 'Auto-generates the ring VCO transistor-level GDSII layout (bias mirror + N stages) from the current sizing and runs rule DRC — same as the comparator layout.',
+    },
+    read: {
+      ko: '색깔은 각 레이어(확산·폴리·금속 등)입니다. 셀 면적과 DRC 결과를 보여줘요. 개념 증명(PoC) 레이아웃이지 양산 사인오프는 아닙니다.',
+      en: 'Colours are the layers (diffusion, poly, metal, …). It reports cell area and the DRC result. PoC layout, not sign-off DRC.',
+    },
+  },
+  vcoflow: {
+    what: {
+      ko: '자동 사이징 → 레이아웃 기생 재시뮬 → PVT 사인오프 → 레이아웃/DRC 까지 VCO 전체 설계 흐름을 버튼 하나로 실행합니다.',
+      en: 'Runs the whole VCO flow — auto-size → layout-parasitic re-sim → PVT sign-off → layout/DRC — end to end with one button.',
+    },
+    read: {
+      ko: '각 단계 통과/실패와 마지막 전체 사인오프 여부, 생성된 레이아웃이 나옵니다. 기생으로 주파수가 얼마나 떨어지는지도 보여줍니다.',
+      en: 'Each stage shows pass/fail, plus the overall sign-off verdict and the generated layout — including how much the parasitics drop the frequency.',
     },
   },
 }

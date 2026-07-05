@@ -1,12 +1,14 @@
 import { useState } from 'react'
-import type { VcoDeviceKey, VcoOptimizeResult, VcoParams, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform } from '../types'
+import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform } from '../types'
 import { VCO_DEVICE_META } from '../types'
-import { vcoOptimize, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform } from '../api'
+import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform } from '../api'
 import TuningChart from './TuningChart'
 import VcoSchematic from './VcoSchematic'
 import VcoWaveformChart from './VcoWaveformChart'
 import VcoPvtView from './VcoPvtView'
 import VcoPushingChart from './VcoPushingChart'
+import VcoParetoChart from './VcoParetoChart'
+import LayoutView from './LayoutView'
 import type { Lang } from '../i18n'
 
 const VCO_DEFAULTS: VcoParams = {
@@ -18,7 +20,7 @@ const VCO_DEFAULTS: VcoParams = {
 }
 const DKEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
-type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing'
+type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow'
 
 export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: View }) {
   const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
@@ -28,6 +30,9 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const [wf, setWf] = useState<VcoWaveform | null>(null)
   const [pvt, setPvt] = useState<VcoPvtResult | null>(null)
   const [push, setPush] = useState<VcoPushing | null>(null)
+  const [pareto, setPareto] = useState<VcoParetoResult | null>(null)
+  const [lay, setLay] = useState<LayoutResult | null>(null)
+  const [flow, setFlow] = useState<VcoFullflow | null>(null)
   const [load, setLoad] = useState('')
   const [targetF, setTargetF] = useState(1.5)
   const busy = load !== ''
@@ -42,6 +47,9 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
   const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
   const runPush = () => guard('push', async () => { const r = await vcoPushing(params); if (!r.error) setPush(r) })
+  const runPareto = () => guard('pareto', async () => { const r = await vcoPareto(params); if (!r.error) setPareto(r) })
+  const runLayout = () => guard('layout', async () => { const r = await vcoLayout(params); if (!r.error) setLay(r) })
+  const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, devices: r.final_params.devices })) } })
 
   const nom = res?.nominal
   const box: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 14 }
@@ -99,6 +107,78 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             <p className="mono text-[11px] mt-2" style={lab}>{T(lang, 'V_ctrl 고정, VDD를 흔들어 주파수가 얼마나 밀리는지 — 전원잡음 민감도.', 'Fixed V_ctrl; how much the supply moves the frequency — supply-noise sensitivity.')}</p>
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, 'VDD를 ±15% 스윕해 주파수 푸싱(GHz/V)을 측정합니다.', 'Sweep VDD ±15% to measure frequency pushing (GHz/V).')}</p>}
+      </div>
+    )
+  }
+
+  // ---- Pareto (power ↔ frequency, NSGA-II) ----
+  if (view === 'pareto') {
+    return (
+      <div className="p-5" style={box}>
+        {hd(T(lang, 'Pareto · 전력 ↔ 주파수 (NSGA-II)', 'Pareto · power ↔ frequency (NSGA-II)'), runBtn(runPareto, 'pareto', T(lang, '⤢ 프론트 탐색', '⤢ run NSGA-II')))}
+        {pareto ? (
+          <>
+            <VcoParetoChart res={pareto} theme={theme} />
+            <p className="mono text-[11px] mt-2 leading-relaxed" style={lab}>
+              <span style={{ color: A }}>— 프론트</span> = {pareto.front.length} {T(lang, '개 비지배 설계 (주파수별 최소 전력). 왼쪽-위가 우수(고주파·저전력).', 'non-dominated designs (min power per frequency). Upper-left is better.')}
+            </p>
+            <div className="flex flex-col gap-1.5 mt-3">
+              {pareto.front.slice(0, 8).map((pt, i) => (
+                <button key={i} onClick={() => setParams((p) => ({ ...p, devices: pt.devices }))} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5"
+                  style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)', color: 'var(--muted)' }} title={T(lang, '이 설계를 편집기에 로드', 'load this sizing')}>
+                  {pt.f_osc_ghz} GHz · {pt.power_uw} µW
+                </button>
+              ))}
+            </div>
+          </>
+        ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '전력↔주파수 트레이드오프의 최적 곡선을 NSGA-II로 찾습니다. 각 점을 눌러 그 설계를 로드.', 'NSGA-II maps the power ↔ frequency trade-off. Click a front point to load that design.')}</p>}
+      </div>
+    )
+  }
+
+  // ---- Layout (GDS + DRC) ----
+  if (view === 'layout') {
+    return (
+      <div className="p-5" style={box}>
+        {hd(T(lang, '레이아웃 · GDSII + DRC', 'layout · GDSII + DRC'), runBtn(runLayout, 'layout', T(lang, '▧ 레이아웃 생성', '▧ generate layout')))}
+        {lay ? (
+          <>
+            <LayoutView data={lay} />
+            <div className="flex flex-wrap gap-4 mt-3 mono text-[11px]" style={lab}>
+              {lay.layers.map((l) => (<span key={l.name}><span className="sw" style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: l.color, marginRight: 5, verticalAlign: 'middle' }} />{l.name} ({l.gds})</span>))}
+            </div>
+            <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg inline-block" style={{ color: lay.drc.clean ? 'var(--good)' : 'var(--bad)', background: `color-mix(in srgb, ${lay.drc.clean ? 'var(--good)' : 'var(--bad)'} 12%, transparent)` }}>
+              {T(lang, '셀 면적', 'cell area')} {lay.area_um2} µm² · {lay.drc.clean ? T(lang, 'DRC 통과', 'DRC CLEAN') : `${lay.drc.n_violations} DRC`}
+            </div>
+            <p className="mono text-[11px] mt-2" style={lab}>{T(lang, '바이어스 미러 + N단(각 Mbp/Mp/Mn/Mbn) 멀티핑거 MOS + 가드링. PoC 레이아웃(사인오프 DRC 아님).', 'bias mirror + N stages (Mbp/Mp/Mn/Mbn each) as multi-finger MOS + guard ring. PoC layout, not sign-off DRC.')}</p>
+          </>
+        ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '현재 소자 크기로 링 VCO의 트랜지스터 레벨 GDSII 레이아웃을 합성하고 규칙 DRC를 돌립니다.', 'Synthesize the transistor-level GDSII layout of the ring VCO from the current sizing and run rule DRC.')}</p>}
+      </div>
+    )
+  }
+
+  // ---- Full flow ----
+  if (view === 'flow') {
+    return (
+      <div className="p-5" style={box}>
+        {hd(T(lang, '전체 흐름 · 사이징 → 기생 → PVT → 레이아웃', 'full flow · size → parasitics → PVT → layout'), runBtn(runFlow, 'flow', T(lang, '⇉ 전체 실행', '⇉ run full flow')))}
+        {flow ? (
+          <>
+            <div className="flex flex-col gap-2">
+              {flow.stages.map((s, i) => (
+                <div key={i} className="flex items-center gap-3 rounded-lg px-3 py-2" style={{ background: 'var(--surface-2)', border: `1px solid ${s.ok ? 'color-mix(in srgb, var(--good) 40%, var(--line))' : 'color-mix(in srgb, var(--bad) 40%, var(--line))'}` }}>
+                  <span style={{ color: s.ok ? 'var(--good)' : 'var(--bad)' }}>{s.ok ? '✓' : '✗'}</span>
+                  <span className="text-sm" style={{ color: 'var(--text)' }}>{s.name}</span>
+                  <span className="mono text-[11px] ml-auto" style={lab}>{s.detail}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mono text-sm mt-3 px-3 py-2 rounded-lg inline-block" style={{ color: flow.overall ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${flow.overall ? 'var(--good)' : 'var(--warn)'} 14%, transparent)` }}>
+              {flow.overall ? T(lang, '전체 사인오프 ✓', 'SIGNED OFF ✓') : T(lang, '미완료', 'NOT CLEAN')}
+            </div>
+            {flow.layout && <div className="mt-4"><LayoutView data={flow.layout} /></div>}
+          </>
+        ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '자동 사이징 → 기생 재시뮬 → PVT 사인오프 → 레이아웃/DRC 를 한 번에 실행합니다.', 'Runs auto-size → parasitic re-sim → PVT sign-off → layout/DRC end to end.')}</p>}
       </div>
     )
   }

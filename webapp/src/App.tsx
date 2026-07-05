@@ -64,7 +64,7 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
 ]
 
 type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'layout' | 'flow'
-  | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopvt' | 'vcopushing'
+  | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopareto' | 'vcopvt' | 'vcopushing' | 'vcolayout' | 'vcoflow'
 type Domain = 'comparator' | 'vco'
 const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
   { id: 'sizing', glyph: '▦' },
@@ -85,12 +85,15 @@ const NAV_VCO: { id: Page; glyph: string }[] = [
   { id: 'vcocircuit', glyph: '⎓' },
   { id: 'vco', glyph: '∿' },
   { id: 'vcoopt', glyph: '◴' },
+  { id: 'vcopareto', glyph: '⤢' },
   { id: 'vcopvt', glyph: '◫' },
   { id: 'vcopushing', glyph: '⇅' },
+  { id: 'vcolayout', glyph: '▧' },
+  { id: 'vcoflow', glyph: '⇉' },
 ]
 const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vcocircuit' }
-const DOMAIN_OF: Record<string, Domain> = { vcocircuit: 'vco', vco: 'vco', vcoopt: 'vco', vcopvt: 'vco', vcopushing: 'vco' }
-const VCO_VIEW: Record<string, 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing'> = { vcocircuit: 'circuit', vco: 'main', vcoopt: 'opt', vcopvt: 'pvt', vcopushing: 'pushing' }
+const DOMAIN_OF: Record<string, Domain> = { vcocircuit: 'vco', vco: 'vco', vcoopt: 'vco', vcopareto: 'vco', vcopvt: 'vco', vcopushing: 'vco', vcolayout: 'vco', vcoflow: 'vco' }
+const VCO_VIEW: Record<string, 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow'> = { vcocircuit: 'circuit', vco: 'main', vcoopt: 'opt', vcopareto: 'pareto', vcopvt: 'pvt', vcopushing: 'pushing', vcolayout: 'layout', vcoflow: 'flow' }
 const domainOf = (p: Page): Domain => DOMAIN_OF[p] ?? 'comparator'
 
 interface HistoryItem {
