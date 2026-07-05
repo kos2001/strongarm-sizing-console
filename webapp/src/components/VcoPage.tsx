@@ -130,13 +130,13 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             </div>
             {pn.measured && (
               <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg" style={{ color: 'var(--si)', background: 'color-mix(in srgb, var(--si) 12%, transparent)' }}>
-                {T(lang, 'SPICE trnoise 실측 교차검증', 'SPICE trnoise cross-check')}: L(1MHz) {pn.measured.L_1mhz_dbc} dBc/Hz · {T(lang, '지터', 'jitter')} {pn.measured.period_jitter_fs} fs · {pn.measured.cycles} {T(lang, '사이클', 'cycles')} · {T(lang, '해석값과', 'vs analytic')} {Math.abs(pn.L_1mhz_dbc - pn.measured.L_1mhz_dbc).toFixed(1)} dB
+                {T(lang, 'SPICE trnoise 실측 교차검증', 'SPICE trnoise cross-check')}: L(1MHz) {pn.measured.L_1mhz_dbc} dBc/Hz · {T(lang, '지터', 'jitter')} {pn.measured.period_jitter_fs}±{pn.measured.jitter_spread_fs} fs ({pn.measured.n_seeds} {T(lang, '시드', 'seeds')}) · {T(lang, '해석 1/f² 영역과', 'vs analytic 1/f²')} {Math.abs(pn.L_1mhz_dbc - pn.measured.L_1mhz_dbc).toFixed(1)} dB
               </div>
             )}
             <p className="mono text-[11px] mt-3 leading-relaxed" style={lab}>
               {T(lang,
-                '열잡음 1차 추정: 각 전이가 sqrt(kT·C)/I 만큼 흔들리고, 주기당 2N 전이가 누적 → L(Δf)=10·log(f₀³·σ_T²/Δf²). −20dB/decade(1/f²) 영역. PSS/pnoise 사인오프가 아닌 1차 모델이며 전력·f₀·N 의존성을 정확히 따릅니다.',
-                'First-order thermal estimate: each transition jitters by sqrt(kT·C)/I, 2N per period accumulate → L(Δf)=10·log(f₀³·σ_T²/Δf²) — the −20dB/dec (1/f²) region. Not a PSS/pnoise sign-off, but tracks the right power / f₀ / N dependence.')}
+                '열잡음: 각 전이가 sqrt(kT·C)/I 만큼 흔들리고 주기당 2N 전이가 누적 → L(Δf)=10·log(f₀³·σ_T²/Δf²), −20dB/dec(1/f²). 근접 오프셋의 −30dB/dec(1/f³)는 가정된 플리커 코너(위 값)로 더한 것. — 실선=해석, 점선=SPICE trnoise 실측(다중 시드 평균, 열잡음 1/f² 영역만). 1차 모델이며 PSS/pnoise 사인오프는 아닙니다.',
+                'Thermal: each transition jitters by sqrt(kT·C)/I, 2N per period accumulate → L(Δf)=10·log(f₀³·σ_T²/Δf²), −20 dB/dec (1/f²). The −30 dB/dec (1/f³) close-in is added from an assumed flicker corner (shown above). Solid = analytic, dashed = SPICE trnoise measured (multi-seed avg, thermal 1/f² region only). First-order model, not a PSS/pnoise sign-off.')}
             </p>
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '측정된 전력·주파수·단수로부터 열잡음 기반 위상잡음 L(Δf)·지터·FoM을 추정합니다 — VCO의 핵심 스펙.', 'Estimates thermal phase noise L(Δf), jitter, and FoM from the measured power, frequency, and stage count — the key VCO spec.')}</p>}

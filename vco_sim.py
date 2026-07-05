@@ -231,7 +231,7 @@ def vco_pushing(params, points=7, span=0.15):
             "pushing_ghz_per_v": round(push, 3) if push is not None else None}
 
 
-def phase_noise(params, offsets_hz=None, measured=True):
+def phase_noise(params, offsets_hz=None, measured=True, flicker_corner_hz=1e5):
     """First-order thermal phase-noise / jitter estimate for the ring VCO.
 
     Each stage transition crosses threshold with timing uncertainty
@@ -259,14 +259,16 @@ def phase_noise(params, offsets_hz=None, measured=True):
     sigma_T = math.sqrt(2 * N) * sigma_t          # per-period jitter (s)
     if offsets_hz is None:
         offsets_hz = [1e4 * (10 ** (i / 2.0)) for i in range(0, 9)]   # 10 kHz .. 100 MHz
+    fc = float(flicker_corner_hz or 0.0)   # 1/f^3 corner (assumed): flicker adds (1 + fc/Δf)
     def _L(fo):
-        return 10.0 * math.log10(f0 ** 3 * sigma_T ** 2 / fo ** 2)
+        return 10.0 * math.log10(f0 ** 3 * sigma_T ** 2 / fo ** 2 * (1.0 + fc / fo))
     pts = [{"offset_hz": round(fo), "L_dbc": round(_L(fo), 1)} for fo in offsets_hz]
     L_1m = _L(1e6)
     fom = L_1m - 20 * math.log10(f0 / 1e6) + 10 * math.log10(P * 1e3)   # P in mW
     out = {"f0_ghz": round(f0 / 1e9, 4), "power_uw": round(pw, 2), "n_stages": N,
            "period_jitter_fs": round(sigma_T * 1e15, 2), "c_eff_ff": round(c_eff * 1e15, 3),
-           "points": pts, "L_1mhz_dbc": round(L_1m, 1), "fom_db": round(fom, 1)}
+           "points": pts, "L_1mhz_dbc": round(L_1m, 1), "fom_db": round(fom, 1),
+           "flicker_corner_hz": round(fc)}
     # SPICE-measured cross-check (trnoise jitter); best-effort
     if measured:
         try:
@@ -319,19 +321,9 @@ def _gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wavefile):
     return "\n".join(lines) + "\n"
 
 
-def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seed=1):
-    """SPICE-measured phase noise: inject the physical per-stage input-referred
-    device noise (S_v = 4kTγ/gm, γ=2/3, via ngspice trnoise), run a long noisy
-    transient, and measure the period jitter directly from the oscillation. A
-    real cross-check of the analytic estimate — the circuit itself converts the
-    injected noise through its actual switching."""
-    p = _full(params)
-    vdd, N = p["vdd"], int(p["n_stages"])
-    gm = _ring_gm(p)
-    if not gm:
-        return {"error": "gm extraction failed"}
-    kT = 1.380649e-23 * (p.get("temp", 27) + 273.15)
-    na = math.sqrt(4 * kT * (2.0 / 3.0) / gm / (ntstep_ps * 1e-12))   # trnoise amplitude for S_v
+def _measure_jitter_once(p, na, tstop_ns, ntstep_ps, seed):
+    """One noisy transient → (f0, period-jitter σ_T) or None."""
+    vdd = p["vdd"]
     fd, wf = tempfile.mkstemp(suffix=".txt")
     os.close(fd)
     try:
@@ -356,15 +348,38 @@ def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seed=1):
     cross = [c for c in cross if c > 0.15 * tstop_ns * 1e-9]   # drop startup
     periods = [cross[i + 1] - cross[i] for i in range(len(cross) - 1)]
     if len(periods) < 10:
+        return None
+    return 1.0 / (sum(periods) / len(periods)), statistics.pstdev(periods), len(periods)
+
+
+def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seeds=(1, 2, 3, 4)):
+    """SPICE-measured phase noise (thermal / 1-f^2 region): inject the physical
+    per-stage input-referred device noise (S_v = 4kTγ/gm, γ=2/3, via ngspice
+    trnoise) and measure the period jitter directly. Averaged over several noise
+    seeds (run in parallel) to tame the stochastic spread. A real cross-check of
+    the analytic estimate — the circuit converts the injected noise through its
+    actual switching."""
+    p = _full(params)
+    gm = _ring_gm(p)
+    if not gm:
+        return {"error": "gm extraction failed"}
+    kT = 1.380649e-23 * (p.get("temp", 27) + 273.15)
+    na = math.sqrt(4 * kT * (2.0 / 3.0) / gm / (ntstep_ps * 1e-12))   # trnoise amplitude for S_v
+    runs = _pmap(lambda s: _measure_jitter_once(p, na, tstop_ns, ntstep_ps, s), list(seeds))
+    runs = [r for r in runs if r]
+    if not runs:
         return {"error": "too few cycles measured"}
-    f0 = 1.0 / (sum(periods) / len(periods))
-    sigma_T = statistics.pstdev(periods)
+    f0 = sum(r[0] for r in runs) / len(runs)
+    sig = [r[1] for r in runs]
+    sigma_T = sum(sig) / len(sig)                       # mean period jitter over seeds
+    spread = statistics.pstdev(sig) if len(sig) > 1 else 0.0
+    cycles = sum(r[2] for r in runs)
     offs = [1e4 * (10 ** (i / 2.0)) for i in range(0, 9)]
     pts = [{"offset_hz": round(fo), "L_dbc": round(10 * math.log10(f0 ** 3 * sigma_T ** 2 / fo ** 2), 1)} for fo in offs]
     return {"f0_ghz": round(f0 / 1e9, 4), "period_jitter_fs": round(sigma_T * 1e15, 2),
-            "cycles": len(periods), "points": pts,
+            "jitter_spread_fs": round(spread * 1e15, 2), "n_seeds": len(runs), "cycles": cycles, "points": pts,
             "L_1mhz_dbc": round(10 * math.log10(f0 ** 3 * sigma_T ** 2 / 1e12), 1),
-            "method": "SPICE transient-noise (trnoise) measured jitter"}
+            "method": f"SPICE trnoise measured jitter, avg of {len(runs)} seeds"}
 
 
 def run_vco(params, do_tuning=False):

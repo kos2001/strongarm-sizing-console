@@ -82,21 +82,31 @@ def test_vco_phase_noise():
     assert "error" not in r
     assert r["period_jitter_fs"] > 0 and r["c_eff_ff"] > 0
     assert -130 < r["L_1mhz_dbc"] < -70          # plausible ring-VCO range @1MHz
-    # 1/f^2 region: ~ -20 dB per decade of offset
-    pts = sorted(r["points"], key=lambda p: p["offset_hz"])
-    lo, hi = pts[0], pts[-1]
+    # 1/f^2 region (above the flicker corner): ~ -20 dB per decade
+    p = {pt["offset_hz"]: pt["L_dbc"] for pt in r["points"]}
     import math as _m
-    decades = _m.log10(hi["offset_hz"] / lo["offset_hz"])
-    slope = (hi["L_dbc"] - lo["L_dbc"]) / decades
+    slope = (p[10000000] - p[1000000]) / _m.log10(10)
     assert -22 < slope < -18
 
 
+def test_vco_phase_noise_flicker_region():
+    """With a flicker corner the analytic curve steepens toward −30 dB/dec (1/f^3)
+    below the corner, vs −20 dB/dec (1/f^2) above it."""
+    r = vco_sim.phase_noise({}, measured=False, flicker_corner_hz=1e5)
+    p = {pt["offset_hz"]: pt["L_dbc"] for pt in r["points"]}
+    import math as _m
+    near = (p[100000] - p[10000]) / _m.log10(100000 / 10000)     # below corner → ~ -30
+    far = (p[10000000] - p[1000000]) / _m.log10(10000000 / 1000000)  # above → ~ -20
+    assert near < -25 and -22 < far < -18
+
+
 def test_vco_phase_noise_measured_agrees():
-    """The SPICE trnoise-measured jitter should corroborate the analytic estimate."""
+    """The multi-seed SPICE trnoise jitter should corroborate the analytic 1/f^2."""
     r = vco_sim.phase_noise({})
     m = r.get("measured")
-    assert m is not None and m["cycles"] >= 30
-    # two independent methods within a few dB at 1 MHz
+    assert m is not None and m["n_seeds"] >= 2 and m["cycles"] >= 60
+    assert "jitter_spread_fs" in m
+    # two independent methods within a few dB at 1 MHz (thermal region)
     assert abs(r["L_1mhz_dbc"] - m["L_1mhz_dbc"]) < 6.0
 
 
