@@ -228,10 +228,79 @@ python3 vco_sim.py --tune     # V_ctrl tuning sweep -> range, Kvco
 > *oscillates forever*. (LC-VCO's cross-coupled −gm core is literally the
 > StrongARM latch structure.)
 
+## WiCkeD-inspired robustness flow
+
+`wicked.py` applies the public WiCkeD methodology ideas to this open ngspice
+backend. It is not Cadence/MunEDA WiCkeD, but it implements the same class of
+workflow primitives in an inspectable way:
+
+- **FEO** feasibility check: run nominal SPICE and report functional/spec margins.
+- **DNO-like refinement**: sensitivity-guided nominal sizing moves for offset,
+  decision-time, and power.
+- **WCO** worst-case operation: enumerated process × temperature × VDD corners.
+- **WCD/high-sigma proxy**: nearest-failure sigma estimate combining analytic
+  Pelgrom mismatch distance with ngspice-backed PVT boundary sampling.
+- **Full-device mismatch budget**: input-pair plus weighted latch/tail/precharge
+  Vth contributors so second-order offset risk is visible.
+- **Importance-sampled yield proxy**: shifted high-sigma sampling around the WCD
+  limiting region with Gaussian likelihood reweighting.
+- **Yield-aware robust optimizer**: compact coordinate search using WCO/WCD
+  feedback for design centering.
+- **Yield-aware report**: estimated yield %, limiting mechanism, samples, and
+  per-stage pass/fail verdicts.
+
+CLI smoke run:
+
+```bash
+python3 - <<'PY'
+import json, wicked
+r = wicked.wicked_flow(
+    {},
+    {"decision_time_ps": 400, "power_uw": 400, "offset_sigma_mv": 20, "yield_pct": 90},
+    dno_iterations=1,
+    wcd_samples=4,
+)
+print(json.dumps({"overall": r["overall"], "stages": r["stages"]}, indent=2))
+PY
+```
+
+HTTP endpoints exposed by `webapp/server.py`:
+
+- `POST /api/wicked/dno` — DNO-like nominal refinement
+- `POST /api/wicked/wcd` — WCD/high-sigma proxy
+- `POST /api/wicked/mismatch` — full-device mismatch budget
+- `POST /api/wicked/importance` — importance-sampled high-sigma yield proxy
+- `POST /api/wicked/optimize` — yield-aware robust design-centering search
+- `POST /api/wicked/screening` — parameter sensitivity ranking
+- `POST /api/wicked/yieldsweep` — yield vs global process variation (yield-plot)
+- `POST /api/wicked/yop` — YOP-like yield optimization (maximize WCD beta)
+- `POST /api/wicked/postlayout` — post-layout WCD re-evaluation
+- `POST /api/wicked/corners` — worst-case corner extraction and ranking
+- `POST /api/wicked/fullflow` — FEO → DNO → WCO-in-loop → full WCO → WCD → mismatch → importance → screening → corners → post-layout WCD
+
+MCP tools exposed by `mcp_server.py`:
+
+- `strongarm_wicked`
+- `strongarm_wicked_importance`
+- `strongarm_wicked_optimize`
+- `strongarm_wicked_screening`
+- `strongarm_wicked_yieldsweep`
+- `strongarm_wicked_yop`
+- `strongarm_wicked_postlayout`
+- `strongarm_wicked_corners`
+
+Current limitations: WCD is a practical proxy, not a commercial high-sigma
+implementation; only input-pair mismatch is directly injected into SPICE while
+latch/tail/precharge are weighted analytic contributors; full Virtuoso/OA schematic
+migration and sign-off DRC/LVS/PEX are outside this repo.
+
 ## Extension points (documented, not stubbed)
 
 - **Transient noise** → add ngspice `.noise`/transient-noise and report
   input-referred µVrms.
 - **Full-device mismatch offset** → inject Vth mismatch into latch/tail devices
   (per-instance model cards) so second-order offset contributions are captured.
-- **PVT corners** → loop the `.lib` corner and temperature; report worst case.
+- **PDK migration mapping** → add device/CDF/pin mapping files for Virtuoso-style
+  source-PDK to target-PDK migration before re-sizing.
+- **Sign-off extraction** → replace layout capacitance proxy with Magic/KLayout +
+  LVS/PEX and feed extracted netlists back into the same WCO/WCD flow.

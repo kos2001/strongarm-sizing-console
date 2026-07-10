@@ -75,12 +75,70 @@ TOOLS = [
                        "re-sim → PVT sign-off, with a per-stage verdict and overall SIGNED-OFF/NOT-CLEAN.",
         "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
     },
+    {
+        "name": "strongarm_wicked",
+        "description": "WiCkeD-inspired open flow: FEO/DNO feasibility and sensitivity-guided sizing, "
+                       "WCO PVT worst-case operation, and WCD high-sigma/yield proxy.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+            "dno_iterations": {"type": "integer"}, "wcd_samples": {"type": "integer"}}},
+    },
+    {
+        "name": "strongarm_wicked_importance",
+        "description": "High-sigma importance-sampling proxy around the WCD-limiting region, with "
+                       "Gaussian likelihood reweighting and full-device mismatch budget.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+            "n": {"type": "integer"}, "shift_beta": {"type": "number"}}},
+    },
+    {
+        "name": "strongarm_wicked_optimize",
+        "description": "Yield-aware WiCkeD-style design-centering coordinate search using WCO/WCD feedback.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+            "rounds": {"type": "integer"}}},
+    },
+    {
+        "name": "strongarm_wicked_screening",
+        "description": "Parameter screening: rank design variables by normalized sensitivity "
+                       "to decision-time, power, and offset.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+            "delta": {"type": "number"}}},
+    },
+    {
+        "name": "strongarm_wicked_yieldsweep",
+        "description": "Yield vs global process variation sweep (WiCkeD yield-plot style).",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+            "n_points": {"type": "integer"}}},
+    },
+    {
+        "name": "strongarm_wicked_yop",
+        "description": "YOP-like yield optimization: maximize WCD beta sigma via coordinate search.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+            "iterations": {"type": "integer"}}},
+    },
+    {
+        "name": "strongarm_wicked_postlayout",
+        "description": "Post-layout WCD re-evaluation with layout-extracted parasitics.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+            "n_samples": {"type": "integer"}}},
+    },
+    {
+        "name": "strongarm_wicked_corners",
+        "description": "Worst-case corner extraction: rank the full 27-corner PVT grid by decision margin.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
+    },
 ]
 _TOOL_ENDPOINT = {
     "strongarm_optimize": "/api/optimize",
     "strongarm_pareto": "/api/pareto",
     "strongarm_pvt": "/api/pvt",
     "strongarm_fullflow": "/api/fullflow",
+    "strongarm_wicked": "/api/wicked/fullflow",
+    "strongarm_wicked_importance": "/api/wicked/importance",
+    "strongarm_wicked_optimize": "/api/wicked/optimize",
+    "strongarm_wicked_screening": "/api/wicked/screening",
+    "strongarm_wicked_yieldsweep": "/api/wicked/yieldsweep",
+    "strongarm_wicked_yop": "/api/wicked/yop",
+    "strongarm_wicked_postlayout": "/api/wicked/postlayout",
+    "strongarm_wicked_corners": "/api/wicked/corners",
 }
 
 
