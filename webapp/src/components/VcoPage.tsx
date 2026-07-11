@@ -13,7 +13,7 @@ import LayoutView from './LayoutView'
 import type { Lang } from '../i18n'
 
 const VCO_DEFAULTS: VcoParams = {
-  vdd: 1.0, vctrl: 0.6, n_stages: 5, cload_ff: 3.0, topology: 'starved',
+  vdd: 1.0, vctrl: 0.6, n_stages: 3, cload_ff: 3.0, topology: 'xcpl',
   devices: {
     invp: { w_um: 2.0, l_nm: 45, m: 2 }, invn: { w_um: 1.0, l_nm: 45, m: 2 },
     starvep: { w_um: 2.0, l_nm: 45, m: 2 }, starven: { w_um: 1.0, l_nm: 45, m: 1 },
@@ -43,19 +43,17 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   const setDev = (k: VcoDeviceKey, f: 'w_um' | 'l_nm' | 'm', v: number) =>
     setParams((p) => ({ ...p, devices: { ...p.devices, [k]: { ...p.devices[k], [f]: v } } }))
-  const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff', v: number) => setParams((p) => ({ ...p, [f]: v }))
-  const topo = params.topology ?? 'starved'
-  const dkeys = topo === 'xcpl' ? XKEYS : DKEYS
-  const topoToggle = (
-    <div className="flex gap-1">
-      {(['starved', 'xcpl'] as const).map((t) => (
-        <button key={t} onClick={() => setParams((p) => ({ ...p, topology: t }))} disabled={busy}
-          className="mono text-[10px] px-2 py-0.5 rounded-full disabled:opacity-50"
-          style={topo === t ? { background: 'var(--ag)', color: 'var(--bg)' } : { color: 'var(--muted)', border: '1px solid var(--line)' }}>
-          {t === 'starved' ? T(lang, '전류제한', 'starved') : T(lang, '교차결합+리셋', 'x-coupled+rst')}
-        </button>
-      ))}
-    </div>
+  const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff', v: number) => {
+    // 링 단수 N 은 발진 조건상 홀수만 허용(짝수 입력은 위로 올림), 최소 3
+    if (f === 'n_stages') v = Math.max(3, v % 2 === 0 ? v + 1 : v)
+    setParams((p) => ({ ...p, [f]: v }))
+  }
+  // 토폴로지는 교차결합+리셋(xcpl) 단일 — 전류제한(starved) 회로는 제거됨
+  const dkeys = XKEYS
+  const topoBadge = (
+    <span className="mono text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'var(--ag)', color: 'var(--bg)' }}>
+      {T(lang, '교차결합+리셋', 'x-coupled+rst')}
+    </span>
   )
 
   const guard = async (tag: string, fn: () => Promise<void>) => { setLoad(tag); try { await fn() } catch { /* ignore */ } finally { setLoad('') } }
@@ -88,15 +86,13 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     return (
       <div className="flex flex-col gap-4">
         <div className="p-5" style={box}>
-          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), <div className="flex items-center gap-2">{topoToggle}{runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform'))}</div>)}
-          <VcoSchematic devices={params.devices} nStages={params.n_stages} topology={topo} />
+          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), <div className="flex items-center gap-2">{topoBadge}{runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform'))}</div>)}
+          <div className="overflow-x-auto"><VcoSchematic devices={params.devices} nStages={params.n_stages} /></div>
           {wf ? (
             <div className="mt-4">
-              <VcoWaveformChart wf={wf} theme={theme} labels={topo === 'xcpl' ? ['o1', 'ob1'] : ['o1', 'o2']} />
+              <VcoWaveformChart wf={wf} theme={theme} labels={['o1', 'ob1']} />
               <p className="mono text-[11px] mt-2" style={lab}>
-                {topo === 'xcpl'
-                  ? T(lang, '상보 링 노드(o1·ob1)의 실제 발진 — 리셋 해제 후 시작 — 주기', 'real oscillation of the complementary nodes (o1·ob1), starting on reset release — period')
-                  : T(lang, '두 링 노드(o1·o2)의 실제 발진 — 주기', 'real oscillation of two ring nodes (o1·o2) — period')} {wf.period_ns} ns → {wf.f_osc_ghz} GHz</p>
+                {T(lang, '상보 링 노드(o1·ob1)의 실제 발진 — 리셋 해제 후 시작 — 주기', 'real oscillation of the complementary nodes (o1·ob1), starting on reset release — period')} {wf.period_ns} ns → {wf.f_osc_ghz} GHz</p>
             </div>
           ) : <p className="text-sm mt-3" style={{ color: 'var(--muted)' }}>{T(lang, '↻ 파형을 눌러 실제 발진 트랜지언트를 캡처하세요.', 'Press ↻ waveform to capture the real oscillation transient.')}</p>}
         </div>
@@ -244,7 +240,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
         <div className="p-4" style={box}>
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '링 VCO · 소자 크기', 'ring VCO · sizing')}</div>
-            {topoToggle}
+            {topoBadge}
           </div>
           <div className="grid gap-2 mono text-[11px] uppercase tracking-wider px-1 mb-1" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', color: 'var(--faint)' }}>
             <span>{T(lang, '소자', 'Device')}</span><span>W (µm)</span><span>L (nm)</span><span>M</span>
