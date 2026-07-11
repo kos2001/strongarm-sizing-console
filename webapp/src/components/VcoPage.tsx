@@ -35,6 +35,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const [pvt, setPvt] = useState<VcoPvtResult | null>(null)
   const [push, setPush] = useState<VcoPushing | null>(null)
   const [pareto, setPareto] = useState<VcoParetoResult | null>(null)
+  const [paretoSel, setParetoSel] = useState<number | null>(null) // 파레토 front 선택점(상세 패널)
   const [lay, setLay] = useState<LayoutResult | null>(null)
   const [flow, setFlow] = useState<VcoFullflow | null>(null)
   const [pn, setPn] = useState<VcoPhaseNoise | null>(null)
@@ -175,14 +176,41 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
         {hd(T(lang, 'Pareto · 전력 ↔ 주파수 (NSGA-II)', 'Pareto · power ↔ frequency (NSGA-II)'), runBtn(runPareto, 'pareto', T(lang, '⤢ 프론트 탐색', '⤢ run NSGA-II')))}
         {pareto ? (
           <>
-            <VcoParetoChart res={pareto} theme={theme} />
+            <VcoParetoChart res={pareto} theme={theme} selected={paretoSel} onSelect={setParetoSel} />
             <p className="mono text-[11px] mt-2 leading-relaxed" style={lab}>
-              <span style={{ color: A }}>— 프론트</span> = {pareto.front.length} {T(lang, '개 비지배 설계 (주파수별 최소 전력). 왼쪽-위가 우수(고주파·저전력).', 'non-dominated designs (min power per frequency). Upper-left is better.')}
+              <span style={{ color: A }}>— 프론트</span> = {pareto.front.length} {T(lang, '개 비지배 설계 (주파수별 최소 전력). 왼쪽-위가 우수(고주파·저전력) — 점을 클릭하면 상세.', 'non-dominated designs (min power per frequency). Upper-left is better — click a point for details.')}
             </p>
+            {/* 선택점 상세: 측정값 + 소자 크기 + 적용/넷리스트 */}
+            {paretoSel != null && pareto.front[paretoSel] && (() => {
+              const pt = pareto.front[paretoSel]
+              const merged = { ...params, devices: { ...params.devices, ...pt.devices } }
+              return (
+                <div className="rounded-xl p-3 mt-3" style={{ background: 'color-mix(in srgb, var(--warn) 7%, var(--surface-2))', border: '1px solid color-mix(in srgb, var(--warn) 35%, var(--line))' }}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="mono text-[11px] tnum" style={{ color: 'var(--text)' }}>
+                      ◎ front #{paretoSel + 1} — <span style={{ color: A }}>{pt.f_osc_ghz} GHz</span> · {pt.power_uw} µW · N={params.n_stages}
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setParams(merged)} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: A, border: `1px solid color-mix(in srgb, ${A} 40%, var(--line))` }} title={T(lang, '이 크기를 편집기에 로드', 'load into editor')}>↧ {T(lang, '적용', 'apply')}</button>
+                      <button onClick={() => downloadNetlist('/api/vco/netlist', merged, `vco_front${paretoSel + 1}.sp`).catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }} title={T(lang, '이 크기의 SPICE 덱 다운로드', 'download SPICE deck')}>⤓ {T(lang, '넷리스트', 'netlist')}</button>
+                    </div>
+                  </div>
+                  <div className="grid gap-1.5 mt-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+                    {(Object.keys(pt.devices) as VcoDeviceKey[]).map((k) => (
+                      <div key={k} className="mono text-[10.5px] tnum rounded-lg px-2 py-1.5" style={{ background: 'var(--surface)', border: '1px solid var(--line-soft)' }}>
+                        <span style={{ color: 'var(--si)' }}>{VCO_DEVICE_META[k]?.name ?? k}</span>
+                        <span style={{ color: 'var(--muted)' }}> {pt.devices[k]!.w_um}µ × {pt.devices[k]!.m}</span>
+                        <div style={{ color: 'var(--faint)' }}>{VCO_DEVICE_META[k]?.role[lang]}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
             <div className="flex flex-col gap-1.5 mt-3">
               {pareto.front.slice(0, 8).map((pt, i) => (
-                <button key={i} onClick={() => setParams((p) => ({ ...p, devices: { ...p.devices, ...pt.devices } }))} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5"
-                  style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)', color: 'var(--muted)' }} title={T(lang, '이 설계를 편집기에 로드', 'load this sizing')}>
+                <button key={i} onClick={() => setParetoSel(i)} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5"
+                  style={{ background: paretoSel === i ? 'color-mix(in srgb, var(--warn) 10%, var(--surface-2))' : 'var(--surface-2)', border: `1px solid ${paretoSel === i ? 'color-mix(in srgb, var(--warn) 40%, var(--line))' : 'var(--line-soft)'}`, color: 'var(--muted)' }} title={T(lang, '이 점의 상세 보기', 'show details')}>
                   {pt.f_osc_ghz} GHz · {pt.power_uw} µW
                 </button>
               ))}
