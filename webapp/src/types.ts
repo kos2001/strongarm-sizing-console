@@ -159,6 +159,67 @@ export interface YieldResult {
   error?: string
 }
 
+// --- WiCkeD robustness bridge (wicked.py) ---
+export interface WcdCandidate { metric: string; beta: number | null; detail?: string }
+export interface WcdResult {
+  beta_sigma: number
+  estimated_yield_pct: number
+  limiting_mechanism: WcdCandidate
+  candidates: WcdCandidate[]
+  predicted_offset_sigma_mv: number
+  nominal: Nominal
+  note: string
+  error?: string
+}
+
+export interface MismatchContributor { device: string; area_um2: number; sigma_vth_mv: number; input_referred_sigma_mv: number; weight: number }
+export interface MismatchBudget {
+  total_sigma_mv: number
+  dominant: MismatchContributor
+  contributors: MismatchContributor[]
+  note: string
+}
+
+export interface WickedImportanceResult {
+  n: number
+  shift_beta: number
+  weighted_failure_prob: number
+  estimated_yield_pct: number
+  raw_failures: number
+  mismatch_budget: MismatchBudget
+  note: string
+  error?: string
+}
+
+export interface WickedCorner {
+  process: string
+  temp: number
+  v_frac: number
+  vdd: number
+  decision_time_ps: number | null
+  power_uw: number | null
+  functional: boolean
+  decision_margin: number | null
+}
+export interface WickedCornersResult {
+  worst_5: WickedCorner[]
+  failing_corners: WickedCorner[]
+  near_margin_corners: WickedCorner[]
+  total_corners: number
+  n_failing: number
+  worst: { decision_time_ps: number | null; power_uw: number | null; any_nonfunctional: boolean; min_decision_margin: number | null }
+  note: string
+  error?: string
+}
+
+export interface WickedStage { name: string; ok: boolean; detail: unknown }
+export interface WickedFlowResult {
+  stages: WickedStage[]
+  overall: boolean
+  final_params: Params
+  error?: string
+}
+
 export interface SensMetrics { decision_time_ps: number | null; power_uw: number | null; offset_sigma_mv: number | null }
 export interface SensDevice { key: DeviceKey; base_w_um: number; low: SensMetrics; high: SensMetrics }
 export interface SensitivityResult {

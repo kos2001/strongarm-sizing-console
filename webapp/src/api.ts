@@ -1,4 +1,4 @@
-import type { BerResult, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, YieldResult } from './types'
+import type { BerResult, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, WcdResult, WickedCornersResult, WickedFlowResult, WickedImportanceResult, YieldResult } from './types'
 
 async function post<T>(path: string, params: Params): Promise<T> {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
@@ -31,6 +31,18 @@ export const vcoLayout = (p: VcoParams) => vpost<LayoutResult>('/api/vco/layout'
 export const vcoPostlayout = (p: VcoParams) => vpost<VcoPostLayout>('/api/vco/postlayout', p)
 export const vcoPareto = (p: VcoParams) => vpost<VcoParetoResult>('/api/vco/pareto', p)
 export const vcoFullflow = (p: VcoParams) => vpost<VcoFullflow>('/api/vco/fullflow', p)
+// WiCkeD robustness bridge — body carries params + spec targets (+ knobs)
+const wpost = <T,>(path: string, body: Record<string, unknown>): Promise<T> =>
+  fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json())
+export const wickedWcd = (params: Params, targets: Record<string, number>, nSamples = 24) =>
+  wpost<WcdResult>('/api/wicked/wcd', { params, targets, n_samples: nSamples })
+export const wickedImportance = (params: Params, targets: Record<string, number>, n = 24) =>
+  wpost<WickedImportanceResult>('/api/wicked/importance', { params, targets, n })
+export const wickedCorners = (params: Params, targets: Record<string, number>) =>
+  wpost<WickedCornersResult>('/api/wicked/corners', { params, targets })
+export const wickedFullflow = (params: Params, targets: Record<string, number>) =>
+  wpost<WickedFlowResult>('/api/wicked/fullflow', { params, targets, importance_samples: 8 })
+
 export async function yieldRun(params: Params, targets: Record<string, number>, n = 48): Promise<YieldResult> {
   const r = await fetch('/api/yield', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, targets, n }) })
   return r.json()
