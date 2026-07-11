@@ -13,13 +13,15 @@ import LayoutView from './LayoutView'
 import type { Lang } from '../i18n'
 
 const VCO_DEFAULTS: VcoParams = {
-  vdd: 1.0, vctrl: 0.6, n_stages: 5, cload_ff: 3.0,
+  vdd: 1.0, vctrl: 0.6, n_stages: 5, cload_ff: 3.0, topology: 'starved',
   devices: {
     invp: { w_um: 2.0, l_nm: 45, m: 2 }, invn: { w_um: 1.0, l_nm: 45, m: 2 },
     starvep: { w_um: 2.0, l_nm: 45, m: 2 }, starven: { w_um: 1.0, l_nm: 45, m: 1 },
+    xcplp: { w_um: 0.4, l_nm: 45, m: 1 }, rstp: { w_um: 2.0, l_nm: 45, m: 2 },
   },
 }
 const DKEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven']
+const XKEYS: VcoDeviceKey[] = [...DKEYS, 'xcplp', 'rstp']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
 type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn'
 
@@ -42,16 +44,29 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const setDev = (k: VcoDeviceKey, f: 'w_um' | 'l_nm' | 'm', v: number) =>
     setParams((p) => ({ ...p, devices: { ...p.devices, [k]: { ...p.devices[k], [f]: v } } }))
   const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff', v: number) => setParams((p) => ({ ...p, [f]: v }))
+  const topo = params.topology ?? 'starved'
+  const dkeys = topo === 'xcpl' ? XKEYS : DKEYS
+  const topoToggle = (
+    <div className="flex gap-1">
+      {(['starved', 'xcpl'] as const).map((t) => (
+        <button key={t} onClick={() => setParams((p) => ({ ...p, topology: t }))} disabled={busy}
+          className="mono text-[10px] px-2 py-0.5 rounded-full disabled:opacity-50"
+          style={topo === t ? { background: 'var(--ag)', color: 'var(--bg)' } : { color: 'var(--muted)', border: '1px solid var(--line)' }}>
+          {t === 'starved' ? T(lang, '전류제한', 'starved') : T(lang, '교차결합+리셋', 'x-coupled+rst')}
+        </button>
+      ))}
+    </div>
+  )
 
   const guard = async (tag: string, fn: () => Promise<void>) => { setLoad(tag); try { await fn() } catch { /* ignore */ } finally { setLoad('') } }
   const run = () => guard('run', async () => { const r = await vcoSimulate(params, true); setRes(r); setTuning(r.tuning ?? null) })
-  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, devices: r.final_params.devices })); setRes({ nominal: r.nominal }); setTuning(r.tuning) } })
+  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning) } })
   const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
   const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
   const runPush = () => guard('push', async () => { const r = await vcoPushing(params); if (!r.error) setPush(r) })
   const runPareto = () => guard('pareto', async () => { const r = await vcoPareto(params); if (!r.error) setPareto(r) })
   const runLayout = () => guard('layout', async () => { const r = await vcoLayout(params); if (!r.error) setLay(r) })
-  const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, devices: r.final_params.devices })) } })
+  const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, devices: { ...p.devices, ...r.final_params.devices } })) } })
   const runPn = () => guard('pn', async () => { const r = await vcoPhaseNoise(params); if (!r.error) setPn(r) })
 
   const nom = res?.nominal
@@ -73,12 +88,15 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     return (
       <div className="flex flex-col gap-4">
         <div className="p-5" style={box}>
-          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform')))}
-          <VcoSchematic devices={params.devices} nStages={params.n_stages} />
+          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), <div className="flex items-center gap-2">{topoToggle}{runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform'))}</div>)}
+          <VcoSchematic devices={params.devices} nStages={params.n_stages} topology={topo} />
           {wf ? (
             <div className="mt-4">
-              <VcoWaveformChart wf={wf} theme={theme} />
-              <p className="mono text-[11px] mt-2" style={lab}>{T(lang, '두 링 노드(o1·o2)의 실제 발진 — 주기', 'real oscillation of two ring nodes (o1·o2) — period')} {wf.period_ns} ns → {wf.f_osc_ghz} GHz</p>
+              <VcoWaveformChart wf={wf} theme={theme} labels={topo === 'xcpl' ? ['o1', 'ob1'] : ['o1', 'o2']} />
+              <p className="mono text-[11px] mt-2" style={lab}>
+                {topo === 'xcpl'
+                  ? T(lang, '상보 링 노드(o1·ob1)의 실제 발진 — 리셋 해제 후 시작 — 주기', 'real oscillation of the complementary nodes (o1·ob1), starting on reset release — period')
+                  : T(lang, '두 링 노드(o1·o2)의 실제 발진 — 주기', 'real oscillation of two ring nodes (o1·o2) — period')} {wf.period_ns} ns → {wf.f_osc_ghz} GHz</p>
             </div>
           ) : <p className="text-sm mt-3" style={{ color: 'var(--muted)' }}>{T(lang, '↻ 파형을 눌러 실제 발진 트랜지언트를 캡처하세요.', 'Press ↻ waveform to capture the real oscillation transient.')}</p>}
         </div>
@@ -160,7 +178,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             </p>
             <div className="flex flex-col gap-1.5 mt-3">
               {pareto.front.slice(0, 8).map((pt, i) => (
-                <button key={i} onClick={() => setParams((p) => ({ ...p, devices: pt.devices }))} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5"
+                <button key={i} onClick={() => setParams((p) => ({ ...p, devices: { ...p.devices, ...pt.devices } }))} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5"
                   style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)', color: 'var(--muted)' }} title={T(lang, '이 설계를 편집기에 로드', 'load this sizing')}>
                   {pt.f_osc_ghz} GHz · {pt.power_uw} µW
                 </button>
@@ -224,11 +242,14 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0,400px) 1fr' }}>
       <section className="flex flex-col gap-4">
         <div className="p-4" style={box}>
-          <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{T(lang, '링 VCO · 소자 크기', 'ring VCO · sizing')}</div>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '링 VCO · 소자 크기', 'ring VCO · sizing')}</div>
+            {topoToggle}
+          </div>
           <div className="grid gap-2 mono text-[11px] uppercase tracking-wider px-1 mb-1" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', color: 'var(--faint)' }}>
             <span>{T(lang, '소자', 'Device')}</span><span>W (µm)</span><span>L (nm)</span><span>M</span>
           </div>
-          {DKEYS.map((k) => (
+          {dkeys.map((k) => (
             <div key={k} className="grid gap-2 items-center rounded-xl p-2.5 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: `3px solid ${A}` }}>
               <div className="min-w-0">
                 <div className="mono text-sm" style={{ color: 'var(--text)' }}>{VCO_DEVICE_META[k].name}</div>

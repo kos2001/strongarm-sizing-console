@@ -125,6 +125,38 @@ TOOLS = [
         "description": "Worst-case corner extraction: rank the full 27-corner PVT grid by decision margin.",
         "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
     },
+    {
+        "name": "vco_wicked",
+        "description": "WiCkeD-inspired flow for the ring VCO (starved or xcpl topology): FEO feasibility, "
+                       "DNO frequency-centering refinement, WCO PVT worst case, WCD sigma/yield proxy, "
+                       "per-device mismatch Monte Carlo (start-up/latch-up risk), screening, corners, post-layout.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"},
+            "dno_iterations": {"type": "integer"}, "wcd_samples": {"type": "integer"}, "mc_samples": {"type": "integer"}}},
+    },
+    {
+        "name": "vco_wicked_mismatch",
+        "description": "Ring-VCO per-device Vth mismatch Monte Carlo: sigma_f/f spread and oscillation-failure "
+                       "count (xcpl cross-coupled latch-up risk under Pelgrom mismatch).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "n": {"type": "integer"}}},
+    },
+    {
+        "name": "vco_wicked_screening",
+        "description": "Ring-VCO parameter screening: rank device widths by frequency/power sensitivity, "
+                       "flagging moves that kill the oscillation.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"},
+            "delta": {"type": "number"}}},
+    },
+    {
+        "name": "vco_wicked_wcd",
+        "description": "Ring-VCO worst-case distance (sigma robustness proxy) over process skew, VDD, and temperature.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"},
+            "n_samples": {"type": "integer"}}},
+    },
+    {
+        "name": "vco_wicked_corners",
+        "description": "Ring-VCO worst-case corner extraction: rank the 27-corner PVT grid by frequency-band margin.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
 ]
 _TOOL_ENDPOINT = {
     "strongarm_optimize": "/api/optimize",
@@ -139,6 +171,11 @@ _TOOL_ENDPOINT = {
     "strongarm_wicked_yop": "/api/wicked/yop",
     "strongarm_wicked_postlayout": "/api/wicked/postlayout",
     "strongarm_wicked_corners": "/api/wicked/corners",
+    "vco_wicked": "/api/vco/wicked/fullflow",
+    "vco_wicked_mismatch": "/api/vco/wicked/mismatch",
+    "vco_wicked_screening": "/api/vco/wicked/screening",
+    "vco_wicked_wcd": "/api/vco/wicked/wcd",
+    "vco_wicked_corners": "/api/vco/wicked/corners",
 }
 
 

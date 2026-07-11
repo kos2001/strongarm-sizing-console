@@ -45,14 +45,18 @@ VCO_DEFAULTS = {
     "vctrl": 0.6,          # nominal control voltage (V)
     "n_stages": 5,         # odd number of ring stages
     "cload_ff": 3.0,       # per-stage load capacitance
+    "topology": "starved",  # "starved" | "xcpl" (cross-coupled pseudo-diff + reset)
+    "trst_ns": 2.0,        # xcpl only: reset (rstb low) release time
     "devices": {
-        "invp":    {"w_um": 2.0, "l_nm": 45, "m": 2},   # core PMOS
-        "invn":    {"w_um": 1.0, "l_nm": 45, "m": 2},   # core NMOS
+        "invp":    {"w_um": 2.0, "l_nm": 45, "m": 2},   # core PMOS (P0)
+        "invn":    {"w_um": 1.0, "l_nm": 45, "m": 2},   # core NMOS (N0)
         "starvep": {"w_um": 2.0, "l_nm": 45, "m": 2},   # PMOS current-starve
         "starven": {"w_um": 1.0, "l_nm": 45, "m": 1},   # NMOS current-starve
+        "xcplp":   {"w_um": 0.4, "l_nm": 45, "m": 1},   # P1 cross-coupled PMOS (xcpl)
+        "rstp":    {"w_um": 2.0, "l_nm": 45, "m": 2},   # reset PMOS (xcpl)
     },
 }
-DEV_KEYS = ["invp", "invn", "starvep", "starven"]
+DEV_KEYS = ["invp", "invn", "starvep", "starven"]   # optimizer dims (starved topology)
 
 
 def _full(params):
@@ -70,6 +74,8 @@ def _dev(d, vt):
 
 
 def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
+    if p.get("topology", "starved") == "xcpl":
+        return _gen_xcpl_netlist(p, vctrl, tstop_ns, tstep_ps, wavefile)
     d = p["devices"]
     vdd = p["vdd"]
     vc = p["vctrl"] if vctrl is None else vctrl
@@ -109,6 +115,84 @@ def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
         "set noaskquit",
         f"tran {tstep_ps}p {tstop_ns}n uic",
         # period across 5 cycles (rise 3..8) of o1, measured after startup settles
+        f"meas tran per TRIG v(o1) VAL='{vdd/2.0}' RISE=3 TARG v(o1) VAL='{vdd/2.0}' RISE=8",
+        "meas tran vpp PP v(o1)",
+        f"meas tran iavg AVG i(Vdd) FROM={tstop_ns*0.2}n TO={tstop_ns}n",
+        wave,
+        ".endc",
+        ".end",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
+    """Cross-coupled pseudo-differential ring VCO with a hardware reset start-up
+    (topology="xcpl"; cf. the Mansuri-style CCO cell, plus a reset PMOS).
+
+    Two current-starved inverter rings (odd N per rail: o1..oN and ob1..obN)
+    run in anti-phase, tied at every stage by a weak cross-coupled PMOS pair.
+    Per stage and rail (schematic naming):
+        N0 -> Mn*/Mnb*   core inverter NMOS
+        P0 -> Mp*/Mpb*   core inverter PMOS
+        P1 -> Mx*/Mxb*   cross-coupled PMOS (drain = own node, gate = complement)
+    One reset PMOS (Mrst, gate = rstb) clamps o1 high while rstb is low; the
+    rings then settle to the unique complementary pattern (only stage 1 fights
+    the clamp, and P1 of stage 1 reinforces it), so oscillation starts
+    deterministically when rstb rises at trst_ns — no .ic kick-start, and the
+    t=0 DC operating point IS the reset state. V_ctrl tunes the frequency via
+    the same vbp/vctrl starve rails as the "starved" topology. Size P1 weak
+    relative to the starved inverter drive: an oversized P1 latches the stage
+    and stops the oscillation (it shows up as oscillates=False)."""
+    d = p["devices"]
+    vdd = p["vdd"]
+    vc = p["vctrl"] if vctrl is None else vctrl
+    N = int(p["n_stages"])
+    cl = p["cload_ff"]
+    trst = p.get("trst_ns", 2.0)
+    pskew = p.get("pskew", 0.0)
+    hdr = run_sim._model_header(p)
+    invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
+    sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
+    xp, rp = _dev(d["xcplp"], "dvtp"), _dev(d["rstp"], "dvtp")
+    wave = f"wrdata {wavefile} v(o1) v(ob1)" if wavefile else ""
+
+    lines = [
+        "cross-coupled pseudo-differential ring VCO with reset (generated)",
+        f".option temp={p.get('temp', 27)}",
+        f".param dvtn={pskew} dvtp={-pskew}",
+        hdr,
+        f"Vdd vdd 0 {vdd}",
+        f"Vc vctrl 0 {vc}",
+        "* bias: Vctrl -> tail current, mirrored to a diode PMOS -> vbp",
+        f"Mpref vbp vbp vdd vdd pmos {sp_p}",
+        f"Mnref vbp vctrl 0 0 nmos {sn_n}",
+        f"* reset: rstb low clamps o1 to vdd, released at {trst}ns",
+        f"Vrst rstb 0 PULSE(0 {vdd} {trst}n 0.05n 0.05n {tstop_ns*2}n {tstop_ns*4}n)",
+        f"Mrst o1 rstb vdd vdd pmos {rp}",
+    ]
+    for i in range(1, N + 1):
+        prev = N if i == 1 else i - 1      # ring: in_1 = o_N (both rails)
+        lines += [
+            f"* stage {i}: starved inverters (N0/P0) x2 + cross-coupled P1 pair",
+            f"Mbp{i}  ap{i} vbp vdd vdd pmos {sp_p}",
+            f"Mp{i}   o{i} o{prev} ap{i} vdd pmos {invp}",
+            f"Mn{i}   o{i} o{prev} bp{i} 0 nmos {invn}",
+            f"Mbn{i}  bp{i} vctrl 0 0 nmos {sn_n}",
+            f"Mbpb{i} an{i} vbp vdd vdd pmos {sp_p}",
+            f"Mpb{i}  ob{i} ob{prev} an{i} vdd pmos {invp}",
+            f"Mnb{i}  ob{i} ob{prev} bn{i} 0 nmos {invn}",
+            f"Mbnb{i} bn{i} vctrl 0 0 nmos {sn_n}",
+            f"Mx{i}   o{i} ob{i} vdd vdd pmos {xp}",
+            f"Mxb{i}  ob{i} o{i} vdd vdd pmos {xp}",
+            f"Co{i}  o{i} 0 {cl}f",
+            f"Cob{i} ob{i} 0 {cl}f",
+        ]
+    lines += [
+        ".control",
+        "set noaskquit",
+        f"tran {tstep_ps}p {tstop_ns}n",
+        # rising edges only exist after the reset release, so RISE=3..8 measures
+        # the settled oscillation just like the starved topology
         f"meas tran per TRIG v(o1) VAL='{vdd/2.0}' RISE=3 TARG v(o1) VAL='{vdd/2.0}' RISE=8",
         "meas tran vpp PP v(o1)",
         f"meas tran iavg AVG i(Vdd) FROM={tstop_ns*0.2}n TO={tstop_ns}n",
@@ -172,12 +256,17 @@ def vco_tuning(params, points=9):
 
 
 def capture_vco_waveform(params, npoints=400, tstop_ns=8.0):
-    """Real transient of two ring nodes (o1, o2) so the UI can plot the actual
-    oscillation. Returns downsampled t_ns / o1 / o2 arrays + measured period."""
+    """Real transient of two ring nodes so the UI can plot the actual
+    oscillation (starved: o1/o2; xcpl: the complementary pair o1/ob1, returned
+    under the same o1/o2 keys). Returns downsampled arrays + measured period."""
     import os
     import tempfile as _tf
     p = _full(params)
     vdd = p["vdd"]
+    if p.get("topology", "starved") == "xcpl":
+        # the reset phase eats the head of the transient; keep the same
+        # oscillation window so the RISE 3..8 period measurement still fits
+        tstop_ns = tstop_ns + p.get("trst_ns", 2.0)
     fd, wf = _tf.mkstemp(suffix=".txt")
     os.close(fd)
     try:
@@ -374,8 +463,11 @@ def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seeds=(1, 2, 3, 4
     trnoise) and measure the period jitter directly. Averaged over several noise
     seeds (run in parallel) to tame the stochastic spread. A real cross-check of
     the analytic estimate — the circuit converts the injected noise through its
-    actual switching."""
+    actual switching. Starved topology only (the trnoise injection netlist
+    models the single-ended starved ring)."""
     p = _full(params)
+    if p.get("topology", "starved") != "starved":
+        return {"error": "measured jitter supports the starved topology only"}
     gm = _ring_gm(p)
     if not gm:
         return {"error": "gm extraction failed"}

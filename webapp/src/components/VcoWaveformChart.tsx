@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
 import type { VcoWaveform } from '../types'
 
-// Real ring-VCO oscillation: two ring nodes (o1, o2) vs time, ViVA-style dark canvas.
-export default function VcoWaveformChart({ wf, theme }: { wf: VcoWaveform; theme: string }) {
+// Real ring-VCO oscillation: two ring nodes vs time, ViVA-style dark canvas.
+// labels: trace names (starved: o1/o2, xcpl: complementary o1/ob1).
+export default function VcoWaveformChart({ wf, theme, labels = ['o1', 'o2'] }: { wf: VcoWaveform; theme: string; labels?: [string, string] }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
     const cv = ref.current
@@ -30,11 +31,11 @@ export default function VcoWaveformChart({ wf, theme }: { wf: VcoWaveform; theme
       trace(wf.o2, '#ff6fae', 1.5)
       trace(wf.o1, '#39d7d7', 2, true)
       ctx.font = '10px ui-monospace, monospace'
-      ctx.fillStyle = '#39d7d7'; ctx.fillText('o1', x1 + 4, Y(wf.o1[wf.o1.length - 1]) + 3)
-      ctx.fillStyle = '#ff6fae'; ctx.fillText('o2', x1 + 4, Y(wf.o2[wf.o2.length - 1]) + 3)
+      ctx.fillStyle = '#39d7d7'; ctx.fillText(labels[0], x1 + 4, Y(wf.o1[wf.o1.length - 1]) + 3)
+      ctx.fillStyle = '#ff6fae'; ctx.fillText(labels[1], x1 + 4, Y(wf.o2[wf.o2.length - 1]) + 3)
       ctx.fillStyle = '#4f7f7d'; ctx.fillText('0', x0, y1 + 14); ctx.fillText(`${tmax.toFixed(1)} ns`, x1 - 32, y1 + 14)
     }
     draw(); const ro = new ResizeObserver(draw); ro.observe(cv); return () => ro.disconnect()
-  }, [wf, theme])
+  }, [wf, theme, labels[0], labels[1]])
   return <canvas ref={ref} style={{ width: '100%', height: '200px', display: 'block' }} aria-label="Ring VCO oscillation waveform" />
 }

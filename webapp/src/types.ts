@@ -190,12 +190,15 @@ export interface OptimizeResult {
 }
 
 // ---- MOSFET ring VCO ----
-export type VcoDeviceKey = 'invp' | 'invn' | 'starvep' | 'starven'
+export type VcoDeviceKey = 'invp' | 'invn' | 'starvep' | 'starven' | 'xcplp' | 'rstp'
+export type VcoTopology = 'starved' | 'xcpl'
 export interface VcoParams {
   vdd: number
   vctrl: number
   n_stages: number
   cload_ff: number
+  topology?: VcoTopology
+  trst_ns?: number
   devices: Record<VcoDeviceKey, Device>
 }
 export interface VcoNominal {
@@ -216,7 +219,7 @@ export interface VcoTuning {
   center_ghz: number | null
 }
 export interface VcoResult { nominal: VcoNominal; tuning?: VcoTuning; params?: VcoParams; error?: string }
-export interface VcoOptStep { action: string; f_osc_ghz: number | null; power_uw: number | null; oscillates: boolean; params: Record<VcoDeviceKey, Device> }
+export interface VcoOptStep { action: string; f_osc_ghz: number | null; power_uw: number | null; oscillates: boolean; params: Partial<Record<VcoDeviceKey, Device>> }
 export interface VcoOptimizeResult {
   trajectory: VcoOptStep[]
   final_params: VcoParams
@@ -242,7 +245,7 @@ export interface VcoPhaseNoise {
   measured?: VcoPhaseNoiseMeasured
   error?: string
 }
-export interface VcoParetoPoint { power_uw: number | null; f_osc_ghz: number | null; devices: Record<VcoDeviceKey, Device> }
+export interface VcoParetoPoint { power_uw: number | null; f_osc_ghz: number | null; devices: Partial<Record<VcoDeviceKey, Device>> }
 export interface VcoParetoResult { front: VcoParetoPoint[]; all: { power_uw: number | null; f_osc_ghz: number | null; feasible: boolean }[]; error?: string }
 export interface VcoPostLayout { schematic: VcoWaveform; postlayout: VcoWaveform; par_caps: { c_node_ff: number; per_device_ff: Record<string, number>; method: string }; error?: string }
 export interface VcoFlowStage { name: string; ok: boolean; detail: string }
@@ -262,6 +265,8 @@ export const VCO_DEVICE_META: Record<VcoDeviceKey, { name: string; role: { ko: s
   invn: { name: 'Mn', role: { ko: '코어 NMOS — 하강', en: 'core NMOS — pull-down' } },
   starvep: { name: 'Mbp', role: { ko: 'PMOS 전류 스타빙', en: 'PMOS current-starve' } },
   starven: { name: 'Mbn', role: { ko: 'NMOS 전류 스타빙 (V_ctrl)', en: 'NMOS current-starve (V_ctrl)' } },
+  xcplp: { name: 'Mx', role: { ko: 'P1 — 교차 결합 PMOS (약하게)', en: 'P1 — cross-coupled PMOS (keep weak)' } },
+  rstp: { name: 'Mrst', role: { ko: '리셋 PMOS — o1 클램프', en: 'reset PMOS — clamps o1' } },
 }
 
 export const DEVICE_META: Record<DeviceKey, { name: string; role: string; world: 'si' | 'ag' }> = {

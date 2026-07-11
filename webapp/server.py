@@ -40,6 +40,7 @@ import run_sim  # noqa: E402
 import layout  # noqa: E402
 import vco_sim  # noqa: E402
 import wicked  # noqa: E402
+import vco_wicked  # noqa: E402
 
 def _arg_port(default=8770):
     if len(sys.argv) > 1:
@@ -897,6 +898,61 @@ class Handler(BaseHTTPRequestHandler):
                                               wcd_samples=int(payload.get("wcd_samples", 24)),
                                               seed=int(payload.get("seed", 19)),
                                               importance_samples=int(payload.get("importance_samples", 8))))
+            elif self.path == "/api/vco/wicked/verdict":
+                payload = self._read_json()
+                self._json(vco_wicked.nominal_verdict(payload.get("params", {}), payload.get("targets")))
+            elif self.path == "/api/vco/wicked/screening":
+                payload = self._read_json()
+                self._json(vco_wicked.parameter_screening(payload.get("params", {}),
+                                                          payload.get("targets"),
+                                                          delta=float(payload.get("delta", 0.15))))
+            elif self.path == "/api/vco/wicked/wcd":
+                payload = self._read_json()
+                self._json(vco_wicked.worst_case_distance(payload.get("params", {}),
+                                                          payload.get("targets"),
+                                                          n_samples=int(payload.get("n_samples", 24)),
+                                                          seed=int(payload.get("seed", 19))))
+            elif self.path == "/api/vco/wicked/mismatch":
+                payload = self._read_json()
+                self._json(vco_wicked.mismatch_mc(payload.get("params", {}),
+                                                  n=int(payload.get("n", 16)),
+                                                  seed=int(payload.get("seed", 7))))
+            elif self.path == "/api/vco/wicked/yieldsweep":
+                payload = self._read_json()
+                self._json(vco_wicked.yield_sweep(payload.get("params", {}),
+                                                  payload.get("targets"),
+                                                  n_points=int(payload.get("n_points", 7)),
+                                                  n_mc=int(payload.get("n_mc", 6)),
+                                                  seed=int(payload.get("seed", 53))))
+            elif self.path == "/api/vco/wicked/dno":
+                payload = self._read_json()
+                self._json(vco_wicked.dno_refine(payload.get("params", {}),
+                                                 payload.get("targets"),
+                                                 iterations=int(payload.get("iterations", 4))))
+            elif self.path == "/api/vco/wicked/yop":
+                payload = self._read_json()
+                self._json(vco_wicked.yop_optimize(payload.get("params", {}),
+                                                   payload.get("targets"),
+                                                   iterations=int(payload.get("iterations", 3)),
+                                                   seed=int(payload.get("seed", 71))))
+            elif self.path == "/api/vco/wicked/postlayout":
+                payload = self._read_json()
+                self._json(vco_wicked.postlayout_wcd(payload.get("params", {}),
+                                                     payload.get("targets"),
+                                                     n_samples=int(payload.get("n_samples", 8)),
+                                                     seed=int(payload.get("seed", 91))))
+            elif self.path == "/api/vco/wicked/corners":
+                payload = self._read_json()
+                self._json(vco_wicked.worst_case_corners(payload.get("params", {}),
+                                                         payload.get("targets")))
+            elif self.path == "/api/vco/wicked/fullflow":
+                payload = self._read_json()
+                self._json(vco_wicked.wicked_flow(payload.get("params", {}),
+                                                  payload.get("targets"),
+                                                  dno_iterations=int(payload.get("dno_iterations", 4)),
+                                                  wcd_samples=int(payload.get("wcd_samples", 16)),
+                                                  mc_samples=int(payload.get("mc_samples", 8)),
+                                                  seed=int(payload.get("seed", 19))))
             elif self.path == "/api/maxfclk":
                 payload = self._read_json()
                 self._json(run_sim.max_fclk_sweep(payload.get("params", {})))
