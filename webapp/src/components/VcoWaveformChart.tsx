@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { VcoWaveform } from '../types'
 
 // Real ring-VCO oscillation: two ring nodes vs time, ViVA-style dark canvas.
-// labels: trace names (starved: o1/o2, xcpl: complementary o1/ob1).
+// labels: trace names — 상보 링 노드 o1/ob1 (xcpl 단일 토폴로지).
 export default function VcoWaveformChart({ wf, theme, labels = ['o1', 'o2'] }: { wf: VcoWaveform; theme: string; labels?: [string, string] }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {

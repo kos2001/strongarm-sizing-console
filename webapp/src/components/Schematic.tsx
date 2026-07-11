@@ -11,13 +11,14 @@ export default function Schematic({ devices, changed }: { devices: Record<Device
   const sz = (k: DeviceKey) => `${d[k].w_um}u×${d[k].m}`
   const REF: Record<DeviceKey, string> = { pre: 'MP1', pcc: 'MP3', ncc: 'MN3', input: 'MN1', tail: 'MT' }
 
-  // one analogLib-style MOSFET symbol. anchors: drain=top, source=bottom, gate=left.
-  const Mos = ({ cx, cy, p, hot, flash }: { cx: number; cy: number; p?: boolean; hot?: boolean; flash?: boolean }) => {
+  // one analogLib-style MOSFET symbol. anchors: drain=top, source=bottom,
+  // gate=left (flip=true 면 좌우반전 — 게이트가 오른쪽을 향한다).
+  const Mos = ({ cx, cy, p, hot, flash, flip }: { cx: number; cy: number; p?: boolean; hot?: boolean; flash?: boolean; flip?: boolean }) => {
     const h = 26
     const col = flash ? V.changed : hot ? V.symHot : V.sym
     const sy = cy + h / 2 // source y (bottom)
     return (
-      <g stroke={col} strokeWidth={flash ? 2 : 1.3} fill="none" style={flash ? { filter: `drop-shadow(0 0 4px ${V.changed})` } : undefined}>
+      <g stroke={col} strokeWidth={flash ? 2 : 1.3} fill="none" transform={flip ? `translate(${2 * cx},0) scale(-1,1)` : undefined} style={flash ? { filter: `drop-shadow(0 0 4px ${V.changed})` } : undefined}>
         {/* channel bar */}
         <line x1={cx} y1={cy - h / 2} x2={cx} y2={cy + h / 2} strokeWidth={flash ? 2.4 : 1.8} />
         {/* gate electrode + lead */}
@@ -84,12 +85,12 @@ export default function Schematic({ devices, changed }: { devices: Record<Device
       <Wire d={`30,${yPre} ${RX - 18},${yPre}`} />
       <Prop x={LX + 12} y={yPre} k="pre" />
 
-      {/* latch PMOS (cross-coupled): vdd! -> Out */}
-      <Mos cx={LX} cy={yLatP} p hot flash={changed === 'pcc'} />
+      {/* latch PMOS (cross-coupled): vdd! -> Out. 왼쪽은 flip — 게이트가 중앙 채널을 향해 X 결선이 가능 */}
+      <Mos cx={LX} cy={yLatP} p hot flip flash={changed === 'pcc'} />
       <Mos cx={RX} cy={yLatP} p hot flash={changed === 'pcc'} />
       <Wire d={`${LX},${yPre + 13} ${LX},${yLatP - 13}`} />
       <Wire d={`${RX},${yPre + 13} ${RX},${yLatP - 13}`} />
-      <Prop x={LX + 12} y={yLatP} k="pcc" />
+      <Prop x={RX + 12} y={yLatP} k="pcc" />
 
       {/* Out nodes */}
       <Wire d={`${LX},${yLatP + 13} ${LX},${yLatN - 13}`} />
@@ -98,16 +99,19 @@ export default function Schematic({ devices, changed }: { devices: Record<Device
       <T x={LX - 6} y={yOut - 4} anchor="end" c={V.net} sz={8.5}>outp</T>
       <T x={RX + 6} y={yOut - 4} c={V.net} sz={8.5}>outn</T>
 
-      {/* latch NMOS (cross-coupled): Out -> X/Y */}
-      <Mos cx={LX} cy={yLatN} hot flash={changed === 'ncc'} />
+      {/* latch NMOS (cross-coupled): Out -> X/Y. 왼쪽은 flip(위와 동일) */}
+      <Mos cx={LX} cy={yLatN} hot flip flash={changed === 'ncc'} />
       <Mos cx={RX} cy={yLatN} hot flash={changed === 'ncc'} />
-      <Prop x={LX + 12} y={yLatN + 11} k="ncc" />
+      <Prop x={RX + 12} y={yLatN + 11} k="ncc" />
 
-      {/* cross-couple wiring */}
-      <Wire d={`${LX - 18},${yLatP} 70,${yLatP} 70,${yOut - 22} ${RX},${yOut - 22} ${RX},${yOut}`} />
-      <Wire d={`${LX - 18},${yLatN} 70,${yLatN} 70,${yOut + 22} ${RX},${yOut + 22} ${RX},${yOut}`} />
-      <Wire d={`${RX - 18},${yLatP} 290,${yLatP} 290,${yOut - 30} ${LX},${yOut - 30} ${LX},${yOut}`} />
-      <Wire d={`${RX - 18},${yLatN} 290,${yLatN} 290,${yOut + 30} ${LX},${yOut + 30} ${LX},${yOut}`} />
+      {/* cross-couple wiring — 래치 표기: 좌우 게이트 버스를 반대편 출력 노드에
+          대각선 두 줄로 연결해 중앙에서 X 로 교차시킨다(참고 자료의 latch 표기). */}
+      <Wire d={`${LX + 18},${yLatP} ${LX + 18},${yLatN}`} />
+      <Wire d={`${RX - 18},${yLatP} ${RX - 18},${yLatN}`} />
+      <Wire d={`${LX + 18},125 ${RX},172`} />
+      <Wire d={`${RX - 18},125 ${LX},172`} />
+      <Dot x={LX + 18} y={125} /><Dot x={RX - 18} y={125} />
+      <Dot x={LX} y={172} /><Dot x={RX} y={172} />
 
       {/* input pair: X/Y -> tail */}
       <Wire d={`${LX},${yLatN + 13} ${LX},${yIn - 13}`} />

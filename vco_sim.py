@@ -43,9 +43,9 @@ def _pmap(fn, items):
 VCO_DEFAULTS = {
     "vdd": 1.0,
     "vctrl": 0.6,          # nominal control voltage (V)
-    "n_stages": 5,         # odd number of ring stages
+    "n_stages": 3,         # odd number of ring stages
     "cload_ff": 3.0,       # per-stage load capacitance
-    "topology": "starved",  # "starved" | "xcpl" (cross-coupled pseudo-diff + reset)
+    "topology": "xcpl",    # 기본: 교차결합+리셋(xcpl). "starved" 는 레거시 호환용
     "trst_ns": 2.0,        # xcpl only: reset (rstb low) release time
     "devices": {
         "invp":    {"w_um": 2.0, "l_nm": 45, "m": 2},   # core PMOS (P0)
