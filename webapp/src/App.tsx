@@ -365,14 +365,14 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  const run = async () => {
+  const run = async (forceOffset = false) => {
     setRunning(true)
     setMcBefore(null) // single distribution (before/after only from optimizer)
     setElapsed(0)
     const t0 = performance.now()
     timerRef.current = window.setInterval(() => setElapsed((performance.now() - t0) / 1000), 100)
     try {
-      const res = await simulate(params, doOffset)
+      const res = await simulate(params, forceOffset || doOffset)
       setResult(res)
       if (!res.error) {
         setHistory((h) => [{ id: idRef.current++, params: structuredClone(params), result: res, doOffset }, ...h].slice(0, 8))
@@ -595,7 +595,7 @@ export default function App() {
 
           <div className="grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
             <button
-              onClick={run}
+              onClick={() => run()}
               disabled={busy || apiUp === false}
               className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
               style={{ background: 'var(--si)', color: '#04120f' }}
@@ -845,7 +845,16 @@ export default function App() {
           )}
 
           {page === 'montecarlo' && (
-            off?.samples_mv?.length ? (
+            <div className="flex flex-col gap-4">
+            {/* MC 는 결과 뷰어였음 — 이 페이지에서 바로 돌릴 수 있게 실행 버튼 제공(오프셋 강제 on) */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Monte-Carlo · V_th mismatch → offset σ</div>
+              <button onClick={() => run(true)} disabled={busy || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}
+                title="현재 소자 크기로 n_MC회 미스매치 샘플링(ngspice)을 돌려 오프셋 분포를 측정">
+                {running ? `sampling… ${elapsed.toFixed(0)}s` : `∿ run Monte-Carlo (n=${params.n_mc})`}
+              </button>
+            </div>
+            {off?.samples_mv?.length ? (
               <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Monte-Carlo offset · {off.n_mc} samples</div>
@@ -864,8 +873,13 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <p className="text-sm" style={{ color: 'var(--muted)' }}>Enable “Measure offset (Monte-Carlo)” and run a simulation on the Sizing page to see the offset distribution here.</p>
-            )
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                아직 몬테카를로 결과가 없습니다 — 위의 <span className="mono" style={{ color: 'var(--ag)' }}>∿ run Monte-Carlo</span> 버튼을 누르면 현재 소자 크기로
+                V<sub>th</sub> 미스매치를 {params.n_mc}회 무작위 추출해(ngspice) <b>입력 오프셋 분포·σ</b>를 측정합니다.
+                (소자 크기 페이지에서 “오프셋 측정” 체크 후 실행해도 같은 결과가 여기 표시됩니다.)
+              </p>
+            )}
+            </div>
           )}
 
           {page === 'pvt' && (
