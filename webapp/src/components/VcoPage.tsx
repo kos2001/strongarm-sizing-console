@@ -60,7 +60,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   const guard = async (tag: string, fn: () => Promise<void>) => { setLoad(tag); try { await fn() } catch { /* ignore */ } finally { setLoad('') } }
   const run = () => guard('run', async () => { const r = await vcoSimulate(params, true); setRes(r); setTuning(r.tuning ?? null) })
-  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning) } })
+  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning); setTimeout(() => document.getElementById('vco-tuning-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150) } })
   const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
   const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
   const runPush = () => guard('push', async () => { const r = await vcoPushing(params); if (!r.error) setPush(r) })
@@ -339,8 +339,8 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
           )}
         </div>
         {tuning && (
-          <div className="p-5" style={box}>
-            <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{T(lang, '튜닝 곡선 · f vs V_ctrl', 'tuning curve · f vs V_ctrl')}</div>
+          <div id="vco-tuning-card" className="p-5" style={box}>
+            <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{view === 'opt' ? T(lang, '최적화된 크기의 튜닝 곡선 · f vs V_ctrl', 'tuning curve of the optimized sizing · f vs V_ctrl') : T(lang, '튜닝 곡선 · f vs V_ctrl', 'tuning curve · f vs V_ctrl')}</div>
             <TuningChart tuning={tuning} theme={theme} />
             <div className="grid grid-cols-4 gap-3 mt-3">
               <Metric label={T(lang, '최소 f', 'f min')} value={tuning.f_min_ghz != null ? `${tuning.f_min_ghz} GHz` : '—'} />
