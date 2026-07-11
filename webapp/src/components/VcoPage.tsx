@@ -5,6 +5,7 @@ import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushi
 import VcoPhaseNoiseChart from './VcoPhaseNoiseChart'
 import TuningChart from './TuningChart'
 import VcoSchematic from './VcoSchematic'
+import NetlistImport from './NetlistImport'
 import { downloadNetlist } from '../netlist'
 import VcoWaveformChart from './VcoWaveformChart'
 import VcoPvtView from './VcoPvtView'
@@ -116,6 +117,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             </div>
           ) : <p className="text-sm mt-3" style={{ color: 'var(--muted)' }}>{T(lang, '↻ 파형을 눌러 실제 발진 트랜지언트를 캡처하세요.', 'Press ↻ waveform to capture the real oscillation transient.')}</p>}
         </div>
+        <NetlistImport kind="vco" ko={lang === 'ko'} onApply={(pp) => setParams((prev) => ({ ...prev, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.vctrl != null ? { vctrl: pp.vctrl } : {}), ...(pp.n_stages != null ? { n_stages: pp.n_stages } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), devices: { ...prev.devices, ...pp.devices } }))} />
       </div>
     )
   }

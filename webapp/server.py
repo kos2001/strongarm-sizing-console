@@ -474,6 +474,82 @@ def parametric_yield(base, targets, n=48, seed=11):
             "targets": {"decision_time_ps": dec_t, "offset_mv": off_t}}
 
 
+NETLIST_MOS_RE = None  # lazy re
+
+
+def parse_netlist_text(text):
+    """SPICE 덱에서 MOS/전원/커패시터를 파싱해 소자 표 + (가능하면) 파라미터로.
+
+    이 콘솔이 내보내는 덱의 명명 규칙을 안다:
+      comparator — M1/M2=input, Mt=tail, M3/M4=ncc, M5/M6=pcc, M7..M10=pre
+      vco(xcpl)  — Mbp*/Mbpb*=starvep, Mp*/Mpb*=invp, Mn*/Mnb*=invn,
+                   Mbn*/Mbnb*=starven, Mx*/Mxb*=xcplp, Mrst=rstp (스테이지 번호로 N)
+    규칙 밖 넷리스트도 소자 표/노드는 반환한다(kind='unknown').
+    """
+    import re
+    mos_re = re.compile(r"^(M\S*)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(nmos|pmos)\s+W=([\d.]+)u\s+L=([\d.]+)n?\s+M=(\d+)", re.I)
+    v_re = re.compile(r"^V(\S*)\s+(\S+)\s+(\S+)\s+([\d.]+)\s*$", re.I)
+    c_re = re.compile(r"^C(\S*)\s+(\S+)\s+(\S+)\s+([\d.]+)f", re.I)
+    devices, sources, caps = [], {}, []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("*", ".")):
+            continue
+        m = mos_re.match(line)
+        if m:
+            name, d, g, s, b, kind, w, l, mult = m.groups()
+            devices.append({"name": name, "type": kind.lower(), "w_um": float(w),
+                            "l_nm": float(l), "m": int(mult), "nodes": {"d": d, "g": g, "s": s, "b": b}})
+            continue
+        mv = v_re.match(line)
+        if mv:
+            sources[mv.group(1).lower() or mv.group(2).lower()] = float(mv.group(4))
+            continue
+        mc = c_re.match(line)
+        if mc:
+            caps.append({"name": "C" + mc.group(1), "node": mc.group(2), "ff": float(mc.group(4))})
+    names = {d["name"] for d in devices}
+    out = {"devices": devices, "n_mos": len(devices), "caps": caps, "sources": sources}
+    if any(n.startswith("Mx") for n in names) and any(n.startswith("Mbp") for n in names):
+        # ── VCO(xcpl) ──
+        import re as _re
+        stages = [int(mm.group(1)) for n in names for mm in [_re.match(r"Mp(\d+)$", n)] if mm]
+        role_of = [("Mbpb", "starvep"), ("Mbp", "starvep"), ("Mpb", "invp"), ("Mp", "invp"),
+                   ("Mnb", "invn"), ("Mn", "invn"), ("Mbnb", "starven"), ("Mbn", "starven"),
+                   ("Mxb", "xcplp"), ("Mx", "xcplp"), ("Mrst", "rstp")]
+        dev_params = {}
+        for d in devices:
+            for prefix, key in role_of:
+                if d["name"].startswith(prefix) and key not in dev_params and d["name"] not in ("Mpref", "Mnref"):
+                    dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
+                    break
+        params = {"devices": dev_params}
+        if "dd" in sources: params["vdd"] = sources["dd"]
+        if "c" in sources: params["vctrl"] = sources["c"]
+        if stages: params["n_stages"] = max(stages)
+        node_caps = [c for c in caps if c["node"].startswith("o")]
+        if node_caps: params["cload_ff"] = node_caps[0]["ff"]
+        out.update({"kind": "vco", "params": params})
+        return out
+    if "Mt" in names and {"M1", "M3", "M5"} <= names:
+        # ── comparator ──
+        role = {"M1": "input", "M2": "input", "Mt": "tail", "M3": "ncc", "M4": "ncc",
+                "M5": "pcc", "M6": "pcc", "M7": "pre", "M8": "pre", "M9": "pre", "M10": "pre"}
+        dev_params = {}
+        for d in devices:
+            key = role.get(d["name"])
+            if key and key not in dev_params:
+                dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
+        params = {"devices": dev_params}
+        if "dd" in sources: params["vdd"] = sources["dd"]
+        out_caps = [c for c in caps if c["node"] in ("outp", "outn")]
+        if out_caps: params["cload_ff"] = out_caps[0]["ff"]
+        out.update({"kind": "comparator", "params": params})
+        return out
+    out["kind"] = "unknown"
+    return out
+
+
 def optimize_vco(base, targets, pop=12, gens=7, seed=41):
     """Size the ring VCO's four device groups (log-space Differential Evolution)
     to hit a target oscillation frequency at the nominal V_ctrl while minimizing
@@ -809,7 +885,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path == "/api/netlist":
+            if self.path == "/api/netlist/parse":
+                payload = self._read_json()
+                self._json(parse_netlist_text(str(payload.get("netlist", ""))))
+            elif self.path == "/api/netlist":
                 # 현재 파라미터의 SPICE 덱(.sp)을 그대로 반환 — 직접 ngspice 실행용
                 payload = self._read_json()
                 base = payload.get("params", {})
