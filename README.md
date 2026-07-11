@@ -196,6 +196,14 @@ PVT corners / Supply pushing / **Layout (GDSII + DRC)** / **Full flow**
 - **Topology** — N odd current-starved CMOS inverter stages in a ring; V_ctrl
   sets the tail current (NMOS ref mirrored to a diode PMOS → vbp), hence the
   per-stage delay `t_d ≈ C_L·VDD/I_D` and frequency `f = 1/(2N·t_d)`.
+- **Cross-coupled topology** (`"topology": "xcpl"`) — a pseudo-differential
+  variant: two odd-N starved inverter rails (N0/P0) tied at every stage by a
+  weak cross-coupled PMOS pair (P1 = `Mx`/`Mxb`, Mansuri-CCO style), started
+  deterministically by a reset PMOS (`Mrst`) that clamps `o1` while `rstb` is
+  low — no `.ic` kick-start; the t=0 DC operating point *is* the reset state.
+  Same V_ctrl tuning rails, so tuning/pushing/phase-noise/waveform all reuse
+  the same pipeline. Keep P1 weak: oversized, it latches the stage
+  (`oscillates: false`), which the mismatch MC below quantifies.
 - **Metrics** — `measure_vco`: oscillation frequency, does-it-oscillate, power,
   swing. `vco_tuning`: sweeps V_ctrl → tuning range %, Kvco (GHz/V), center.
 - **Auto-size** — `optimize_vco` (log-space Differential Evolution + `_pmap`
@@ -278,6 +286,33 @@ HTTP endpoints exposed by `webapp/server.py`:
 - `POST /api/wicked/corners` — worst-case corner extraction and ranking
 - `POST /api/wicked/fullflow` — FEO → DNO → WCO-in-loop → full WCO → WCD → mismatch → importance → screening → corners → post-layout WCD
 
+### WiCkeD for the VCO (`vco_wicked.py`)
+
+The same methodology is ported to the ring VCO (both topologies), with the
+comparator's spec triple replaced by *oscillates / frequency band
+(f_ghz ± f_tol_pct) / power*:
+
+- `nominal_verdict` — FEO-style margins against the f-band and power targets.
+- `parameter_screening` — OAT width ranking for f and power, with a
+  `kills_osc` flag on moves that stop the oscillation.
+- `wco_operating` / `worst_case_corners` — 27 PVT corners, ranked by f-margin.
+- `worst_case_distance` — WCD beta over (pskew, VDD, temp) with linear
+  interpolation to the band edge; `yop_optimize` centers the design on beta.
+- `mismatch_mc` — the comparator's Monte-Carlo offset analog: an independent
+  Pelgrom `delvto` per MOSFET (both rails, bias, cross-couple, reset) →
+  σ_f/f spread **and start-up failures** — the key xcpl risk, where mismatch
+  strengthening P1 against a weakened tail latches a stage. No global-corner
+  analysis reveals this.
+- `yield_sweep` — mismatch+PVT MC per process-skew point (yield-plot style).
+- `dno_refine` — feasibility (restore oscillation; for xcpl weaken P1) →
+  center f with the starve widths → power trim via screening.
+- `postlayout_wcd` — `layout.extract_vco_parasitics` → cload → WCD re-check.
+- `wicked_flow` — staged FEO → DNO → WCO → WCD → mismatch MC → screening →
+  corners → post-layout report (`POST /api/vco/wicked/fullflow`).
+
+HTTP endpoints: `POST /api/vco/wicked/{verdict,screening,wcd,mismatch,
+yieldsweep,dno,yop,postlayout,corners,fullflow}`.
+
 MCP tools exposed by `mcp_server.py`:
 
 - `strongarm_wicked`
@@ -288,6 +323,8 @@ MCP tools exposed by `mcp_server.py`:
 - `strongarm_wicked_yop`
 - `strongarm_wicked_postlayout`
 - `strongarm_wicked_corners`
+- `vco_wicked` / `vco_wicked_mismatch` / `vco_wicked_screening` /
+  `vco_wicked_wcd` / `vco_wicked_corners` — the VCO ports (both topologies)
 
 Current limitations: WCD is a practical proxy, not a commercial high-sigma
 implementation; only input-pair mismatch is directly injected into SPICE while
