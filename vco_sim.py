@@ -263,6 +263,10 @@ def capture_vco_waveform(params, npoints=400, tstop_ns=8.0):
     import tempfile as _tf
     p = _full(params)
     vdd = p["vdd"]
+    if p.get("topology", "starved") == "xcpl":
+        # the reset phase eats the head of the transient; keep the same
+        # oscillation window so the RISE 3..8 period measurement still fits
+        tstop_ns = tstop_ns + p.get("trst_ns", 2.0)
     fd, wf = _tf.mkstemp(suffix=".txt")
     os.close(fd)
     try:

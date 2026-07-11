@@ -51,6 +51,13 @@ def test_xcpl_reset_holds_then_releases():
     assert min(after) < 0.3 * vdd and max(after) > 0.7 * vdd
 
 
+def test_xcpl_waveform_default_window_measures_period():
+    """Default capture window still yields a period despite the reset phase."""
+    w = vco_sim.capture_vco_waveform(XCPL)
+    assert "error" not in w
+    assert w["f_osc_ghz"] is not None and w["f_osc_ghz"] > 0
+
+
 def test_xcpl_outputs_complementary():
     """The two rails (o1 vs ob1, exported as o1/o2) swing in anti-phase."""
     w = vco_sim.capture_vco_waveform({**XCPL}, tstop_ns=12.0)
