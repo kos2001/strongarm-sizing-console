@@ -12,6 +12,7 @@ import MonteCarloChart from './components/MonteCarloChart'
 import ParetoChart from './components/ParetoChart'
 import PageHelp from './components/PageHelp'
 import Schematic from './components/Schematic'
+import { downloadNetlist } from './netlist'
 import SensitivityChart from './components/SensitivityChart'
 import VcoPage from './components/VcoPage'
 import WaveformChart from './components/WaveformChart'
@@ -36,7 +37,7 @@ const SPEC_PROFILES: { id: string; label: string; note: string; targets: Targets
 ]
 
 const DEFAULTS: Params = {
-  vdd: 1.0,
+  vdd: 0.7,
   cload_ff: 15.0,
   avt_mv_um: 2.0,
   n_mc: 16,
@@ -125,6 +126,7 @@ export default function App() {
   const [pvtRes, setPvtRes] = useState<PvtResult | null>(null)
   const [pvtLoading, setPvtLoading] = useState(false)
   const [paretoRes, setParetoRes] = useState<ParetoResult | null>(null)
+  const [paretoSel, setParetoSel] = useState<number | null>(null) // 파레토 front 선택점(상세 패널)
   const [paretoLoading, setParetoLoading] = useState(false)
   const [flowRes, setFlowRes] = useState<FlowResult | null>(null)
   const [flowLoading, setFlowLoading] = useState(false)
@@ -363,14 +365,14 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  const run = async () => {
+  const run = async (forceOffset = false) => {
     setRunning(true)
     setMcBefore(null) // single distribution (before/after only from optimizer)
     setElapsed(0)
     const t0 = performance.now()
     timerRef.current = window.setInterval(() => setElapsed((performance.now() - t0) / 1000), 100)
     try {
-      const res = await simulate(params, doOffset)
+      const res = await simulate(params, forceOffset || doOffset)
       setResult(res)
       if (!res.error) {
         setHistory((h) => [{ id: idRef.current++, params: structuredClone(params), result: res, doOffset }, ...h].slice(0, 8))
@@ -593,7 +595,7 @@ export default function App() {
 
           <div className="grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
             <button
-              onClick={run}
+              onClick={() => run()}
               disabled={busy || apiUp === false}
               className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
               style={{ background: 'var(--si)', color: '#04120f' }}
@@ -702,6 +704,10 @@ export default function App() {
                   <button onClick={runPostLayout} disabled={busy || plLoading} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
                     {plLoading ? 'extracting…' : '⚡ parasitics'}
                   </button>
+                  <button onClick={() => downloadNetlist('/api/netlist', params, 'strongarm.sp').catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                    title="현재 파라미터의 SPICE 덱(.sp) 다운로드 — ngspice 로 직접 실행 가능">
+                    ⤓ netlist
+                  </button>
                 </div>
               </div>
               {play && stepNow && (
@@ -798,8 +804,12 @@ export default function App() {
                       })}
                     </ol>
                   </div>
-                  <p className="mono text-[11px] mt-3 leading-relaxed" style={{ color: 'var(--faint)' }}>
-                    Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.
+                  <p className="mono text-[11px] mt-3 leading-relaxed flex items-center justify-between gap-2" style={{ color: 'var(--faint)' }}>
+                    <span>Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.</span>
+                    <button onClick={() => downloadNetlist('/api/netlist', opt.final_params, 'strongarm_opt.sp').catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full shrink-0" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                      title="최적화된 소자 크기가 반영된 SPICE 덱(.sp) 다운로드">
+                      ⤓ netlist
+                    </button>
                   </p>
                 </div>
               ) : (
@@ -835,7 +845,16 @@ export default function App() {
           )}
 
           {page === 'montecarlo' && (
-            off?.samples_mv?.length ? (
+            <div className="flex flex-col gap-4">
+            {/* MC 는 결과 뷰어였음 — 이 페이지에서 바로 돌릴 수 있게 실행 버튼 제공(오프셋 강제 on) */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Monte-Carlo · V_th mismatch → offset σ</div>
+              <button onClick={() => run(true)} disabled={busy || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}
+                title="현재 소자 크기로 n_MC회 미스매치 샘플링(ngspice)을 돌려 오프셋 분포를 측정">
+                {running ? `sampling… ${elapsed.toFixed(0)}s` : `∿ run Monte-Carlo (n=${params.n_mc})`}
+              </button>
+            </div>
+            {off?.samples_mv?.length ? (
               <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Monte-Carlo offset · {off.n_mc} samples</div>
@@ -854,8 +873,13 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <p className="text-sm" style={{ color: 'var(--muted)' }}>Enable “Measure offset (Monte-Carlo)” and run a simulation on the Sizing page to see the offset distribution here.</p>
-            )
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                아직 몬테카를로 결과가 없습니다 — 위의 <span className="mono" style={{ color: 'var(--ag)' }}>∿ run Monte-Carlo</span> 버튼을 누르면 현재 소자 크기로
+                V<sub>th</sub> 미스매치를 {params.n_mc}회 무작위 추출해(ngspice) <b>입력 오프셋 분포·σ</b>를 측정합니다.
+                (소자 크기 페이지에서 “오프셋 측정” 체크 후 실행해도 같은 결과가 여기 표시됩니다.)
+              </p>
+            )}
+            </div>
           )}
 
           {page === 'pvt' && (
@@ -915,13 +939,40 @@ export default function App() {
               </div>
               {paretoRes ? (
                 <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <ParetoChart res={paretoRes} pTarget={targets.power_uw} dTarget={targets.decision_time_ps} theme={theme} />
+                  <ParetoChart res={paretoRes} pTarget={targets.power_uw} dTarget={targets.decision_time_ps} theme={theme}
+                    selected={paretoSel} onSelect={setParetoSel} />
                   <p className="mono text-[11px] mt-2 leading-relaxed" style={{ color: 'var(--faint)' }}>
-                    <span style={{ color: 'var(--si)' }}>— front</span> = {paretoRes.front.length} non-dominated designs; faint dots = all evaluated (red = infeasible). Dashed = spec limits (≤{targets.power_uw}µW, ≤{targets.decision_time_ps}ps). Lower-left is better — click a point to load that trade-off.
+                    <span style={{ color: 'var(--si)' }}>— front</span> = {paretoRes.front.length} non-dominated designs; faint dots = all evaluated (red = infeasible). Dashed = spec limits (≤{targets.power_uw}µW, ≤{targets.decision_time_ps}ps). Lower-left is better — click a front point for details.
                   </p>
+                  {/* 선택점 상세: 측정값 + 소자 크기 + 적용/넷리스트 */}
+                  {paretoSel != null && paretoRes.front[paretoSel] && (() => {
+                    const pt = paretoRes.front[paretoSel]
+                    return (
+                      <div className="rounded-xl p-3 mt-3" style={{ background: 'color-mix(in srgb, var(--warn) 7%, var(--surface-2))', border: '1px solid color-mix(in srgb, var(--warn) 35%, var(--line))' }}>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="mono text-[11px] tnum" style={{ color: 'var(--text)' }}>
+                            ◎ front #{paretoSel + 1} — <span style={{ color: 'var(--ag)' }}>{pt.power_uw}µW</span> · {pt.decision_time_ps}ps · σ(pred) {pt.offp}mV
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => updateParams({ ...params, devices: pt.devices })} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }} title="이 크기를 에디터에 로드">↧ 적용</button>
+                            <button onClick={() => downloadNetlist('/api/netlist', { ...params, devices: pt.devices }, `strongarm_front${paretoSel + 1}.sp`).catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }} title="이 크기의 SPICE 덱 다운로드">⤓ netlist</button>
+                          </div>
+                        </div>
+                        <div className="grid gap-1.5 mt-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+                          {(Object.keys(pt.devices) as (keyof typeof pt.devices)[]).map((k) => (
+                            <div key={String(k)} className="mono text-[10.5px] tnum rounded-lg px-2 py-1.5" style={{ background: 'var(--surface)', border: '1px solid var(--line-soft)' }}>
+                              <span style={{ color: 'var(--si)' }}>{DEVICE_META[k]?.name ?? String(k)}</span>
+                              <span style={{ color: 'var(--muted)' }}> {pt.devices[k].w_um}µ × {pt.devices[k].m}</span>
+                              <div style={{ color: 'var(--faint)' }}>{DEVICE_META[k]?.role}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })()}
                   <div className="flex flex-col gap-1.5 mt-3">
                     {paretoRes.front.slice(0, 8).map((pt, i) => (
-                      <button key={i} onClick={() => updateParams({ ...params, devices: pt.devices })} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)', color: 'var(--muted)' }} title="Load this sizing into the editor">
+                      <button key={i} onClick={() => setParetoSel(i)} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5" style={{ background: paretoSel === i ? 'color-mix(in srgb, var(--warn) 10%, var(--surface-2))' : 'var(--surface-2)', border: `1px solid ${paretoSel === i ? 'color-mix(in srgb, var(--warn) 40%, var(--line))' : 'var(--line-soft)'}`, color: 'var(--muted)' }} title="이 점의 상세 보기">
                         {pt.power_uw}µW · {pt.decision_time_ps}ps · σ {pt.offp}mV
                       </button>
                     ))}

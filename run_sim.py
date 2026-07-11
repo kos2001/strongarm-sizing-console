@@ -55,9 +55,9 @@ MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "models", "ptm_45nm_bulk.txt")
 
 # default seed = P1_SAR_ADC first-cut sizing, adapted to PTM 45nm bulk
-# (VDD 1.0 V nominal, minimum L = 45 nm for this node)
+# (VDD 0.7 V nominal, minimum L = 45 nm for this node)
 DEFAULT_PARAMS = {
-    "vdd": 1.0,
+    "vdd": 0.7,
     "vcm_frac": 0.62,     # input common mode as fraction of vdd
     "cload_ff": 15.0,
     "avt_mv_um": 2.0,     # Pelgrom coefficient (mV*um), ~45nm-class
