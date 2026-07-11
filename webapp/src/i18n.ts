@@ -17,6 +17,7 @@ export const NAV_LABELS: Record<string, Bi> = {
   ber: { ko: '노이즈 / BER', en: 'Noise / BER' },
   pvt: { ko: 'PVT 코너', en: 'PVT corners' },
   yield: { ko: '수율', en: 'Yield' },
+  wicked: { ko: 'WiCkeD 강건성', en: 'WiCkeD' },
   layout: { ko: '레이아웃', en: 'Layout' },
   flow: { ko: '전체 흐름', en: 'Full flow' },
   vcocircuit: { ko: '회로 · 파형', en: 'Circuit · wave' },
@@ -41,6 +42,7 @@ export const NAV_SUBS: Record<string, Bi> = {
   ber: { ko: '입력 대비 에러율', en: 'error rate vs Vin' },
   pvt: { ko: '공정 · 전압 · 온도', en: 'process · voltage · temp' },
   yield: { ko: '미스매치 × PVT', en: 'mismatch × PVT' },
+  wicked: { ko: 'β · 고시그마 수율', en: 'β · high-sigma yield' },
   layout: { ko: 'GDS + DRC', en: 'GDS + DRC' },
   flow: { ko: '크기→PVT→GDS', en: 'size → PVT → GDS' },
   vcocircuit: { ko: '회로도 · 발진 파형', en: 'schematic · waveform' },
@@ -165,6 +167,16 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
     read: {
       ko: '큰 숫자가 수율(%)입니다 — 생산에서 실제로 쓸 수 있는 칩 비율이에요. 아래 막대는 어떤 이유로 떨어졌는지(오프셋/속도/오판정) 보여줍니다. 점 그래프에서 초록 상자 안이 합격입니다.',
       en: 'The big number is the yield (%) — the share of chips usable in production. The bars show why chips failed (offset / too slow / wrong decision). In the scatter, inside the green box = pass.',
+    },
+  },
+  wicked: {
+    what: {
+      ko: 'Cadence(구 MunEDA) WiCkeD 방법론을 이 ngspice 백엔드에 적용한 강건성 분석입니다. 스펙 경계까지의 통계적 거리 β(worst-case distance)를 재고, 그 실패 방향으로 치우쳐 뽑는 중요도 샘플링(importance sampling)으로 일반 몬테카를로가 못 잡는 희귀 불량(고시그마)을 추정합니다.',
+      en: 'Robustness analysis applying the Cadence (ex-MunEDA) WiCkeD methodology to this ngspice backend: it measures β, the statistical distance to the spec boundary (worst-case distance), and uses importance sampling shifted toward that failure direction to estimate rare high-sigma failures plain Monte-Carlo cannot resolve.',
+    },
+    read: {
+      ko: 'β가 클수록 튼튼한 설계입니다 — β≈3이면 수율 ~99.87%. 수율 페이지의 48샘플 몬테카를로는 ~2σ까지만 구분하므로, 99% 이상을 주장하려면 이 페이지의 β·중요도 샘플링 추정을 쓰세요. 최악 코너 표는 어떤 PVT 조건이 한계인지 짚어주고, 전체 흐름 버튼은 FEO→DNO→WCO→WCD 사인오프를 한 번에 실행합니다(수 분). 해석적 프록시이므로 절대값보다 설계안 간 비교에 쓰는 것이 안전합니다.',
+      en: 'Bigger β = more robust — β≈3 means ~99.87% yield. The 48-sample Monte-Carlo on the Yield page only resolves ~2σ, so use the β / importance-sampling estimates here to claim ≥99%. The worst-corner table pinpoints which PVT condition is limiting, and the full-flow button runs the FEO→DNO→WCO→WCD sign-off end to end (a few minutes). It is an analytic proxy — safest for comparing designs, not as absolute sign-off numbers.',
     },
   },
   layout: {

@@ -15,6 +15,7 @@ import Schematic from './components/Schematic'
 import SensitivityChart from './components/SensitivityChart'
 import VcoPage from './components/VcoPage'
 import WaveformChart from './components/WaveformChart'
+import WickedPage from './components/WickedPage'
 import YieldView from './components/YieldView'
 import { NAV_LABELS, NAV_SUBS, t, UI, type Lang } from './i18n'
 
@@ -63,7 +64,7 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
   },
 ]
 
-type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'layout' | 'flow'
+type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'wicked' | 'layout' | 'flow'
   | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopareto' | 'vcopn' | 'vcopvt' | 'vcopushing' | 'vcolayout' | 'vcoflow'
 type Domain = 'comparator' | 'vco'
 const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
@@ -78,6 +79,7 @@ const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
   { id: 'ber', glyph: '⊹' },
   { id: 'pvt', glyph: '◫' },
   { id: 'yield', glyph: '⊞' },
+  { id: 'wicked', glyph: 'β' },
   { id: 'layout', glyph: '▧' },
   { id: 'flow', glyph: '⇉' },
 ]
@@ -1046,6 +1048,8 @@ export default function App() {
               )}
             </div>
           )}
+
+          {page === 'wicked' && <WickedPage params={params} targets={targets} busy={busy} apiUp={apiUp} onApply={updateParams} />}
 
           {domain === 'vco' && <VcoPage view={VCO_VIEW[page]} lang={lang} theme={theme} />}
 
