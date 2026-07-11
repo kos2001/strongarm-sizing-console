@@ -744,6 +744,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
+    def _text(self, s, code=200):
+        body = s.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self._cors()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
         self.send_response(code)
@@ -800,7 +809,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path == "/api/simulate":
+            if self.path == "/api/netlist":
+                # 현재 파라미터의 SPICE 덱(.sp)을 그대로 반환 — 직접 ngspice 실행용
+                payload = self._read_json()
+                base = payload.get("params", {})
+                full = copy.deepcopy(run_sim.DEFAULT_PARAMS)
+                full.update({k: v for k, v in base.items() if k != "devices"})
+                full["devices"] = run_sim.merge_devices(base.get("devices"))
+                self._text(run_sim.gen_netlist(full, vdiff=float(payload.get("vdiff", 0.01))))
+            elif self.path == "/api/simulate":
                 payload = self._read_json()
                 result = run_sim.run_sim(payload.get("params", {}),
                                          do_offset=bool(payload.get("do_offset", True)),
@@ -956,6 +973,9 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/maxfclk":
                 payload = self._read_json()
                 self._json(run_sim.max_fclk_sweep(payload.get("params", {})))
+            elif self.path == "/api/vco/netlist":
+                payload = self._read_json()
+                self._text(vco_sim.gen_vco_netlist(vco_sim._full(payload.get("params", {}))))
             elif self.path == "/api/vco/simulate":
                 payload = self._read_json()
                 self._json(vco_sim.run_vco(payload.get("params", {}),

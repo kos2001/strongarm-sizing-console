@@ -5,6 +5,7 @@ import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushi
 import VcoPhaseNoiseChart from './VcoPhaseNoiseChart'
 import TuningChart from './TuningChart'
 import VcoSchematic from './VcoSchematic'
+import { downloadNetlist } from '../netlist'
 import VcoWaveformChart from './VcoWaveformChart'
 import VcoPvtView from './VcoPvtView'
 import VcoPushingChart from './VcoPushingChart'
@@ -86,7 +87,13 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     return (
       <div className="flex flex-col gap-4">
         <div className="p-5" style={box}>
-          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), <div className="flex items-center gap-2">{topoBadge}{runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform'))}</div>)}
+          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), <div className="flex items-center gap-2">{topoBadge}
+            <button onClick={() => downloadNetlist('/api/vco/netlist', params, `vco_xcpl_N${params.n_stages}.sp`).catch(() => {})}
+              className="mono text-xs px-3 py-1.5 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+              title={T(lang, '현재 파라미터의 SPICE 덱(.sp) 다운로드 — ngspice 로 직접 실행 가능', 'Download the SPICE deck (.sp) for the current parameters — runs directly in ngspice')}>
+              ⤓ {T(lang, '넷리스트', 'netlist')}
+            </button>
+            {runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform'))}</div>)}
           <div className="overflow-x-auto"><VcoSchematic devices={params.devices} nStages={params.n_stages} /></div>
           {wf ? (
             <div className="mt-4">
@@ -293,8 +300,13 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             </div>
           )}
           {view === 'opt' && opt && (
-            <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg" style={{ color: opt.success ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${opt.success ? 'var(--good)' : 'var(--warn)'} 12%, transparent)` }}>
-              {opt.success ? '✓' : '≈'} {T(lang, '목표', 'target')} {opt.target_f_ghz} GHz → {opt.nominal.f_osc_ghz} GHz · {opt.nominal.power_uw} µW · {opt.n_sims} SPICE evals{opt.n_surrogate_skips ? ` · ${opt.n_surrogate_skips} ${T(lang, '스킵', 'skipped')}` : ''}
+            <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg flex items-center justify-between gap-2" style={{ color: opt.success ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${opt.success ? 'var(--good)' : 'var(--warn)'} 12%, transparent)` }}>
+              <span>{opt.success ? '✓' : '≈'} {T(lang, '목표', 'target')} {opt.target_f_ghz} GHz → {opt.nominal.f_osc_ghz} GHz · {opt.nominal.power_uw} µW · {opt.n_sims} SPICE evals{opt.n_surrogate_skips ? ` · ${opt.n_surrogate_skips} ${T(lang, '스킵', 'skipped')}` : ''}</span>
+              <button onClick={() => downloadNetlist('/api/vco/netlist', opt.final_params, `vco_xcpl_opt_N${opt.final_params.n_stages}.sp`).catch(() => {})}
+                className="mono text-[11px] px-2.5 py-1 rounded-full shrink-0" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                title={T(lang, '최적화된 소자 크기가 반영된 SPICE 덱(.sp) 다운로드', 'Download the SPICE deck (.sp) with the optimized device sizes')}>
+                ⤓ {T(lang, '넷리스트', 'netlist')}
+              </button>
             </div>
           )}
         </div>

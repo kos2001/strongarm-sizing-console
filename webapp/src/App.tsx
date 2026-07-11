@@ -12,6 +12,7 @@ import MonteCarloChart from './components/MonteCarloChart'
 import ParetoChart from './components/ParetoChart'
 import PageHelp from './components/PageHelp'
 import Schematic from './components/Schematic'
+import { downloadNetlist } from './netlist'
 import SensitivityChart from './components/SensitivityChart'
 import VcoPage from './components/VcoPage'
 import WaveformChart from './components/WaveformChart'
@@ -702,6 +703,10 @@ export default function App() {
                   <button onClick={runPostLayout} disabled={busy || plLoading} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
                     {plLoading ? 'extracting…' : '⚡ parasitics'}
                   </button>
+                  <button onClick={() => downloadNetlist('/api/netlist', params, 'strongarm.sp').catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                    title="현재 파라미터의 SPICE 덱(.sp) 다운로드 — ngspice 로 직접 실행 가능">
+                    ⤓ netlist
+                  </button>
                 </div>
               </div>
               {play && stepNow && (
@@ -798,8 +803,12 @@ export default function App() {
                       })}
                     </ol>
                   </div>
-                  <p className="mono text-[11px] mt-3 leading-relaxed" style={{ color: 'var(--faint)' }}>
-                    Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.
+                  <p className="mono text-[11px] mt-3 leading-relaxed flex items-center justify-between gap-2" style={{ color: 'var(--faint)' }}>
+                    <span>Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.</span>
+                    <button onClick={() => downloadNetlist('/api/netlist', opt.final_params, 'strongarm_opt.sp').catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full shrink-0" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                      title="최적화된 소자 크기가 반영된 SPICE 덱(.sp) 다운로드">
+                      ⤓ netlist
+                    </button>
                   </p>
                 </div>
               ) : (
