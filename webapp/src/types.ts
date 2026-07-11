@@ -247,6 +247,35 @@ export interface VcoPhaseNoise {
 }
 export interface VcoParetoPoint { power_uw: number | null; f_osc_ghz: number | null; devices: Partial<Record<VcoDeviceKey, Device>> }
 export interface VcoParetoResult { front: VcoParetoPoint[]; all: { power_uw: number | null; f_osc_ghz: number | null; feasible: boolean }[]; error?: string }
+// ── VCO WiCkeD (수율·강건성) ──────────────────────────────────────────────
+export interface VcoWickedVerdict {
+  nominal: VcoNominal & { vctrl_v?: number }
+  margins: Record<string, number | null>
+  pass: boolean
+  targets?: Record<string, number>
+  error?: string
+}
+export interface VcoWickedWcd {
+  beta_sigma: number | null
+  estimated_yield_pct: number | null
+  nearest_failure?: { vdd?: number; temp?: number; pskew?: number; f_osc_ghz?: number | null; power_uw?: number | null; oscillates?: boolean } | null
+  n_samples?: number
+  error?: string
+}
+export interface VcoWickedMismatch {
+  n: number
+  mean_f_ghz: number | null
+  sigma_f_mhz: number | null
+  sigma_f_pct: number | null
+  osc_failures: number
+  startup_yield_pct: number | null
+  error?: string
+}
+export interface VcoWickedYieldSweep {
+  points: { pskew: number; yield_pct: number; n: number }[]
+  error?: string
+}
+
 export interface VcoPostLayout { schematic: VcoWaveform; postlayout: VcoWaveform; par_caps: { c_node_ff: number; per_device_ff: Record<string, number>; method: string }; error?: string }
 export interface VcoFlowStage { name: string; ok: boolean; detail: string }
 export interface VcoFullflow {

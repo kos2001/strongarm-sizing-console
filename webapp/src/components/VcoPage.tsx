@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform } from '../types'
+import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, VcoWickedMismatch, VcoWickedVerdict, VcoWickedWcd, VcoWickedYieldSweep } from '../types'
 import { VCO_DEVICE_META } from '../types'
-import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform } from '../api'
+import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform, vcoWickedMismatch, vcoWickedVerdict, vcoWickedWcd, vcoWickedYieldsweep } from '../api'
 import VcoPhaseNoiseChart from './VcoPhaseNoiseChart'
 import TuningChart from './TuningChart'
 import VcoSchematic from './VcoSchematic'
@@ -24,7 +24,7 @@ const VCO_DEFAULTS: VcoParams = {
 const DKEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven']
 const XKEYS: VcoDeviceKey[] = [...DKEYS, 'xcplp', 'rstp']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
-type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn'
+type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'
 
 export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: View }) {
   const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
@@ -36,6 +36,8 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const [push, setPush] = useState<VcoPushing | null>(null)
   const [pareto, setPareto] = useState<VcoParetoResult | null>(null)
   const [paretoSel, setParetoSel] = useState<number | null>(null) // 파레토 front 선택점(상세 패널)
+  // WiCkeD 수율·강건성 결과(4종 병렬 실행)
+  const [wk, setWk] = useState<{ verdict?: VcoWickedVerdict; wcd?: VcoWickedWcd; mm?: VcoWickedMismatch; ys?: VcoWickedYieldSweep } | null>(null)
   const [lay, setLay] = useState<LayoutResult | null>(null)
   const [flow, setFlow] = useState<VcoFullflow | null>(null)
   const [pn, setPn] = useState<VcoPhaseNoise | null>(null)
@@ -60,6 +62,16 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   const guard = async (tag: string, fn: () => Promise<void>) => { setLoad(tag); try { await fn() } catch { /* ignore */ } finally { setLoad('') } }
   const run = () => guard('run', async () => { const r = await vcoSimulate(params, true); setRes(r); setTuning(r.tuning ?? null) })
+  const runWicked = () => guard('wicked', async () => {
+    // 무거운 분석 4종 — 동시 실행은 로컬 ngspice 풀을 고갈시키므로 순차 실행,
+    // 단계별로 카드가 나타나도록 부분 상태를 즉시 반영한다.
+    const targets = { f_ghz: targetF }
+    setWk({})
+    const verdict = await vcoWickedVerdict(params, targets); setWk((w) => ({ ...w, verdict }))
+    const wcd = await vcoWickedWcd(params, targets); setWk((w) => ({ ...w, wcd }))
+    const mm = await vcoWickedMismatch(params); setWk((w) => ({ ...w, mm }))
+    const ys = await vcoWickedYieldsweep(params, targets); setWk((w) => ({ ...w, ys }))
+  })
   const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning); setTimeout(() => document.getElementById('vco-tuning-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150) } })
   const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
   const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
@@ -165,6 +177,104 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             </p>
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '측정된 전력·주파수·단수로부터 열잡음 기반 위상잡음 L(Δf)·지터·FoM을 추정합니다 — VCO의 핵심 스펙.', 'Estimates thermal phase noise L(Δf), jitter, and FoM from the measured power, frequency, and stage count — the key VCO spec.')}</p>}
+      </div>
+    )
+  }
+
+  // ---- WiCkeD 수율 · 강건성 ----
+  if (view === 'yield') {
+    const mg = wk?.verdict?.margins ?? {}
+    const mgLabel: Record<string, { ko: string; en: string }> = {
+      oscillates: { ko: '발진', en: 'oscillates' }, f_band: { ko: 'f 밴드', en: 'f band' }, power_uw: { ko: '전력', en: 'power' },
+    }
+    return (
+      <div className="p-5" style={box}>
+        {hd(T(lang, '수율 · 강건성 (WiCkeD)', 'Yield · robustness (WiCkeD)'),
+          <div className="flex gap-2 items-center">
+            <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
+            <input type="number" step={0.1} min={0.1} disabled={busy} value={targetF} onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
+            <span className="mono text-[11px]" style={lab}>GHz ±15%</span>
+            {runBtn(runWicked, 'wicked', T(lang, '⊞ 강건성 분석 실행', '⊞ Run robustness'))}
+          </div>)}
+        {wk ? (
+          <div className="flex flex-col gap-4">
+            {busy && <p className="mono text-[11px]" style={lab}>{T(lang, '실행 중 — 완료된 단계부터 표시됩니다…', 'running — stages appear as they finish…')}</p>}
+            {/* ① 공칭 판정 */}
+            {wk.verdict && <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '① 공칭 판정 · 스펙 마진', '① nominal verdict · spec margins')}</div>
+                <span className="mono text-xs px-2.5 py-1 rounded-full" style={{ color: wk.verdict.pass ? 'var(--good)' : 'var(--bad)', background: `color-mix(in srgb, ${wk.verdict.pass ? 'var(--good)' : 'var(--bad)'} 14%, transparent)` }}>
+                  {wk.verdict.pass ? 'PASS' : 'FAIL'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <Metric label="f_osc" value={wk.verdict.nominal.f_osc_ghz != null ? `${wk.verdict.nominal.f_osc_ghz} GHz` : '—'} />
+                <Metric label={T(lang, '전력', 'power')} value={wk.verdict.nominal.power_uw != null ? `${wk.verdict.nominal.power_uw} µW` : '—'} />
+                <Metric label={T(lang, '발진', 'oscillates')} value={wk.verdict.nominal.oscillates ? '✓' : '✗'} ok={wk.verdict.nominal.oscillates} />
+              </div>
+              <div className="flex gap-2 mt-2 flex-wrap">
+                {Object.entries(mg).map(([k, v]) => (
+                  <span key={k} className="mono text-[10.5px] px-2 py-1 rounded-full tnum" style={{ color: (v ?? -1) >= 0 ? 'var(--good)' : 'var(--bad)', border: '1px solid var(--line)' }}>
+                    {T(lang, mgLabel[k]?.ko ?? k, mgLabel[k]?.en ?? k)} {T(lang, '마진', 'margin')} {v != null ? (v * 100).toFixed(1) + '%' : '—'}
+                  </span>
+                ))}
+              </div>
+            </div>}
+            {/* ② WCD + ③ 미스매치 */}
+            <div className="grid grid-cols-2 gap-4">
+              {wk.wcd && <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+                <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={lab}>{T(lang, '② 최악거리 WCD', '② worst-case distance')}</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Metric label="β (σ)" value={wk.wcd.beta_sigma != null ? `${wk.wcd.beta_sigma} σ` : '—'} big ok={(wk.wcd.beta_sigma ?? 0) >= 3} />
+                  <Metric label={T(lang, '추정 수율', 'est. yield')} value={wk.wcd.estimated_yield_pct != null ? `${wk.wcd.estimated_yield_pct}%` : '—'} />
+                </div>
+                {wk.wcd.nearest_failure && (
+                  <p className="mono text-[10.5px] mt-2 leading-relaxed" style={lab}>
+                    {T(lang, '가장 가까운 실패점', 'nearest failure')}: VDD {wk.wcd.nearest_failure.vdd ?? '—'}V · {wk.wcd.nearest_failure.temp ?? '—'}°C
+                    {wk.wcd.nearest_failure.f_osc_ghz != null ? ` · f ${wk.wcd.nearest_failure.f_osc_ghz} GHz` : ''}{wk.wcd.nearest_failure.oscillates === false ? T(lang, ' · 발진 실패', ' · no oscillation') : ''}
+                  </p>
+                )}
+              </div>}
+              {wk.mm && <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+                <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={lab}>{T(lang, '③ V_th 미스매치 MC', '③ V_th mismatch MC')} · n={wk.mm.n}</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Metric label="σ_f" value={wk.mm.sigma_f_mhz != null ? `${wk.mm.sigma_f_mhz} MHz (${wk.mm.sigma_f_pct}%)` : '—'} big />
+                  <Metric label={T(lang, '기동 수율', 'startup yield')} value={wk.mm.startup_yield_pct != null ? `${wk.mm.startup_yield_pct}%` : '—'} ok={(wk.mm.startup_yield_pct ?? 0) >= 99} />
+                </div>
+                <p className="mono text-[10.5px] mt-2" style={lab}>{T(lang, '평균 f', 'mean f')} {wk.mm.mean_f_ghz ?? '—'} GHz · {T(lang, '발진 실패', 'osc failures')} {wk.mm.osc_failures}</p>
+              </div>}
+            </div>
+            {/* ④ 수율 스윕 */}
+            {wk.ys && <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+              <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={lab}>{T(lang, '④ 수율 vs 공정 스큐', '④ yield vs process skew')}</div>
+              <svg viewBox="0 0 420 110" width="100%" style={{ maxWidth: 560, display: 'block' }} role="img" aria-label="yield vs process skew">
+                <line x1={34} y1={8} x2={34} y2={88} stroke="var(--line)" strokeWidth={1} />
+                <line x1={34} y1={88} x2={410} y2={88} stroke="var(--line)" strokeWidth={1} />
+                {(() => {
+                  const pts = wk.ys.points ?? []
+                  if (!pts.length) return null
+                  const xs = pts.map((q) => q.pskew), lo = Math.min(...xs), hi = Math.max(...xs)
+                  const X = (v: number) => 34 + ((v - lo) / (hi - lo || 1)) * 370
+                  const Y = (v: number) => 88 - (v / 100) * 76
+                  return (
+                    <g>
+                      <polyline points={pts.map((q) => `${X(q.pskew)},${Y(q.yield_pct)}`).join(' ')} fill="none" stroke="var(--ag)" strokeWidth={1.8} />
+                      {pts.map((q, i) => (
+                        <g key={i}>
+                          <circle cx={X(q.pskew)} cy={Y(q.yield_pct)} r={3} fill="var(--ag)" />
+                          <text x={X(q.pskew)} y={102} fontSize={8.5} fill="var(--faint)" textAnchor="middle" fontFamily="ui-monospace,monospace">{(q.pskew * 100).toFixed(0)}%</text>
+                        </g>
+                      ))}
+                      <text x={30} y={14} fontSize={8.5} fill="var(--faint)" textAnchor="end" fontFamily="ui-monospace,monospace">100</text>
+                      <text x={30} y={90} fontSize={8.5} fill="var(--faint)" textAnchor="end" fontFamily="ui-monospace,monospace">0</text>
+                    </g>
+                  )
+                })()}
+              </svg>
+              <p className="mono text-[10.5px] mt-1" style={lab}>{T(lang, 'x = 공정 스큐(±%), y = 수율(%) — 각 점은 미스매치 MC n=6', 'x = process skew (±%), y = yield (%) — each point is a mismatch MC of n=6')}</p>
+            </div>}
+          </div>
+        ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '⊞ 실행을 누르면 공칭 판정 → 최악거리(WCD) → 미스매치 MC → 수율 스윕을 실제 ngspice 로 수행합니다(수십 초).', 'Press ⊞ to run nominal verdict → WCD → mismatch MC → yield sweep with real ngspice (tens of seconds).')}</p>}
       </div>
     )
   }

@@ -1,4 +1,4 @@
-import type { BerResult, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, YieldResult } from './types'
+import type { BerResult, VcoWickedMismatch, VcoWickedVerdict, VcoWickedWcd, VcoWickedYieldSweep, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, YieldResult } from './types'
 
 async function post<T>(path: string, params: Params): Promise<T> {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
@@ -21,6 +21,14 @@ export async function vcoOptimize(params: VcoParams, targetFGhz: number): Promis
   const r = await fetch('/api/vco/optimize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, targets: { f_ghz: targetFGhz } }) })
   return r.json()
 }
+// VCO WiCkeD — targets/샘플 수를 함께 보내는 호출
+const wpost = <T,>(path: string, params: VcoParams, extra: Record<string, unknown> = {}): Promise<T> =>
+  fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, ...extra }) }).then((r) => r.json())
+export const vcoWickedVerdict = (p: VcoParams, targets?: Record<string, number>) => wpost<VcoWickedVerdict>('/api/vco/wicked/verdict', p, { targets })
+export const vcoWickedWcd = (p: VcoParams, targets?: Record<string, number>) => wpost<VcoWickedWcd>('/api/vco/wicked/wcd', p, { targets, n_samples: 12 })
+export const vcoWickedMismatch = (p: VcoParams) => wpost<VcoWickedMismatch>('/api/vco/wicked/mismatch', p, { n: 10 })
+export const vcoWickedYieldsweep = (p: VcoParams, targets?: Record<string, number>) => wpost<VcoWickedYieldSweep>('/api/vco/wicked/yieldsweep', p, { targets, n_points: 5, n_mc: 4 })
+
 const vpost = <T,>(path: string, params: VcoParams): Promise<T> =>
   fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) }).then((r) => r.json())
 export const vcoWaveform = (p: VcoParams) => vpost<VcoWaveform>('/api/vco/waveform', p)

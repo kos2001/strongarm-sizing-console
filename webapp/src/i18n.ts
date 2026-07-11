@@ -26,6 +26,7 @@ export const NAV_LABELS: Record<string, Bi> = {
   vcopn: { ko: '위상잡음', en: 'Phase noise' },
   vcopvt: { ko: 'PVT 코너', en: 'PVT corners' },
   vcopushing: { ko: '전원 푸싱', en: 'Supply pushing' },
+  vcoyield: { ko: '수율 · 강건성', en: 'Yield · robustness' },
   vcolayout: { ko: '레이아웃', en: 'Layout' },
   vcoflow: { ko: '전체 흐름', en: 'Full flow' },
 }
@@ -49,6 +50,7 @@ export const NAV_SUBS: Record<string, Bi> = {
   vcopareto: { ko: '전력 ↔ 주파수 (NSGA-II)', en: 'power ↔ freq (NSGA-II)' },
   vcopn: { ko: 'L(Δf) · 지터 · FoM', en: 'L(Δf) · jitter · FoM' },
   vcopvt: { ko: '공정 · 전압 · 온도', en: 'process · voltage · temp' },
+  vcoyield: { ko: 'WiCkeD · WCD·미스매치·수율', en: 'WiCkeD · WCD·mismatch·yield' },
   vcopushing: { ko: 'f vs VDD · GHz/V', en: 'f vs VDD · GHz/V' },
   vcolayout: { ko: 'GDS + DRC', en: 'GDS + DRC' },
   vcoflow: { ko: '크기→기생→PVT→GDS', en: 'size → parasitics → GDS' },
@@ -215,6 +217,16 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
     read: {
       ko: '↻ 파형을 누르면 두 링 노드(o1·o2)의 실제 트랜지언트가 그려집니다 — 서로 지연된 위상으로 계속 진동. 회로도의 W×M은 현재 크기를 반영합니다.',
       en: 'Press ↻ waveform to plot the real transient of two ring nodes (o1·o2) — continuously oscillating at phase-shifted delays. The schematic W×M reflects the current sizing.',
+    },
+  },
+  vcoyield: {
+    what: {
+      ko: 'WiCkeD식 강건성 분석 — ① 공칭 판정(목표 밴드·전력 마진), ② 최악거리 WCD(공정/전압/온도 공간에서 실패까지의 σ 거리 → 수율 추정), ③ V_th 미스매치 MC(주파수 산포 σ_f·기동 수율), ④ 공정 스큐별 수율 스윕. 전부 실제 ngspice 실행입니다.',
+      en: 'WiCkeD-style robustness — ① nominal verdict (band/power margins), ② worst-case distance in σ (yield estimate), ③ V_th-mismatch MC (σ_f, startup yield), ④ yield vs process skew. All real ngspice runs.',
+    },
+    read: {
+      ko: 'β(σ)가 클수록 강건 — 3σ ≈ 99.87%. 미스매치 σ_f 는 PLL 대역폭이 흡수할 수 있는 수준인지로 판단. 수율 스윕이 0%대라면 목표 f 밴드(기본 1.5GHz±15%)와 현재 설계의 f 가 어긋난 것이니 목표 f 를 조정하세요.',
+      en: 'Larger β(σ) = more robust (3σ ≈ 99.87%). Judge σ_f against what your PLL bandwidth can absorb. A ~0% sweep usually means the design frequency sits outside the target band (default 1.5GHz±15%) — adjust target f.',
     },
   },
   vcopn: {
