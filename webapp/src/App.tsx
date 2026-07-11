@@ -13,6 +13,7 @@ import ParetoChart from './components/ParetoChart'
 import PageHelp from './components/PageHelp'
 import Schematic from './components/Schematic'
 import { downloadNetlist } from './netlist'
+import NetlistImport from './components/NetlistImport'
 import SensitivityChart from './components/SensitivityChart'
 import VcoPage from './components/VcoPage'
 import WaveformChart from './components/WaveformChart'
@@ -767,6 +768,7 @@ export default function App() {
                   </div>
                 </div>
               )}
+            <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), devices: { ...params.devices, ...pp.devices } })} />
             </div>
           )}
 
