@@ -30,14 +30,46 @@ GR = 0.35          # guard-ring width
 GAP = 0.9          # gap between device blocks
 SCALE_H = 0.35     # um of diffusion height per um of device width (keeps blocks compact)
 
+# ---- 2nm급(gaa2nm) 나노시트 그리드 룰 — IRDS 수치 근사 (µm) ----
+# 소자는 CPP 그리드 위의 finger(M) × 나노시트 스택 줄(rows = W/0.2µ)로만
+# 존재한다: diffusion 이 연속 높이가 아니라 시트 줄 단위로 그려져
+# W 양자화가 레이아웃에서 그대로 보인다. 실제 2nm BEOL/MOL 은 NDA 라
+# 수치는 IRDS 로드맵급 근사이고 사인오프 룰이 아니다.
+GAA = {
+    "cpp": 0.048,       # contacted poly pitch
+    "poly_w": 0.014,    # drawn gate length 14nm
+    "met_w": 0.020,     # M1 strap width
+    "sheet_p": 0.050,   # 스택 줄 수직 피치
+    "sheet_w": 0.030,   # 스택(3-시트) 드로잉 폭
+    "gr": 0.10, "gap": 0.15,
+    "min_w_met": 0.018, "min_w_poly": 0.012, "min_s": 0.020,
+}
 
-def _device_block(x0, name, dev, kind):
+
+def _device_block(x0, name, dev, kind, gaa=False):
     """One multi-finger MOS block starting at x0; returns (layer->rects, width)."""
     nf = max(int(dev["m"]), 1)
+    rects = {k: [] for k in LAYERS}
+    if gaa:
+        # 나노시트 스택 그리드: 세로 = 스택 줄(rows = W/0.2µ), 가로 = finger(M)
+        rows = max(1, round(float(dev["w_um"]) / 0.2))
+        cpp, pw, mw = GAA["cpp"], GAA["poly_w"], GAA["met_w"]
+        sp, sw = GAA["sheet_p"], GAA["sheet_w"]
+        hh = round((rows - 1) * sp + sw, 4)        # 스택 줄들이 차지하는 높이
+        dw = round(nf * cpp + cpp, 4)
+        if kind == "p":
+            rects["nwell"].append([round(x0 - 0.05, 4), -0.05, round(dw + 0.10, 4), round(hh + 0.10, 4)])
+        for r in range(rows):                      # 시트 스택 줄 — 양자화가 보인다
+            rects["diff"].append([x0, round(r * sp, 4), dw, sw])
+        for i in range(nf):                        # 게이트 fingers (CPP 그리드)
+            px = round(x0 + cpp * (i + 0.5) - pw / 2, 4)
+            rects["poly"].append([px, -0.03, pw, round(hh + 0.06, 4)])
+        for i in range(nf + 1):                    # S/D met1 straps
+            rects["met1"].append([round(x0 + cpp * i, 4), 0.0, mw, hh])
+        return rects, dw
     wf = max(dev["w_um"], 0.3)
     dh = round(max(wf * SCALE_H, 0.8), 3)          # diffusion height (compact)
     dw = round(nf * PPITCH + PPITCH, 3)            # diffusion width
-    rects = {k: [] for k in LAYERS}
     if kind == "p":
         rects["nwell"].append([x0 - 0.3, -0.3, dw + 0.6, dh + 0.6])
     rects["diff"].append([x0, 0, dw, dh])
@@ -45,33 +77,33 @@ def _device_block(x0, name, dev, kind):
         px = round(x0 + PPITCH * (i + 0.5) - POLY_W / 2, 3)
         rects["poly"].append([px, -0.25, POLY_W, dh + 0.5])
     for i in range(nf + 1):                        # source/drain met1 straps between fingers
-        mx = round(x0 + PPITCH * i - MET_W / 2 + PPITCH / 2 - PPITCH / 2, 3)
         rects["met1"].append([round(x0 + PPITCH * i, 3), 0.05, MET_W, dh - 0.1])
     return rects, dw
 
 
-def _build_layout(blocks, cell_name, gds_path, gds_default):
+def _build_layout(blocks, cell_name, gds_path, gds_default, gaa=False):
     """Place an ordered list of (name, device, kind) as a row of multi-finger MOS
     blocks + PMOS nwell + substrate guard ring, write GDS, run rule DRC. Shared by
     the comparator and the ring-VCO layout generators."""
+    gr, gap = (GAA["gr"], GAA["gap"]) if gaa else (GR, GAP)
     layer_rects = {k: [] for k in LAYERS}
-    x = GR + GAP
+    x = gr + gap
     labels = []
     for name, dev, kind in blocks:
-        rb, w = _device_block(x, name, dev, kind)
+        rb, w = _device_block(x, name, dev, kind, gaa=gaa)
         for lyr, rs in rb.items():
             layer_rects[lyr].extend(rs)
         labels.append({"name": name, "x": round(x, 3), "w": w, "kind": kind})
-        x += w + GAP
+        x += w + gap
 
-    cell_w = round(x - GAP + GR, 3)
+    cell_w = round(x - gap + gr, 3)
     top = max((r[1] + r[3] for rs in layer_rects.values() for r in rs), default=2.0)
     bot = min((r[1] for rs in layer_rects.values() for r in rs), default=0.0)
-    ring_h = round(top - bot + 2 * GR, 3)
-    y0 = round(bot - GR, 3)
+    ring_h = round(top - bot + 2 * gr, 3)
+    y0 = round(bot - gr, 3)
     for x1, y1, w1, h1 in [
-        [0, y0, cell_w, GR], [0, y0 + ring_h - GR, cell_w, GR],
-        [0, y0, GR, ring_h], [cell_w - GR, y0, GR, ring_h],
+        [0, y0, cell_w, gr], [0, y0 + ring_h - gr, cell_w, gr],
+        [0, y0, gr, ring_h], [cell_w - gr, y0, gr, ring_h],
     ]:
         layer_rects["tap"].append([round(x1, 3), round(y1, 3), round(w1, 3), round(h1, 3)])
         layer_rects["met1"].append([round(x1, 3), round(y1, 3), round(w1, 3), round(h1, 3)])
@@ -98,28 +130,31 @@ def _build_layout(blocks, cell_name, gds_path, gds_default):
         "bbox": {"w": cell_w, "h": ring_h, "y0": y0},
         "area_um2": area,
         "gds_path": gds_written,
-        "drc": _drc(layer_rects),
+        "drc": _drc(layer_rects, gaa=gaa),
+        "ruleset": "gaa2nm(IRDS-approx)" if gaa else "sky130-class",
     }
 
 
 def generate_layout(params, gds_path=None):
     devices = params.get("devices", {})
+    gaa = params.get("model") == "gaa2nm"
     order = ["tail", "input", "ncc", "pcc", "pre"]
     kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p"}
     blocks = [(k, devices[k], kind[k]) for k in order if k in devices]
-    return _build_layout(blocks, "STRONGARM_COMPARATOR", gds_path, "strongarm.gds")
+    return _build_layout(blocks, "STRONGARM_COMPARATOR", gds_path, "strongarm.gds", gaa=gaa)
 
 
 def generate_vco_layout(params, gds_path=None):
     """Ring VCO layout: bias mirror (Mpref/Mnref) + N current-starved stages
     (Mbp/Mp/Mn/Mbn each) as a row of multi-finger MOS blocks + guard ring + DRC."""
     d = params.get("devices", {})
+    gaa = params.get("model") == "gaa2nm"
     n = int(params.get("n_stages", 5))
     blocks = [("biasP", d["starvep"], "p"), ("biasN", d["starven"], "n")]
     for i in range(1, n + 1):
         blocks += [(f"Mbp{i}", d["starvep"], "p"), (f"Mp{i}", d["invp"], "p"),
                    (f"Mn{i}", d["invn"], "n"), (f"Mbn{i}", d["starven"], "n")]
-    return _build_layout(blocks, "RING_VCO", gds_path, "ring_vco.gds")
+    return _build_layout(blocks, "RING_VCO", gds_path, "ring_vco.gds", gaa=gaa)
 
 
 def extract_vco_parasitics(params):
@@ -127,29 +162,35 @@ def extract_vco_parasitics(params):
     the drains of its stage's Mp/Mn plus the next stage's gates. Real drawn
     diffusion+met1 geometry × SKY130-class cap densities — PoC extraction."""
     d = params.get("devices", {})
-    cap_p = _device_cap_ff(d["invp"], "p")
-    cap_n = _device_cap_ff(d["invn"], "n")
+    gaa = params.get("model") == "gaa2nm"
+    cap_p = _device_cap_ff(d["invp"], "p", gaa)
+    cap_n = _device_cap_ff(d["invn"], "n", gaa)
     c_node = 0.5 * (cap_p + cap_n)   # drain share at the output node
     return {"c_node_ff": round(c_node, 3),
             "per_device_ff": {"invp": round(cap_p, 3), "invn": round(cap_n, 3)},
-            "method": "drawn diffusion+met1 area/perimeter × SKY130-class cap densities"}
+            "method": ("drawn nanosheet-grid geometry × 2nm-class cap densities (approx)" if gaa
+                       else "drawn diffusion+met1 area/perimeter × SKY130-class cap densities")}
 
 
 # areal / fringe cap densities (SKY130-class, order-of-magnitude) used to turn
 # drawn geometry into node capacitance — a real layout-derived estimate, not
 # sign-off extraction
 CAP = {"diff_area": 0.90, "diff_perim": 0.20, "met_area": 0.03, "met_perim": 0.04}  # fF per µm² / µm
+# 2nm급: GAA 는 접합이 기판에서 격리돼 면적 성분이 작고, 촘촘한 MOL/M1 의
+# 프린지가 지배한다 — 면적이 ~100× 작아지므로 절대값은 크게 줄어든다(근사)
+CAP_GAA = {"diff_area": 1.5, "diff_perim": 0.05, "met_area": 0.15, "met_perim": 0.05}
 
 
-def _device_cap_ff(dev, kind):
+def _device_cap_ff(dev, kind, gaa=False):
     """Junction + met1 capacitance (fF) of one device block, from its drawn
     diffusion and met1 geometry (same block builder as the layout)."""
-    rb, _dw = _device_block(0.0, "x", dev, kind)
+    rb, _dw = _device_block(0.0, "x", dev, kind, gaa=gaa)
+    cd = CAP_GAA if gaa else CAP
     c = 0.0
     for (rx, ry, rw, rh) in rb["diff"]:
-        c += CAP["diff_area"] * rw * rh + CAP["diff_perim"] * 2 * (rw + rh)
+        c += cd["diff_area"] * rw * rh + cd["diff_perim"] * 2 * (rw + rh)
     for (rx, ry, rw, rh) in rb["met1"]:
-        c += CAP["met_area"] * rw * rh + CAP["met_perim"] * 2 * (rw + rh)
+        c += cd["met_area"] * rw * rh + cd["met_perim"] * 2 * (rw + rh)
     return c
 
 
@@ -159,19 +200,26 @@ def extract_parasitics(params):
     pair + latch-NMOS sources. Each symmetric node gets half the paired-device
     geometry. Real geometry × areal/fringe cap — a PoC extraction, not sign-off."""
     dv = {**{k: v for k, v in params.get("devices", {}).items()}}
+    gaa = params.get("model") == "gaa2nm"
     kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p"}
-    cap = {k: _device_cap_ff(dv[k], kind[k]) for k in dv if k in kind}
+    cap = {k: _device_cap_ff(dv[k], kind[k], gaa) for k in dv if k in kind}
     c_out = 0.5 * (cap.get("pcc", 0) + cap.get("ncc", 0) + cap.get("pre", 0))
     c_int = 0.5 * (cap.get("input", 0) + cap.get("ncc", 0))
     return {"c_out_ff": round(c_out, 3), "c_int_ff": round(c_int, 3),
             "per_device_ff": {k: round(v, 3) for k, v in cap.items()},
-            "method": "drawn diffusion+met1 area/perimeter × SKY130-class cap densities"}
+            "method": ("drawn nanosheet-grid geometry × 2nm-class cap densities (approx)" if gaa
+                       else "drawn diffusion+met1 area/perimeter × SKY130-class cap densities")}
 
 
-def _drc(layer_rects, min_w=0.14, min_s=0.14):
-    """Light rule DRC: met1/poly minimum width + met1 spacing (µm)."""
+def _drc(layer_rects, gaa=False):
+    """Light rule DRC: met1/poly minimum width + met1 spacing (µm).
+    gaa2nm 은 2nm급 근사 룰(M1 18nm/게이트 12nm/간격 20nm)로 검사한다."""
+    if gaa:
+        min_w, poly_min, min_s = GAA["min_w_met"], GAA["min_w_poly"], GAA["min_s"]
+    else:
+        min_w, poly_min, min_s = 0.14, 0.15, 0.14
     viol = []
-    for lyr, mw in (("met1", min_w), ("poly", 0.15)):
+    for lyr, mw in (("met1", min_w), ("poly", poly_min)):
         for r in layer_rects[lyr]:
             if min(r[2], r[3]) < mw - 1e-6:
                 viol.append(f"{lyr} width {min(r[2], r[3])} < {mw}")

@@ -527,7 +527,9 @@ export default function App() {
         <div className="max-w-[1000px] mx-auto px-6 py-7 flex flex-col gap-5">
           <div className="flex items-baseline justify-between gap-4">
             <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{pageTitle}</h1>
-            <div className="mono text-[11px]" style={{ color: 'var(--faint)' }}>StrongARM latch · BSIM4 PTM 45nm</div>
+            <div className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
+              StrongARM latch · {params.model === 'gaa2nm' ? 'GAA 2nm≈ (BSIM4 근사)' : params.model === 'sky130' ? 'SKY130 (real PDK)' : 'BSIM4 PTM 45nm'}
+            </div>
           </div>
 
           {/* beginner-friendly explanation for the current page (KO/EN) */}
@@ -1236,7 +1238,7 @@ export default function App() {
           )}
 
           <p className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
-            {ngspice ? `ngspice: ${ngspice}` : ''} · model: BSIM4 PTM 45nm bulk · offset via Monte-Carlo Vth mismatch
+            {ngspice ? `ngspice: ${ngspice}` : ''} · model: {params.model === 'gaa2nm' ? 'GAA 2nm≈ (scaled BSIM4)' : params.model === 'sky130' ? 'SKY130 PDK' : 'BSIM4 PTM 45nm bulk'} · offset via Monte-Carlo Vth mismatch
           </p>
         </div>
       </main>

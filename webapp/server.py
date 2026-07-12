@@ -1170,10 +1170,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(run_sim.capture_waveform(payload.get("params", {})))
             elif self.path == "/api/layout":
                 payload = self._read_json()
-                base = payload.get("params", {})
-                full = copy.deepcopy(run_sim.DEFAULT_PARAMS)
-                full["devices"] = run_sim.merge_devices(base.get("devices"))
-                self._json(layout.generate_layout(full))
+                # _full 로 model 등 비소자 파라미터까지 병합(gaa2nm 나노시트 그리드 룰 선택)
+                self._json(layout.generate_layout(run_sim._full(payload.get("params", {}))))
             elif self.path == "/api/metastability":
                 payload = self._read_json()
                 self._json(run_sim.metastability_sweep(payload.get("params", {})))
