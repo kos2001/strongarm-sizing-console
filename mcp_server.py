@@ -126,6 +126,19 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
     },
     {
+        "name": "vco_simulate",
+        "description": "Simulate the xcpl ring VCO in ngspice for a given sizing/params "
+                       "(devices invp/invn/starvep/starven/xcplp/rstp, vdd, vctrl, n_stages odd, cload_ff). "
+                       "Returns f_osc_ghz, power_uw, vpp, oscillates; do_tuning=true adds the V_ctrl tuning curve/Kvco.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "do_tuning": {"type": "boolean"}}},
+    },
+    {
+        "name": "vco_optimize",
+        "description": "Auto-size the ring VCO device widths (DE + GP surrogate, real ngspice) to hit a target "
+                       "oscillation frequency at minimum power. targets={f_ghz: X}. Returns trajectory, final_params, tuning.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
         "name": "vco_wicked",
         "description": "WiCkeD-inspired flow for the ring VCO (starved or xcpl topology): FEO feasibility, "
                        "DNO frequency-centering refinement, WCO PVT worst case, WCD sigma/yield proxy, "
@@ -164,6 +177,8 @@ _TOOL_ENDPOINT = {
     "strongarm_pvt": "/api/pvt",
     "strongarm_fullflow": "/api/fullflow",
     "strongarm_wicked": "/api/wicked/fullflow",
+    "vco_simulate": "/api/vco/simulate",
+    "vco_optimize": "/api/vco/optimize",
     "strongarm_wicked_importance": "/api/wicked/importance",
     "strongarm_wicked_optimize": "/api/wicked/optimize",
     "strongarm_wicked_screening": "/api/wicked/screening",

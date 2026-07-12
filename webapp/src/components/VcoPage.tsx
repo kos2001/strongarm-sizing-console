@@ -6,6 +6,7 @@ import VcoPhaseNoiseChart from './VcoPhaseNoiseChart'
 import TuningChart from './TuningChart'
 import VcoSchematic from './VcoSchematic'
 import NetlistImport from './NetlistImport'
+import VcoAgentSizing from './VcoAgentSizing'
 import { downloadNetlist } from '../netlist'
 import VcoWaveformChart from './VcoWaveformChart'
 import VcoPvtView from './VcoPvtView'
@@ -425,6 +426,19 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             {runBtn(optimize, 'opt', T(lang, '◴ 자동 사이징 실행', '◴ Run auto-size'))}
           </div>
         )}
+
+        <VcoAgentSizing params={params} targetF={targetF} ko={lang === 'ko'} disabled={busy}
+          onApply={(pr) => {
+            if (pr.target_f_ghz != null) setTargetF(pr.target_f_ghz)
+            setParams((prev) => ({
+              ...prev,
+              ...(pr.vdd != null ? { vdd: pr.vdd } : {}),
+              ...(pr.vctrl != null ? { vctrl: pr.vctrl } : {}),
+              ...(pr.n_stages != null ? { n_stages: pr.n_stages } : {}),
+              ...(pr.cload_ff != null ? { cload_ff: pr.cload_ff } : {}),
+              devices: Object.fromEntries((Object.keys(prev.devices) as VcoDeviceKey[]).map((k) => [k, { ...prev.devices[k], ...(pr.devices?.[k] ?? {}) }])) as VcoParams['devices'],
+            }))
+          }} />
       </section>
 
       <section className="flex flex-col gap-4">
