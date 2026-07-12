@@ -143,7 +143,8 @@ def _xkey(base, x):
     return tuple(round(v, 3) for v in x)
 
 
-def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
+def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
+             corner_aware=True, corner_relax=2.5):
     """Global sizing via log-space **Differential Evolution**.
 
     Minimizes power subject to offset + decision-time + functional constraints
@@ -193,6 +194,18 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
     cache = {}
     n_sims = [0]
 
+    # 코너 인지: 공칭만 보고 사이징하면 slow-N/저온/저전압에서 죽는 설계가
+    # '성공'으로 나온다(45코너 실측: 실패 9개 전부 SS/SF·-40°C·0.9VDD 계열).
+    # 대표 최악 코너(slow NMOS + -40°C + 0.9·VDD) 1회를 후보마다 같이 평가해
+    # 비기능은 사실상 배제하고, 코너 판정시간은 완화 스펙(corner_relax×)으로
+    # 제약한다 — 후보당 시뮬 2배, 사인오프는 여전히 45코너 PVT 로.
+    _sk = 0.05 * run_sim.skew_scale(base)
+
+    def _worst_corner(p):
+        wp = {**copy.deepcopy(p), "nskew": _sk, "pskew_p": _sk,
+              "temp": -40, "vdd": round(p["vdd"] * 0.9, 4)}
+        return run_sim.run_sim(wp, do_offset=False)["nominal"]
+
     def _eval_raw(x):
         # pure: runs one ngspice sim, touches no shared state (thread-safe)
         p = make(x)
@@ -209,7 +222,15 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
             cost += 5000.0 * (dec / dec_t - 1.0)      # decision-time penalty
         if offp > off_t:
             cost += 5000.0 * (offp / off_t - 1.0)     # offset penalty (Pelgrom)
-        return {"cost": cost, "x": list(x), "p": p, "nom": nom, "offp": offp}
+        wc = None
+        if corner_aware:
+            wc = _worst_corner(p)
+            wdec = wc.get("decision_time_ps")
+            if not wc.get("functional") or wdec is None:
+                cost += 5e5                            # 최악 코너 비기능 — 배제급
+            elif wdec > corner_relax * dec_t:
+                cost += 3000.0 * (wdec / (corner_relax * dec_t) - 1.0)
+        return {"cost": cost, "x": list(x), "p": p, "nom": nom, "offp": offp, "wc": wc}
 
     def _merge(out):
         # single-thread bookkeeping after a (possibly parallel) evaluation
@@ -243,6 +264,29 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
         return results
 
     traj = []
+
+    # ── 코너 가용성(FEO 식) 선행 단계 — DE/CD 공통 ───────────────────────
+    corner_note = None
+    if corner_aware:
+        wc0 = _worst_corner(base)
+        if not (wc0.get("functional") and wc0.get("decision_time_ps") is not None):
+            vf0 = base.get("vcm_frac", 0.62)
+            for vf in (0.66, 0.70, 0.74, 0.78, 0.82, 0.86):
+                if vf <= vf0:
+                    continue
+                cand = {**copy.deepcopy(base), "vcm_frac": vf}
+                w = _worst_corner(cand)
+                if w.get("functional") and w.get("decision_time_ps") is not None:
+                    base = cand      # make()/후속 평가가 이 동작점을 쓴다
+                    corner_note = f"corner feasibility: vcm_frac {vf0}→{vf} (최악 코너 생존 최소 동작점)"
+                    break
+            else:
+                corner_note = "corner infeasible: vcm_frac 0.86 에서도 최악 코너 비기능 — vdd 하한 필요"
+        else:
+            corner_note = "corner feasible at base operating point"
+    if corner_note:
+        traj.append({"action": corner_note, "measured": {}, "verdicts": {},
+                     "total_w_um": _total_w(base), "params": copy.deepcopy(base["devices"])})
 
     if run_sim.w_unit(base):
         # ---- 그리드 모델: 정수 스택/핀 좌표 하강(coordinate descent) ------
@@ -355,6 +399,9 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
     return {"trajectory": traj, "final_params": best, "final_result": r, "verdicts": v,
             "success": success, "targets": targets, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
             "final_power_uw": r["nominal"].get("power_uw"), "final_total_w_um": _total_w(best),
+            # 대표 최악 코너(slow-N/-40°C/0.9VDD) 확인 결과 — 코너 인지 사이징의 증빙
+            "final_corner": (_worst_corner(best) if corner_aware else None),
+            "corner_aware": corner_aware, "corner_note": corner_note,
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
             "final_stacks": _stacks(best) if run_sim.w_unit(base) else None}
 
@@ -1017,7 +1064,7 @@ def design_brief(params, targets=None):
     unit = run_sim.w_unit(p)
     hints = []
     if not margins["functional"]:
-        hints.append("비기능: tail/ncc/pcc 폭 강화 또는 vdd 상향; 저전압 코너는 tail·ncc 1.5× 보강이 우선")
+        hints.append("비기능: 저전압/slow-N 코너는 W 로 못 살린다(실측 ×8 전멸) — vcm_frac(동작점) 상향 또는 vdd 하한이 레버. optimize 는 corner_aware 로 자동 처리")
     if margins["decision_time_ps"] is not None and margins["decision_time_ps"] < 0:
         hints.append("판정시간 초과: input(gm)·tail 폭 증가가 가장 효과적, prei(S1/S2) 축소로 내부 기생 절감도 유효(실측 530→514ps)")
     if margins["offset_sigma_mv"] < 0:
@@ -1621,7 +1668,9 @@ class Handler(BaseHTTPRequestHandler):
                 full["devices"] = {**run_sim.DEFAULT_PARAMS["devices"],
                                    **base.get("devices", {})}
                 targets = payload.get("targets") or {k: s["limit"] for k, s in SPEC_TARGETS.items()}
-                self._json(optimize(full, targets))
+                self._json(optimize(full, targets,
+                                    corner_aware=bool(payload.get("corner_aware", True)),
+                                    corner_relax=float(payload.get("corner_relax", 2.5))))
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as e:  # surface errors to the UI
