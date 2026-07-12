@@ -11,7 +11,7 @@ export default function Schematic({ devices, changed, topology = 'strongarm' }: 
   const sz = (k: DeviceKey) => `${d[k].w_um}u×${d[k].m}`
   const REF: Record<DeviceKey, string> = topology === 'doubletail'
     ? { pre: 'M3/4', pcc: 'M5/6', ncc: 'M7~10', input: 'M1/2', tail: 'Mt1·2' }
-    : { pre: 'MP1', pcc: 'MP3', ncc: 'MN3', input: 'MN1', tail: 'MT' }
+    : { pre: 'S1~S4', pcc: 'M5/6', ncc: 'M3/4', input: 'M1/2', tail: 'M7' }
 
   // one analogLib-style MOSFET symbol. anchors: drain=top, source=bottom,
   // gate=left (flip=true 면 좌우반전 — 게이트가 오른쪽을 향한다).
@@ -129,85 +129,130 @@ export default function Schematic({ devices, changed, topology = 'strongarm' }: 
     )
   }
 
-  const V0 = 24, GND = 300, LX = 128, RX = 232, CX = 180
-  const yPre = 52, yLatP = 96, yOut = 150, yLatN = 196, yIn = 244, yTail = 282
+  // ── StrongARM — new_cmp.png(Razavi 스타일 (b)) 배치 ─────────────────────
+  // 상단 한 줄에 PMOS 6개: S1·S3 | M5×M6(교차) | S4·S2 — S1/S2 는 내부 노드
+  // P/Q 를, S3/S4 는 출력 X/Y 를 프리차지. 그 아래 X/Y(Vout 단자) → 교차
+  // NMOS M3/M4 → P/Q → 입력쌍 M1/M2(게이트 바깥향) → 테일 M7 → 접지 심볼.
+  const V0 = 26
+  const S1X = 58, S3X = 118, M5X = 192, M6X = 268, S4X = 342, S2X = 402
+  const yP = 58, yXY = 108, yN = 148, yPQ = 186, yIn = 216, yTail = 272
+  const gnd = 296
+
+  const CkDot = ({ x, y, right }: { x: number; y: number; right?: boolean }) => (
+    <g>
+      <circle cx={x} cy={y} r={2.6} fill={V.wire} stroke="none" />
+      <T x={right ? x + 6 : x - 6} y={y + 3} anchor={right ? 'start' : 'end'} c={V.net} sz={9}>CK</T>
+    </g>
+  )
+  const OutTerm = ({ x, y }: { x: number; y: number }) => (
+    <circle cx={x} cy={y} r={2.8} fill="none" stroke={V.wire} strokeWidth={1.1} />
+  )
+  const Name = ({ x, y, k, children, anchor = 'start' }: { x: number; y: number; k: DeviceKey; children: string; anchor?: 'start' | 'middle' | 'end' }) => (
+    <T x={x} y={y} anchor={anchor} c={changed === k ? V.changed : V.sym} sz={7.5}>{children}</T>
+  )
 
   return (
-    <svg viewBox="0 0 360 320" width="100%" style={{ display: 'block', maxHeight: 460, background: V.bg, borderRadius: 8 }} role="img" aria-label="StrongARM latch transistor schematic (Virtuoso style)">
+    <svg viewBox="0 0 460 330" width="100%" style={{ display: 'block', maxHeight: 460, background: V.bg, borderRadius: 8 }} role="img" aria-label="StrongARM latch transistor schematic (Virtuoso style, Razavi fig. b layout)">
       <defs>
         <pattern id="vgrid" width={12} height={12} patternUnits="userSpaceOnUse">
           <circle cx={0.6} cy={0.6} r={0.6} fill={V.grid} />
         </pattern>
       </defs>
-      {/* snap grid */}
-      <rect x={0} y={0} width={360} height={320} fill="url(#vgrid)" />
+      <rect x={0} y={0} width={460} height={330} fill="url(#vgrid)" />
 
-      {/* power rails + global nets */}
-      <line x1={20} y1={V0} x2={340} y2={V0} stroke={V.wire} strokeWidth={1.5} />
-      <line x1={20} y1={GND} x2={340} y2={GND} stroke={V.wire} strokeWidth={1.5} />
-      <T x={20} y={V0 - 5} c={V.netGlobal} sz={9}>vdd!</T>
-      <T x={20} y={GND + 12} c={V.netGlobal} sz={9}>gnd!</T>
+      {/* VDD rail */}
+      <line x1={30} y1={V0} x2={430} y2={V0} stroke={V.wire} strokeWidth={1.5} />
+      <T x={430} y={V0 - 5} anchor="end" c={V.netGlobal} sz={9}>vdd!</T>
 
-      {/* CLK bus (left) */}
-      <line x1={30} y1={V0 + 8} x2={30} y2={yTail} stroke={V.wire} strokeWidth={1} strokeDasharray="3 3" opacity={0.8} />
-      <T x={32} y={yTail + 2} c={V.net} sz={8.5}>clk</T>
+      {/* ── 상단 PMOS 행: S1 S3 M5 M6 S4 S2 (전원 → 각 드레인) ── */}
+      {[S1X, S3X, S4X, S2X].map((x) => <Wire key={x} d={`${x},${V0} ${x},${yP - 13}`} />)}
+      <Wire d={`${M5X},${V0} ${M5X},${yP - 13}`} /><Wire d={`${M6X},${V0} ${M6X},${yP - 13}`} />
+      <Mos cx={S1X} cy={yP} p flash={changed === 'pre'} />
+      <Mos cx={S3X} cy={yP} p flash={changed === 'pre'} />
+      <Mos cx={M5X} cy={yP} p hot flip flash={changed === 'pcc'} />
+      <Mos cx={M6X} cy={yP} p hot flash={changed === 'pcc'} />
+      <Mos cx={S4X} cy={yP} p flip flash={changed === 'pre'} />
+      <Mos cx={S2X} cy={yP} p flip flash={changed === 'pre'} />
+      <Name x={S1X - 4} y={yP - 16} k="pre" anchor="middle">S1</Name>
+      <Name x={S3X - 4} y={yP - 16} k="pre" anchor="middle">S3</Name>
+      <Name x={M5X - 14} y={yP - 16} k="pcc" anchor="middle">M5</Name>
+      <Name x={M6X + 14} y={yP - 16} k="pcc" anchor="middle">M6</Name>
+      <Name x={S4X + 4} y={yP - 16} k="pre" anchor="middle">S4</Name>
+      <Name x={S2X + 4} y={yP - 16} k="pre" anchor="middle">S2</Name>
+      <Prop x={S3X - 34} y={yP + 26} k="pre" />
+      <Prop x={M6X + 24} y={yP + 30} k="pcc" />
 
-      {/* precharge PMOS (gate clk): vdd! -> Out */}
-      <Mos cx={LX} cy={yPre} p flash={changed === 'pre'} />
-      <Mos cx={RX} cy={yPre} p flash={changed === 'pre'} />
-      <Wire d={`${LX},${V0} ${LX},${yPre - 13}`} />
-      <Wire d={`${RX},${V0} ${RX},${yPre - 13}`} />
-      <Wire d={`30,${yPre} ${LX - 18},${yPre}`} />
-      <Wire d={`30,${yPre} ${RX - 18},${yPre}`} />
-      <Prop x={LX + 12} y={yPre} k="pre" />
+      {/* CK — 왼쪽(S1·S3)과 오른쪽(S4·S2) */}
+      <CkDot x={26} y={yP} />
+      <Wire d={`26,${yP} ${S1X - 18},${yP}`} />
+      <Wire d={`${S1X - 18},${yP} ${S3X - 18},${yP}`} />
+      <CkDot x={434} y={yP} right />
+      <Wire d={`434,${yP} ${S2X + 18},${yP}`} />
+      <Wire d={`${S2X + 18},${yP} ${S4X + 18},${yP}`} />
 
-      {/* latch PMOS (cross-coupled): vdd! -> Out. 왼쪽은 flip — 게이트가 중앙 채널을 향해 X 결선이 가능 */}
-      <Mos cx={LX} cy={yLatP} p hot flip flash={changed === 'pcc'} />
-      <Mos cx={RX} cy={yLatP} p hot flash={changed === 'pcc'} />
-      <Wire d={`${LX},${yPre + 13} ${LX},${yLatP - 13}`} />
-      <Wire d={`${RX},${yPre + 13} ${RX},${yLatP - 13}`} />
-      <Prop x={RX + 12} y={yLatP} k="pcc" />
+      {/* M5/M6 교차(게이트 ↔ 반대편 드레인 기둥) */}
+      <Wire d={`${M5X + 18},${yP} ${M6X},${yP + 24}`} />
+      <Wire d={`${M6X - 18},${yP} ${M5X},${yP + 24}`} />
+      <Dot x={M5X} y={yP + 24} /><Dot x={M6X} y={yP + 24} />
 
-      {/* Out nodes */}
-      <Wire d={`${LX},${yLatP + 13} ${LX},${yLatN - 13}`} />
-      <Wire d={`${RX},${yLatP + 13} ${RX},${yLatN - 13}`} />
-      <Dot x={LX} y={yOut} /><Dot x={RX} y={yOut} />
-      <T x={LX - 6} y={yOut - 4} anchor="end" c={V.net} sz={8.5}>outp</T>
-      <T x={RX + 6} y={yOut - 4} c={V.net} sz={8.5}>outn</T>
+      {/* ── X/Y 노드 행 + Vout 단자 ── */}
+      <Wire d={`${M5X},${yP + 13} ${M5X},${yN - 13}`} />
+      <Wire d={`${M6X},${yP + 13} ${M6X},${yN - 13}`} />
+      <Wire d={`${S3X},${yP + 13} ${S3X},${yXY} ${M5X},${yXY}`} />
+      <Wire d={`${S4X},${yP + 13} ${S4X},${yXY} ${M6X},${yXY}`} />
+      <Dot x={M5X} y={yXY} /><Dot x={M6X} y={yXY} />
+      <T x={M5X - 6} y={yXY + 12} anchor="end" c={V.net} sz={8.5}>X·outp</T>
+      <T x={M6X + 6} y={yXY + 12} c={V.net} sz={8.5}>Y·outn</T>
+      <Wire d={`${M5X},${yXY} ${M5X + 22},${yXY - 6} ${M5X + 30},${yXY - 6}`} />
+      <Wire d={`${M6X},${yXY} ${M6X - 22},${yXY - 6} ${M6X - 30},${yXY - 6}`} />
+      <OutTerm x={M5X + 33} y={yXY - 6} /><OutTerm x={M6X - 33} y={yXY - 6} />
+      <T x={(M5X + M6X) / 2} y={yXY - 10} anchor="middle" c={V.net} sz={8.5}>Vout</T>
 
-      {/* latch NMOS (cross-coupled): Out -> X/Y. 왼쪽은 flip(위와 동일) */}
-      <Mos cx={LX} cy={yLatN} hot flip flash={changed === 'ncc'} />
-      <Mos cx={RX} cy={yLatN} hot flash={changed === 'ncc'} />
-      <Prop x={RX + 12} y={yLatN + 11} k="ncc" />
+      {/* ── 교차 NMOS M3/M4: X/Y → P/Q ── */}
+      <Mos cx={M5X} cy={yN} hot flip flash={changed === 'ncc'} />
+      <Mos cx={M6X} cy={yN} hot flash={changed === 'ncc'} />
+      <Name x={M5X - 14} y={yN + 4} k="ncc" anchor="end">M3</Name>
+      <Name x={M6X + 14} y={yN + 4} k="ncc">M4</Name>
+      <Prop x={M6X + 24} y={yN + 22} k="ncc" />
+      <Wire d={`${M5X + 18},${yN} ${M6X},${yN - 22}`} />
+      <Wire d={`${M6X - 18},${yN} ${M5X},${yN - 22}`} />
+      <Dot x={M5X} y={yN - 22} /><Dot x={M6X} y={yN - 22} />
 
-      {/* cross-couple wiring — 쌍별 X: 각 래치 쌍의 게이트가 반대편 드레인
-          기둥으로 곧장 교차한다(PMOS 쌍 아래·NMOS 쌍 위에 소형 X 하나씩). */}
-      <Wire d={`${LX + 18},${yLatP} ${RX},${yLatP + 22}`} />
-      <Wire d={`${RX - 18},${yLatP} ${LX},${yLatP + 22}`} />
-      <Dot x={LX} y={yLatP + 22} /><Dot x={RX} y={yLatP + 22} />
-      <Wire d={`${LX + 18},${yLatN} ${RX},${yLatN - 22}`} />
-      <Wire d={`${RX - 18},${yLatN} ${LX},${yLatN - 22}`} />
-      <Dot x={LX} y={yLatN - 22} /><Dot x={RX} y={yLatN - 22} />
+      {/* ── P/Q 노드 (S1/S2 프리차지가 바깥 기둥으로 내려온다) ── */}
+      <Wire d={`${M5X},${yN + 13} ${M5X},${yIn - 13}`} />
+      <Wire d={`${M6X},${yN + 13} ${M6X},${yIn - 13}`} />
+      <Dot x={M5X} y={yPQ} /><Dot x={M6X} y={yPQ} />
+      <T x={M5X - 6} y={yPQ - 4} anchor="end" c={V.net} sz={8.5}>P·nX</T>
+      <T x={M6X + 6} y={yPQ - 4} c={V.net} sz={8.5}>Q·nY</T>
+      <Wire d={`${S1X},${yP + 13} ${S1X},${yPQ} ${M5X},${yPQ}`} />
+      <Wire d={`${S2X},${yP + 13} ${S2X},${yPQ} ${M6X},${yPQ}`} />
 
-      {/* input pair: X/Y -> tail */}
-      <Wire d={`${LX},${yLatN + 13} ${LX},${yIn - 13}`} />
-      <Wire d={`${RX},${yLatN + 13} ${RX},${yIn - 13}`} />
-      <Mos cx={LX} cy={yIn} flash={changed === 'input'} />
-      <Mos cx={RX} cy={yIn} flash={changed === 'input'} />
-      <Wire d={`${LX - 18},${yIn} 96,${yIn}`} />
-      <Wire d={`${RX - 18},${yIn} 264,${yIn}`} />
-      <T x={92} y={yIn - 4} anchor="end" c={V.net} sz={8.5}>vinp</T>
-      <T x={268} y={yIn - 4} c={V.net} sz={8.5}>vinn</T>
-      <Prop x={LX + 12} y={yIn + 11} k="input" />
+      {/* ── 입력쌍 M1/M2 (게이트 바깥향, Vin 단자) ── */}
+      <Mos cx={M5X} cy={yIn} flash={changed === 'input'} />
+      <Mos cx={M6X} cy={yIn} flip flash={changed === 'input'} />
+      <Name x={M5X + 12} y={yIn - 14} k="input">M1</Name>
+      <Name x={M6X - 12} y={yIn - 14} k="input" anchor="end">M2</Name>
+      <Prop x={M5X - 66} y={yIn + 22} k="input" />
+      <Wire d={`${M5X - 18},${yIn} ${M5X - 44},${yIn}`} />
+      <Wire d={`${M6X + 18},${yIn} ${M6X + 44},${yIn}`} />
+      <OutTerm x={M5X - 47} y={yIn} /><OutTerm x={M6X + 47} y={yIn} />
+      <T x={M5X - 54} y={yIn + 3} anchor="end" c={V.net} sz={8.5}>vinp</T>
+      <T x={M6X + 54} y={yIn + 3} c={V.net} sz={8.5}>vinn</T>
 
-      {/* tail switch: sources -> tail node -> gnd! */}
-      <Wire d={`${LX},${yIn + 13} ${LX},${yTail - 18} ${CX},${yTail - 18} ${CX},${yTail - 13}`} />
-      <Wire d={`${RX},${yIn + 13} ${RX},${yTail - 18} ${CX},${yTail - 18}`} />
-      <Dot x={CX} y={yTail - 18} />
-      <Mos cx={CX} cy={yTail} flash={changed === 'tail'} />
-      <Wire d={`${CX},${yTail + 13} ${CX},${GND}`} />
-      <Wire d={`30,${yTail} ${CX - 18},${yTail}`} />
-      <Prop x={CX + 12} y={yTail + 11} k="tail" />
+      {/* ── 공통 소스 → 테일 M7 → 접지 심볼 ── */}
+      <Wire d={`${M5X},${yIn + 13} ${M5X},${yTail - 26} 230,${yTail - 26} 230,${yTail - 13}`} />
+      <Wire d={`${M6X},${yIn + 13} ${M6X},${yTail - 26} 230,${yTail - 26}`} />
+      <Dot x={230} y={yTail - 26} />
+      <Mos cx={230} cy={yTail} flash={changed === 'tail'} />
+      <Name x={230 + 14} y={yTail + 4} k="tail">M7</Name>
+      <Prop x={230 + 40} y={yTail + 4} k="tail" />
+      <CkDot x={168} y={yTail} />
+      <Wire d={`168,${yTail} ${230 - 18},${yTail}`} />
+      {/* ground symbol */}
+      <Wire d={`230,${yTail + 13} 230,${gnd}`} />
+      <line x1={218} y1={gnd} x2={242} y2={gnd} stroke={V.wire} strokeWidth={1.5} />
+      <line x1={223} y1={gnd + 5} x2={237} y2={gnd + 5} stroke={V.wire} strokeWidth={1.3} />
+      <line x1={227} y1={gnd + 10} x2={233} y2={gnd + 10} stroke={V.wire} strokeWidth={1.1} />
     </svg>
   )
 }
