@@ -50,6 +50,23 @@ hermes mcp add strongarm --command python3 --args <repo>/mcp_server.py
 cp -r hermes/skills/* ~/.hermes/profiles/strong-arm/skills/semiconductor-eda/
 ```
 
+## 3.5) 보조 MCP — spicelib (범용 SPICE: AC/DC OP/스윕)
+
+콘솔 도구에 없는 AC 해석·DC 동작점·부품값 스윕은 공개 MCP 서버
+[spicelib-mcp](https://github.com/lucasgerads/spicelib-mcp) (GPL-3.0,
+별도 프로세스라 결합 없음)로 보강한다:
+
+```sh
+git clone https://github.com/lucasgerads/spicelib-mcp third_party/spicelib-mcp
+cd third_party/spicelib-mcp && python3 -m venv .venv
+.venv/bin/pip install "mcp[cli]" spicelib numpy
+hermes mcp add spicelib --command "$(pwd)/.venv/bin/python" --args "$(pwd)/server_stdio.py"
+# 게이트웨이 재시작 필수 (교훈 L3)
+```
+
+검증: 에이전트에 저항 분배기 DC OP 를 시키면 run_dc_op 로 0.35V 를
+정확히 계산(73s 라이브 확인). third_party/spicelib-mcp 는 gitignore.
+
 ## 4) 오케스트레이터 아키텍처 (`/api/agent/ask`)
 
 콘솔의 🤖 패널은 모놀리식 프롬프트가 아니라 **서버측 오케스트레이터**를

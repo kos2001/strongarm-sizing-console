@@ -30,6 +30,7 @@ console server must be running.
 | Deep analysis | `strongarm_metastability`, `strongarm_noise_ber`, `vco_phase_noise`, `vco_tuning`, `vco_pushing` |
 | Layout | `strongarm_layout`, `vco_layout` (GDS + DRC; gaa2nm draws the nanosheet grid) |
 | Netlist as text | `strongarm_netlist` / `vco_netlist` (export deck), `spice_run_netlist` (run an edited deck — `shell` is rejected) |
+| Generic SPICE (AC / DC OP / value sweep) | `spicelib` MCP server (separate, if registered): `run_ac_analysis`, `run_dc_op`, `run_transient`, `run_sweep` — use for device characterization the console tools don't cover |
 
 ## Model backends — read this before proposing sizes
 

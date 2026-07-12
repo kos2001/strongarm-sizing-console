@@ -395,7 +395,7 @@ def _api_post_text(path, body):
     import urllib.request
     req = urllib.request.Request(API_BASE + path, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=600) as r:
+    with urllib.request.urlopen(req, timeout=900) as r:
         return r.read().decode()
 
 
@@ -404,7 +404,7 @@ def _api_post(path, body):
     import urllib.request
     req = urllib.request.Request(API_BASE + path, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=600) as r:
+    with urllib.request.urlopen(req, timeout=900) as r:
         return json.loads(r.read())
 
 

@@ -25,3 +25,4 @@ webapp/.vite/
 third_party/OpenVAF/
 third_party/VA-Models/
 third_party/bsimcmg107/*.osdi
+third_party/spicelib-mcp/
