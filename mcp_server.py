@@ -150,8 +150,10 @@ TOOLS = [
     {
         "name": "vco_optimize",
         "description": "Auto-size the ring VCO device widths (DE + GP surrogate, real ngspice) to hit a target "
-                       "oscillation frequency at minimum power. targets={f_ghz: X}. Returns trajectory, final_params, tuning.",
-        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+                       "oscillation frequency at minimum power. targets={f_ghz: X}. Returns trajectory, final_params, tuning. "
+                       "For agent turns pass pop=6, gens=3 (full-budget search belongs to the console button).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"},
+                        "pop": {"type": "integer"}, "gens": {"type": "integer"}}},
     },
     {
         "name": "strongarm_metastability",
