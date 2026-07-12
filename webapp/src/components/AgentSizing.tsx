@@ -13,7 +13,6 @@ interface Proposal {
   targets?: Partial<Targets>
   vdd?: number
   cload_ff?: number
-  topology?: 'strongarm' | 'doubletail'
 }
 interface Msg { role: 'user' | 'assistant'; text: string; proposal?: Proposal | null; deck?: string | null }
 
@@ -43,7 +42,6 @@ function extractProposal(answer: string): Proposal | null {
     if (j.targets && typeof j.targets === 'object') out.targets = j.targets
     if (typeof j.vdd === 'number') out.vdd = j.vdd
     if (typeof j.cload_ff === 'number') out.cload_ff = j.cload_ff
-    if (j.topology === 'strongarm' || j.topology === 'doubletail') out.topology = j.topology
     return Object.keys(out).length ? out : null
   } catch { return null }
 }
@@ -69,7 +67,7 @@ export default function AgentSizing({ params, targets, onApply, ko, disabled }: 
     setBusy(true)
     try {
       const ctx = {
-        topology: params.topology ?? 'strongarm', model: params.model ?? 'ptm', vdd: params.vdd, cload_ff: params.cload_ff,
+        topology: 'strongarm', model: params.model ?? 'ptm', vdd: params.vdd, cload_ff: params.cload_ff,
         devices: params.devices, spec_targets: targets,
       }
       const gaaRule = (params.model === 'gaa2nm')
@@ -81,7 +79,7 @@ export default function AgentSizing({ params, targets, onApply, ko, disabled }: 
         `현재 comparator 설계 상태(JSON):\n${JSON.stringify(ctx)}\n\n` +
         `규칙: 아래 사용자의 요청을 처리하라. 상태 파악·마진 확인은 strongarm_design_brief 한 번으로 끝내라(공칭+오프셋+마진+힌트 일괄). 시뮬레이션이 필요하면 오직 strongarm MCP 도구(strongarm_design_brief/strongarm_run_sim/strongarm_optimize)만 사용하고, params 인자에 위 설계 상태(및 변경분)를 그대로 넣어 한 번에 호출하라. terminal·파일 등 다른 도구는 절대 사용하지 말고, 도구 호출은 최대 2회. 사이징을 제안하려면 반드시 제안 사이징을 strongarm_run_sim 으로 1회 실측해 스펙 통과를 확인한 뒤에만 제시하라(미검증 제안 금지 — 직관 사이징은 자주 틀린다). 두 개 이상 스펙이 동시에 어긋나면 직접 고치지 말고 strongarm_optimize 에 맡겨 그 결과를 제안하라. 회로 구조 자체를 바꾸는 요청(소자 추가/삭제/결선 변경)이면: ① strongarm_netlist 도구로 현재 덱(.sp)을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 도구로 실행해 측정값을 확인하고 ④ 수정된 덱 전체를 답변에 \`\`\`spice 코드블록으로 포함하라(이때는 도구 3회까지 허용). ` +
         gaaRule +
-        `소자 크기(w_um/l_nm/m)·스펙(decision_time_ps/power_uw/offset_sigma_mv)·vdd·cload_ff·topology 변경을 제안/적용할 때는 답변 마지막에 \`\`\`json {"devices":{...변경 소자만...},"targets":{...},"vdd":...,"topology":"..."} \`\`\` 블록을 포함하라(변경 없으면 생략). 간결한 한국어로 답하라.\n\n` +
+        `소자 크기(w_um/l_nm/m)·스펙(decision_time_ps/power_uw/offset_sigma_mv)·vdd·cload_ff 변경을 제안/적용할 때는 답변 마지막에 \`\`\`json {"devices":{...변경 소자만...},"targets":{...},"vdd":...} \`\`\` 블록을 포함하라(변경 없으면 생략). 간결한 한국어로 답하라.\n\n` +
         `사용자 요청: ${q}`
       const r = await fetch('/api/agent/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, sessionId }) })
       const d = await r.json()
@@ -128,7 +126,7 @@ export default function AgentSizing({ params, targets, onApply, ko, disabled }: 
             {m.proposal && (
               <div className="flex items-center gap-2 mt-2 flex-wrap">
                 <span className="mono text-[10.5px]" style={{ color: 'var(--prop, var(--muted))' }}>
-                  {[m.proposal.devices && `소자 ${Object.keys(m.proposal.devices).length}개`, m.proposal.targets && '스펙', m.proposal.vdd != null && `vdd ${m.proposal.vdd}V`, m.proposal.topology].filter(Boolean).join(' · ')}
+                  {[m.proposal.devices && `소자 ${Object.keys(m.proposal.devices).length}개`, m.proposal.targets && '스펙', m.proposal.vdd != null && `vdd ${m.proposal.vdd}V`].filter(Boolean).join(' · ')}
                 </span>
                 <button onClick={() => onApply(m.proposal!)} disabled={disabled} className="mono text-[10.5px] px-2.5 py-1 rounded-full disabled:opacity-40" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
                   ↧ {T('에디터에 적용', 'apply to editor')}

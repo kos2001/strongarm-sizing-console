@@ -60,7 +60,7 @@ These flows were tuned so one agent turn ≈ one minute:
    run, and include the full modified deck in a ```spice block so the UI can
    offer it for download/import.
 4. **Size proposals** end with a ```json block —
-   `{"devices": {…changed only…}, "vdd": …, "topology": …}` (comparator) or
+   `{"devices": {…changed only…}, "vdd": …}` (comparator) or
    `{"devices": …, "n_stages": odd ≥3, "vctrl": …}` (VCO) — so the UI's
    ↧ apply button works.
 
@@ -72,5 +72,5 @@ These flows were tuned so one agent turn ≈ one minute:
 - VCO: f = 1/(2N·t_d); V_ctrl sets starve current. Keep the cross-coupled
   `xcplp` weak (~1/4 of `invp` drive) — oversized it latches the ring
   (`oscillates: false`). `n_stages` must be odd, ≥ 3.
-- Low-VDD single-tail StrongARM dies at slow-NMOS corners (SS/SF); the
-  `doubletail` topology survives — suggest it when corner sign-off fails.
+- Low-VDD StrongARM dies at slow-NMOS corners (SS/SF): strengthen `tail`/`ncc`
+  (~1.5×) first, or raise vdd — verify with the 45-corner PVT tool.

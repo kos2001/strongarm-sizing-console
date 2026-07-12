@@ -39,8 +39,7 @@ export default function DeviceEditor({ params, onChange, disabled, lang }: Props
         <span>L (nm)</span>
         <span>M</span>
       </div>
-      {/* doubletail 은 S1/S2(내부 프리차지) 그룹을 쓰지 않는다 */}
-      {KEYS.filter((dk) => dk !== 'prei' || params.topology !== 'doubletail').map((dk) => {
+      {KEYS.map((dk) => {
         const meta = DEVICE_META[dk]
         return (
           <div

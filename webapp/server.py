@@ -644,7 +644,7 @@ def parse_netlist_text(text):
     """SPICE 덱에서 MOS/전원/커패시터를 파싱해 소자 표 + (가능하면) 파라미터로.
 
     이 콘솔이 내보내는 덱의 명명 규칙을 안다:
-      comparator — M1/M2=input, M7=tail, M3/M4=ncc, M5/M6=pcc,
+      comparator(strongarm) — M1/M2=input, M7=tail, M3/M4=ncc, M5/M6=pcc,
                    MS3/MS4=pre(출력), MS1/MS2=prei(내부) — 구 표기(Mt, M7~M10)도 인식
       vco(xcpl)  — Mbp*/Mbpb*=starvep, Mp*/Mpb*=invp, Mn*/Mnb*=invn,
                    Mbn*/Mbnb*=starven, Mx*/Mxb*=xcplp, Mrst=rstp (스테이지 번호로 N)
@@ -710,22 +710,6 @@ def parse_netlist_text(text):
         if node_caps: params["cload_ff"] = node_caps[0]["ff"]
         out.update({"kind": "vco", "params": params})
         return out
-    if {"Mt1", "Mt2"} <= names:
-        # ── comparator (double-tail) ──
-        role = {"M1": "input", "M2": "input", "Mt1": "tail", "M3": "pre", "M4": "pre",
-                "M5": "pcc", "M6": "pcc", "M7": "ncc", "M8": "ncc"}
-        dev_params = {}
-        for d in devices:
-            key = role.get(d["name"])
-            if key and key not in dev_params:
-                dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
-        params = {"devices": dev_params, "topology": "doubletail"}
-        if model: params["model"] = model
-        if "dd" in sources: params["vdd"] = sources["dd"]
-        out_caps = [c for c in caps if c["node"] in ("outp", "outn")]
-        if out_caps: params["cload_ff"] = out_caps[0]["ff"]
-        out.update({"kind": "comparator", "params": params})
-        return out
     if ("Mt" in names or "M7" in names) and {"M1", "M3", "M5"} <= names:
         # ── comparator (single-tail strongarm) ──
         if "MS3" in names:   # 새 표기(new_cmp.png): M7=tail, MS3/4=pre, MS1/2=prei
@@ -739,7 +723,7 @@ def parse_netlist_text(text):
             key = role.get(d["name"])
             if key and key not in dev_params:
                 dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
-        params = {"devices": dev_params, "topology": "strongarm"}
+        params = {"devices": dev_params}
         if model: params["model"] = model
         if "dd" in sources: params["vdd"] = sources["dd"]
         out_caps = [c for c in caps if c["node"] in ("outp", "outn")]
@@ -951,7 +935,7 @@ def design_brief(params, targets=None):
     unit = run_sim.w_unit(p)
     hints = []
     if not margins["functional"]:
-        hints.append("비기능: tail/ncc/pcc 폭 강화 또는 vdd 상향; 0.7V 이하 코너 실패면 topology='doubletail' 고려")
+        hints.append("비기능: tail/ncc/pcc 폭 강화 또는 vdd 상향; 저전압 코너는 tail·ncc 1.5× 보강이 우선")
     if margins["decision_time_ps"] is not None and margins["decision_time_ps"] < 0:
         hints.append("판정시간 초과: input(gm)·tail 폭 증가가 가장 효과적, prei(S1/S2) 축소로 내부 기생 절감도 유효(실측 530→514ps)")
     if margins["offset_sigma_mv"] < 0:
@@ -961,7 +945,7 @@ def design_brief(params, targets=None):
     if margins["power_uw"] is not None and margins["power_uw"] < 0:
         hints.append("전력 초과: tail·pcc 축소 우선(민감도상 판정시간 손해 최소 방향), 스펙 만족까지 optimize 권장")
     return {
-        "model": p.get("model", "ptm"), "vdd": p["vdd"], "topology": p.get("topology", "strongarm"),
+        "model": p.get("model", "ptm"), "vdd": p["vdd"],
         "w_grid_um": unit,
         "stacks": _stacks(p) if unit else None,
         "nominal": nom, "predicted_offset_sigma_mv": round(offp, 3),

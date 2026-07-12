@@ -190,7 +190,7 @@ TOOLS = [
     },
     {
         "name": "strongarm_netlist",
-        "description": "Return the ngspice deck (.sp text) for the given comparator params (topology strongarm|doubletail) — run it directly or hand-edit.",
+        "description": "Return the ngspice deck (.sp text) for the given comparator params — run it directly or hand-edit.",
         "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "vdiff": {"type": "number"}}},
     },
     {
