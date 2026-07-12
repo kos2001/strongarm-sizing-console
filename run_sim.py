@@ -103,6 +103,10 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
                      f"Cpx {_in1} 0 {c_int}f\nCpy {_in2} 0 {c_int}f")
     temp = p.get("temp", 27)
     pskew = p.get("pskew", 0.0)   # process corner: +slow (SS), -fast (FF), 0 typical
+    # 교차 코너(SF/FS)용 독립 스큐 — 미지정 시 정렬 코너(pskew)로 동작.
+    # 표기: 첫 글자=NMOS, 둘째=PMOS. nskew>0 = slow N, pskew_p>0 = slow P.
+    nskew = p.get("nskew", pskew)
+    pskew_p = p.get("pskew_p", pskew)
     # model backend: generic PTM 45nm (.model) or REAL SkyWater SKY130 (.lib subckts)
     sky = p.get("model") == "sky130"
     if sky:
@@ -118,7 +122,7 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
             return f"X{label} {nodes} {sub} w={dd['w_um']} l={round(l_um, 3)} nf=1 mult={dd['m']}"
     else:
         model_header = f'.include "{MODEL_PATH}"'
-        param_line = f".param dvtn={pskew} dvtp={-pskew}"
+        param_line = f".param dvtn={nskew} dvtp={-pskew_p}"
 
         def dline(label, nodes, dk, kind):
             return f"{label} {nodes} {'nmos' if kind == 'n' else 'pmos'} {_dev(d[dk], 'dvtn' if kind == 'n' else 'dvtp')}"

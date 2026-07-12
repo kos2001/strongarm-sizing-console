@@ -242,12 +242,13 @@ def wco_operating(params, targets=None):
     p, t = _full(params), _targets(targets)
     base_vdd = float(p.get("vdd", run_sim.DEFAULT_PARAMS["vdd"]))
     sky = p.get("model") == "sky130"
-    cmap = {"SS": "ss", "TT": "tt", "FF": "ff"}
+    cmap = {"SS": "ss", "TT": "tt", "FF": "ff", "SF": "sf", "FS": "fs"}
     specs = []
-    for label, skew in (("SS", 0.05), ("TT", 0.0), ("FF", -0.05)):
+    for label, ns, ps in (("SS", 0.05, 0.05), ("TT", 0.0, 0.0), ("FF", -0.05, -0.05),
+                          ("SF", 0.05, -0.05), ("FS", -0.05, 0.05)):
         for temp in (-40, 27, 125):
             for vf in (0.9, 1.0, 1.1):
-                proc = {"corner": cmap[label]} if sky else {"pskew": skew}
+                proc = {"corner": cmap[label]} if sky else {"nskew": ns, "pskew_p": ps}
                 specs.append((label, temp, vf, round(base_vdd * vf, 3), proc))
 
     def one(s):
