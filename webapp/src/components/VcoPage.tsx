@@ -7,6 +7,7 @@ import TuningChart from './TuningChart'
 import VcoSchematic from './VcoSchematic'
 import NetlistImport from './NetlistImport'
 import VcoAgentSizing from './VcoAgentSizing'
+import AgentDock from './AgentDock'
 import { downloadNetlist } from '../netlist'
 import VcoWaveformChart from './VcoWaveformChart'
 import VcoPvtView from './VcoPvtView'
@@ -98,8 +99,27 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   )
 
   // ---- circuit · waveform ----
+  // 모든 뷰에서 접근 가능한 플로팅 에이전트 독(대화 상태 유지)
+  const agentDock = (
+    <AgentDock ko={lang === 'ko'}>
+          <VcoAgentSizing params={params} targetF={targetF} ko={lang === 'ko'} disabled={busy}
+            onApply={(pr) => {
+              if (pr.target_f_ghz != null) setTargetF(pr.target_f_ghz)
+              setParams((prev) => ({
+                ...prev,
+                ...(pr.vdd != null ? { vdd: pr.vdd } : {}),
+                ...(pr.vctrl != null ? { vctrl: pr.vctrl } : {}),
+                ...(pr.n_stages != null ? { n_stages: pr.n_stages } : {}),
+                ...(pr.cload_ff != null ? { cload_ff: pr.cload_ff } : {}),
+                devices: Object.fromEntries((Object.keys(prev.devices) as VcoDeviceKey[]).map((k) => [k, { ...prev.devices[k], ...(pr.devices?.[k] ?? {}) }])) as VcoParams['devices'],
+              }))
+            }} />
+    </AgentDock>
+  )
+  const withDock = (node: React.ReactNode) => <>{node}{agentDock}</>
+
   if (view === 'circuit') {
-    return (
+    return withDock(
       <div className="flex flex-col gap-4">
         <div className="p-5" style={box}>
           {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), <div className="flex items-center gap-2">{topoBadge}
@@ -125,7 +145,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- PVT ----
   if (view === 'pvt') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, 'PVT 코너 · 주파수 / 발진', 'PVT corners · frequency / oscillation'), runBtn(runPvt, 'pvt', T(lang, '◫ 27코너 실행', '◫ run 27 corners')))}
         {pvt ? <VcoPvtView pvt={pvt} lang={lang} /> : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '공정·전압·온도 27코너에서 발진 주파수와 발진 여부를 확인합니다.', 'Check oscillation frequency and startup across 27 process/voltage/temperature corners.')}</p>}
@@ -135,7 +155,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- supply pushing ----
   if (view === 'pushing') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '전원 푸싱 · f vs VDD', 'supply pushing · f vs VDD'), runBtn(runPush, 'push', T(lang, '⇅ 스윕 실행', '⇅ run sweep')))}
         {push ? (
@@ -153,7 +173,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- phase noise / jitter ----
   if (view === 'pn') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '위상잡음 · L(Δf) / 지터', 'phase noise · L(Δf) / jitter'), runBtn(runPn, 'pn', T(lang, '⌇ 위상잡음 계산', '⌇ compute phase noise')))}
         {pn ? (
@@ -190,7 +210,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     const mgLabel: Record<string, { ko: string; en: string }> = {
       oscillates: { ko: '발진', en: 'oscillates' }, f_band: { ko: 'f 밴드', en: 'f band' }, power_uw: { ko: '전력', en: 'power' },
     }
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '수율 · 강건성 (WiCkeD)', 'Yield · robustness (WiCkeD)'),
           <div className="flex gap-2 items-center">
@@ -284,7 +304,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- Pareto (power ↔ frequency, NSGA-II) ----
   if (view === 'pareto') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, 'Pareto · 전력 ↔ 주파수 (NSGA-II)', 'Pareto · power ↔ frequency (NSGA-II)'), runBtn(runPareto, 'pareto', T(lang, '⤢ 프론트 탐색', '⤢ run NSGA-II')))}
         {pareto ? (
@@ -336,7 +356,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- Layout (GDS + DRC) ----
   if (view === 'layout') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '레이아웃 · GDSII + DRC', 'layout · GDSII + DRC'), runBtn(runLayout, 'layout', T(lang, '▧ 레이아웃 생성', '▧ generate layout')))}
         {lay ? (
@@ -357,7 +377,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- Full flow ----
   if (view === 'flow') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '전체 흐름 · 사이징 → 기생 → PVT → 레이아웃', 'full flow · size → parasitics → PVT → layout'), runBtn(runFlow, 'flow', T(lang, '⇉ 전체 실행', '⇉ run full flow')))}
         {flow ? (
@@ -382,7 +402,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   }
 
   // ---- main (sizing · tuning) & opt (auto-size): 2-column with editor ----
-  return (
+  return withDock(
     <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0,400px) 1fr' }}>
       <section className="flex flex-col gap-4">
         <div className="p-4" style={box}>
@@ -427,18 +447,6 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
           </div>
         )}
 
-        <VcoAgentSizing params={params} targetF={targetF} ko={lang === 'ko'} disabled={busy}
-          onApply={(pr) => {
-            if (pr.target_f_ghz != null) setTargetF(pr.target_f_ghz)
-            setParams((prev) => ({
-              ...prev,
-              ...(pr.vdd != null ? { vdd: pr.vdd } : {}),
-              ...(pr.vctrl != null ? { vctrl: pr.vctrl } : {}),
-              ...(pr.n_stages != null ? { n_stages: pr.n_stages } : {}),
-              ...(pr.cload_ff != null ? { cload_ff: pr.cload_ff } : {}),
-              devices: Object.fromEntries((Object.keys(prev.devices) as VcoDeviceKey[]).map((k) => [k, { ...prev.devices[k], ...(pr.devices?.[k] ?? {}) }])) as VcoParams['devices'],
-            }))
-          }} />
       </section>
 
       <section className="flex flex-col gap-4">
