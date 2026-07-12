@@ -1,4 +1,4 @@
-export type DeviceKey = 'input' | 'tail' | 'ncc' | 'pcc' | 'pre'
+export type DeviceKey = 'input' | 'tail' | 'ncc' | 'pcc' | 'pre' | 'prei'
 
 export interface Device {
   w_um: number
@@ -305,9 +305,10 @@ export const VCO_DEVICE_META: Record<VcoDeviceKey, { name: string; role: { ko: s
 }
 
 export const DEVICE_META: Record<DeviceKey, { name: string; role: string; world: 'si' | 'ag' }> = {
-  input: { name: 'Mn1 / Mn2', role: 'input pair — offset & noise', world: 'si' },
-  tail: { name: 'Mtail', role: 'tail switch — speed', world: 'si' },
-  ncc: { name: 'Mn3 / Mn4', role: 'latch NMOS — regeneration', world: 'si' },
-  pcc: { name: 'Mp3 / Mp4', role: 'latch PMOS — regeneration', world: 'si' },
-  pre: { name: 'Mp1 / Mp2', role: 'precharge — reset', world: 'si' },
+  input: { name: 'M1 / M2', role: 'input pair — offset & noise', world: 'si' },
+  tail: { name: 'M7', role: 'tail switch — speed', world: 'si' },
+  ncc: { name: 'M3 / M4', role: 'latch NMOS — regeneration', world: 'si' },
+  pcc: { name: 'M5 / M6', role: 'latch PMOS — regeneration', world: 'si' },
+  pre: { name: 'S3 / S4', role: 'precharge X·Y (outputs)', world: 'si' },
+  prei: { name: 'S1 / S2', role: 'precharge P·Q (internal)', world: 'si' },
 }

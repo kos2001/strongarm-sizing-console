@@ -118,7 +118,8 @@ DEFAULT_PARAMS = {
         "tail":  {"w_um": 12.0, "l_nm": 45.0, "m": 6},
         "ncc":   {"w_um": 4.0, "l_nm": 45.0, "m": 2},
         "pcc":   {"w_um": 9.0, "l_nm": 45.0, "m": 4},
-        "pre":   {"w_um": 4.0, "l_nm": 45.0, "m": 2},
+        "pre":   {"w_um": 4.0, "l_nm": 45.0, "m": 2},   # S3/S4 — 출력 X/Y 프리차지
+        "prei":  {"w_um": 4.0, "l_nm": 45.0, "m": 2},   # S1/S2 — 내부 P/Q 프리차지 (부하가 달라 독립 사이징)
     },
 }
 
@@ -146,7 +147,7 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
             def _sw(*ks):
                 return sum(d[k]["w_um"] * d[k]["m"] for k in ks)
             c_out = round(0.25 * _sw("pcc", "ncc", "pre") + 1.5, 3)   # fF at outp/outn
-            c_int = round(0.25 * _sw("input", "ncc") + 1.0, 3)        # fF at internal nodes
+            c_int = round(0.25 * _sw("input", "ncc", "prei") + 1.0, 3)        # fF at internal nodes
         _in1, _in2 = ("fp", "fn") if p.get("topology") == "doubletail" else ("nX", "nY")
         par_lines = ("* --- extracted layout parasitics ---\n"
                      f"Cpo outp 0 {c_out}f\nCpn outn 0 {c_out}f\n"
@@ -236,8 +237,8 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
         "* --- precharge PMOS (on when clk low) ---",
         dline("M7", "outp clk vdd vdd", "pre", "p"),
         dline("M8", "outn clk vdd vdd", "pre", "p"),
-        dline("M9", "nX clk vdd vdd", "pre", "p"),
-        dline("M10", "nY clk vdd vdd", "pre", "p"),
+        dline("M9", "nX clk vdd vdd", "prei", "p"),
+        dline("M10", "nY clk vdd vdd", "prei", "p"),
     ])
     # clock timing (defaults reproduce the original 200p/3n-high/6n-period run)
     clk_hi = p.get("clk_high_ns", 3.0)
