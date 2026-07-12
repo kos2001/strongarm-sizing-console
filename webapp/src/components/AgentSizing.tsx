@@ -14,7 +14,7 @@ interface Proposal {
   vdd?: number
   cload_ff?: number
 }
-interface Msg { role: 'user' | 'assistant'; text: string; proposal?: Proposal | null; deck?: string | null }
+interface Msg { role: 'user' | 'assistant'; text: string; proposal?: Proposal | null; deck?: string | null; agentRole?: string }
 
 function extractDeck(answer: string): string | null {
   const m = answer.match(/```spice\s*([\s\S]*?)```/)
@@ -70,22 +70,13 @@ export default function AgentSizing({ params, targets, onApply, ko, disabled }: 
         topology: 'strongarm', model: params.model ?? 'ptm', vdd: params.vdd, cload_ff: params.cload_ff,
         devices: params.devices, spec_targets: targets,
       }
-      const gaaRule = (params.model === 'gaa2nm')
-        ? '이 설계는 2nm급(gaa2nm) 모델이다: W(w_um)는 나노시트 스택 등가폭 0.2µm 의 정수배로만 제안하라(예 1.2, 6.4 — 시트 수로 사이징하는 셈). '
-        : (params.model === 'asap7')
-          ? '이 설계는 ASAP7 7nm FinFET(BSIM-CMG) 모델이다: W(w_um)는 핀 등가폭 0.07µm 의 정수배로만 제안하라(넷리스트에서 NFIN 으로 접힌다). '
-          : ''
-      const message =
-        `현재 comparator 설계 상태(JSON):\n${JSON.stringify(ctx)}\n\n` +
-        `규칙: 아래 사용자의 요청을 처리하라. 상태 파악·마진 확인은 strongarm_design_brief 한 번으로 끝내라(공칭+오프셋+마진+힌트 일괄). 시뮬레이션이 필요하면 오직 strongarm MCP 도구(strongarm_design_brief/strongarm_run_sim/strongarm_optimize)만 사용하고, params 인자에 위 설계 상태(및 변경분)를 그대로 넣어 한 번에 호출하라. terminal·파일 등 다른 도구는 절대 사용하지 말고, 도구 호출은 최대 2회. 사이징을 제안하려면 반드시 제안 사이징을 strongarm_run_sim 으로 1회 실측해 스펙 통과를 확인한 뒤에만 제시하라(미검증 제안 금지 — 직관 사이징은 자주 틀린다). 두 개 이상 스펙이 동시에 어긋나면 직접 고치지 말고 strongarm_optimize 에 맡겨 그 결과를 제안하라. 회로 구조 자체를 바꾸는 요청(소자 추가/삭제/결선 변경)이면: ① strongarm_netlist 도구로 현재 덱(.sp)을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 도구로 실행해 측정값을 확인하고 ④ 수정된 덱 전체를 답변에 \`\`\`spice 코드블록으로 포함하라(이때는 도구 3회까지 허용). ` +
-        gaaRule +
-        `소자 크기(w_um/l_nm/m)·스펙(decision_time_ps/power_uw/offset_sigma_mv)·vdd·cload_ff 변경을 제안/적용할 때는 답변 마지막에 \`\`\`json {"devices":{...변경 소자만...},"targets":{...},"vdd":...} \`\`\` 블록을 포함하라(변경 없으면 생략). 간결한 한국어로 답하라.\n\n` +
-        `사용자 요청: ${q}`
-      const r = await fetch('/api/agent/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, sessionId }) })
+      // 오케스트레이터: 서버가 의도(진단/사이징/사인오프/편집)를 라우팅해
+      // 역할별 최소 규칙을 주입한다 — 프롬프트 조립은 서버 책임
+      const r = await fetch('/api/agent/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q, context: ctx, domain: 'comparator', sessionId }) })
       const d = await r.json()
       if (d.error) { setMsgs((m) => [...m, { role: 'assistant', text: '⚠ ' + d.error }]); return }
       setSessionId(d.sessionId)
-      setMsgs((m) => [...m, { role: 'assistant', text: d.answer, proposal: extractProposal(d.answer), deck: extractDeck(d.answer) }])
+      setMsgs((m) => [...m, { role: 'assistant', text: d.answer, proposal: extractProposal(d.answer), deck: extractDeck(d.answer), agentRole: d.role }])
     } catch (e) {
       setMsgs((m) => [...m, { role: 'assistant', text: '⚠ ' + String(e) }])
     } finally { setBusy(false) }
@@ -114,6 +105,7 @@ export default function AgentSizing({ params, targets, onApply, ko, disabled }: 
           <div key={i} className="self-end rounded-lg px-2.5 py-1.5 text-xs" style={{ background: 'color-mix(in srgb, var(--ag) 14%, transparent)', color: 'var(--text)' }}>{m.text}</div>
         ) : (
           <div key={i} className="rounded-lg px-2.5 py-1.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+            {m.agentRole && <div className="mono text-[9.5px] mb-1" style={{ color: 'var(--faint)' }}>◈ {({ diagnose: '진단', size: '사이징', signoff: '사인오프', edit: '회로 편집' } as Record<string, string>)[m.agentRole] ?? m.agentRole} 전문 에이전트</div>}
             <div className="text-xs whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text)' }}>{m.text.replace(/```json[\s\S]*?```/, '').replace(/```spice[\s\S]*?```/, '(수정된 넷리스트 — 아래 버튼으로 저장)').trim()}</div>
             {m.deck && (
               <div className="flex items-center gap-2 mt-2">

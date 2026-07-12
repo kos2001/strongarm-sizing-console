@@ -620,6 +620,81 @@ def agent_chat(message, session_id=None, timeout=600):
         return {"error": f"에이전트 호출 실패: {e}", "sessionId": sid}
 
 
+
+# ── 오케스트레이터: 의도 라우팅 + 역할별 전문 프롬프트 ─────────────────────
+# 한 덩어리 규칙 프롬프트 대신, 서버측 라우터(정규식 — LLM 비용 0)가 요청을
+# 의도별 전문 역할로 나눠 최소 규칙만 주입한다. 프롬프트가 짧고 단일 목적이라
+# 도구 선택 오류·왕복이 줄어든다(A/B 실측은 PR 본문).
+
+_INTENT_PATTERNS = [
+    ("signoff", r"PVT|코너|corner|수율|yield|사인오프|sign.?off|몬테|공정 변동|강건"),
+    ("edit", r"넷리스트|netlist|추가해|삭제해|제거해|결선|연결을|소자를 넣|회로 구조|스위치를"),
+    ("size", r"사이징|최적화|맞춰|만들어|줄여|늘려|키워|optimize|스펙.*(만족|충족)|이하로|이상으로|빠르게|저전력"),
+    ("diagnose", r"확인|알려|얼마|왜|마진|진단|어때|괜찮|분석|보여"),
+]
+
+
+def classify_intent(text):
+    import re as _re
+    for intent, pat in _INTENT_PATTERNS:
+        if _re.search(pat, text, _re.I):
+            return intent
+    return "size"   # 모호하면 가장 보수적(검증 규율 포함)인 역할
+
+
+def _role_rules(role, domain):
+    comp = domain != "vco"
+    brief = "strongarm_design_brief" if comp else "vco_design_brief"
+    sim = "strongarm_run_sim" if comp else "vco_simulate"
+    opt = "strongarm_optimize" if comp else "vco_optimize"
+    pvt = "strongarm_pvt" if comp else "vco_pvt"
+    nlt = "strongarm_netlist" if comp else "vco_netlist"
+    common = "terminal·파일 등 다른 도구는 절대 사용하지 말라. 간결한 한국어로 답하라. "
+    if role == "diagnose":
+        return (f"[진단 전문] {brief} 를 정확히 1회 호출해 현재 상태·스펙 마진·힌트를 얻고 그대로 보고하라. "
+                f"측정 수치는 반올림 없이 도구가 준 값 그대로 표로 제시하라. "
+                f"다른 도구 호출 금지, 사이징 변경 제안 금지(요청받지 않았다). " + common)
+    if role == "signoff":
+        return (f"[사인오프 전문] {pvt} (필요시 수율 도구) 1회 호출로 코너 결과를 얻어 "
+                f"실패 코너를 표로 정리하고, 실패 시 레버(tail/ncc 보강, vdd 하한)를 제시하라. 도구 최대 2회. " + common)
+    if role == "edit":
+        return (f"[회로 편집 전문] ① {nlt} 로 현재 덱을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 로 실행해 "
+                f"측정값을 확인하고 ④ 수정 덱 전체를 ```spice 블록으로 포함하라. 도구 최대 3회. " + common)
+    # size (기본)
+    return (f"[사이징 전문] ① {brief} 1회로 마진 파악. ② 두 스펙 이상 위반이면 직접 고치지 말고 {opt} 에 위임해 "
+            f"그 결과를 제안하라. 한 스펙만 어긋나면 레시피 기반 수정안을 만들되 반드시 {sim} 으로 1회 실측 검증 후에만 "
+            f"제시하라(미검증 제안 금지 — 직관 사이징은 자주 틀린다). 도구 최대 2회. "
+            f"제안은 답변 끝 ```json {{\"devices\":{{...변경 소자만...}},\"vdd\":...}}``` 블록. " + common)
+
+
+def agent_ask(payload):
+    """오케스트레이션 진입점: 의도 분류 → 역할 규칙 + 설계 컨텍스트 조립 → 프록시.
+
+    payload: {question, context(설계 상태 JSON), domain: comparator|vco,
+              role: 명시 시 라우터 무시, sessionId}
+    """
+    q = (payload.get("question") or "").strip()
+    if not q:
+        return {"error": "question 이 비었습니다."}
+    domain = payload.get("domain") or "comparator"
+    role = payload.get("role") or classify_intent(q)
+    ctx = payload.get("context")
+    import json as _json
+    ctx_line = f"현재 {domain} 설계 상태(JSON):\n{_json.dumps(ctx, ensure_ascii=False)}\n\n" if ctx else ""
+    grid_rule = ""
+    mdl = (ctx or {}).get("model")
+    if mdl == "gaa2nm":
+        grid_rule = " 이 설계는 2nm급(gaa2nm): W 는 나노시트 스택 0.2µm 의 정수배로만 제안하라."
+    elif mdl == "asap7":
+        grid_rule = " 이 설계는 ASAP7 FinFET: W 는 핀 0.07µm 의 정수배로만 제안하라."
+    message = (ctx_line + "규칙: " + _role_rules(role, domain) + grid_rule
+               + " 도구 호출 시 params 인자에 위 설계 상태(및 변경분)를 그대로 넣어라.\n\n"
+               + f"사용자 요청: {q}")
+    out = agent_chat(message, payload.get("sessionId"))
+    out["role"] = role
+    return out
+
+
 def run_raw_netlist(netlist):
     """임의 SPICE 덱을 ngspice -b 로 실행 — 자연어 회로 변경 루프의 검증 단계.
 
@@ -1201,6 +1276,9 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/spice/run":
                 payload = self._read_json()
                 self._json(run_raw_netlist(str(payload.get("netlist", ""))))
+            elif self.path == "/api/agent/ask":
+                payload = self._read_json()
+                self._json(agent_ask(payload))
             elif self.path == "/api/agent/chat":
                 payload = self._read_json()
                 self._json(agent_chat(str(payload.get("message", "")),
