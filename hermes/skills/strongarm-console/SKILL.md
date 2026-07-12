@@ -74,3 +74,19 @@ These flows were tuned so one agent turn ≈ one minute:
   (`oscillates: false`). `n_stages` must be odd, ≥ 3.
 - Low-VDD StrongARM dies at slow-NMOS corners (SS/SF): strengthen `tail`/`ncc`
   (~1.5×) first, or raise vdd — verify with the 45-corner PVT tool.
+
+## External references (공개 스킬 생태계)
+
+같은 도메인의 공개 스킬 — **라이선스 미표기라 코드 반입은 금지**, 아이디어
+참조와 이론 문서 열람용으로만 링크한다:
+
+- `github.com/Arcadia-1/analog-circuit-skills` — StrongARM comparator 스킬
+  (ngspice+PTM45): 프로빗/CDF 피팅 기반 입력환산 노이즈 추출, τ 스윕,
+  램프 전달곡선, Miyahara 비교. `references/01~04`(theory/speed/noise/offset)
+  는 이론 질문에 좋은 답 소스.
+- `github.com/Arcadia-1/analog-agents` — 아날로그 멀티에이전트 패턴
+  (design/verify/review/audit/evolve 역할 분리) — 우리 오케스트레이터의
+  역할 분리와 같은 계열, 확장 아이디어 참조.
+
+MIT/Apache 로 라이선스된 인접 스킬(kicad-happy 의 KiCad 서브서킷 SPICE 검증,
+anthropics/skills 의 webapp-testing·mcp-builder)은 도메인이 달라 미설치.
