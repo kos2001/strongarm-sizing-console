@@ -241,7 +241,7 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
   },
   vcopvt: {
     what: {
-      ko: '공정(SS/TT/FF)·전압·온도 27개 코너에서 VCO가 발진하는지와 주파수가 얼마나 변하는지 확인합니다. 비교기 PVT와 같은 방식.',
+      ko: '공정 5코너(SS/SF/TT/FS/FF)·전압·온도 45개 코너에서 VCO가 발진하는지와 주파수가 얼마나 변하는지 확인합니다. 비교기 PVT와 같은 방식.',
       en: 'Checks whether the VCO oscillates and how much its frequency shifts across 27 process/voltage/temperature corners — same as the comparator PVT.',
     },
     read: {
