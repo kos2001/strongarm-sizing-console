@@ -598,7 +598,7 @@ def _agent_endpoint():
     return None, None
 
 
-def agent_chat(message, session_id=None, timeout=600):
+def agent_chat(message, session_id=None, timeout=900):
     """hermes strong-arm 에이전트(OpenAI 호환)로 한 턴 — MCP 로 SPICE 실행 가능."""
     import json as _json
     import urllib.request
@@ -661,6 +661,11 @@ def _role_rules(role, domain):
         return (f"[회로 편집 전문] ① {nlt} 로 현재 덱을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 로 실행해 "
                 f"측정값을 확인하고 ④ 수정 덱 전체를 ```spice 블록으로 포함하라. 도구 최대 3회. " + common)
     # size (기본)
+    if not comp:
+        return (f"[사이징 전문] ① {brief} 1회로 마진 파악. ② 목표에서 크게 벗어나면 {opt} 에 위임하되 "
+                f"에이전트 턴 안에 끝나도록 반드시 pop=6, gens=3 인자를 함께 넘겨라(전체 탐색은 콘솔의 자동 사이징 버튼 몫). "
+                f"근소한 차이면 레시피(starve 폭·N·cload 레버)로 수정안을 만들고 {sim} 으로 1회 실측 검증 후에만 제시하라"
+                f"(미검증 제안 금지). 도구 최대 2회. 제안은 답변 끝 ```json 블록. " + common)
     return (f"[사이징 전문] ① {brief} 1회로 마진 파악. ② 두 스펙 이상 위반이면 직접 고치지 말고 {opt} 에 위임해 "
             f"그 결과를 제안하라. 한 스펙만 어긋나면 레시피 기반 수정안을 만들되 반드시 {sim} 으로 1회 실측 검증 후에만 "
             f"제시하라(미검증 제안 금지 — 직관 사이징은 자주 틀린다). 도구 최대 2회. "
@@ -1467,7 +1472,8 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/vco/optimize":
                 payload = self._read_json()
                 base = vco_sim._full(payload.get("params", {}))
-                self._json(optimize_vco(base, payload.get("targets") or {"f_ghz": 1.5}))
+                self._json(optimize_vco(base, payload.get("targets") or {"f_ghz": 1.5},
+                                        pop=int(payload.get("pop", 12)), gens=int(payload.get("gens", 7))))
             elif self.path == "/api/vco/waveform":
                 payload = self._read_json()
                 self._json(vco_sim.capture_vco_waveform(payload.get("params", {})))
