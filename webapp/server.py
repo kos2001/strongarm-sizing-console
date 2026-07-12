@@ -1204,13 +1204,15 @@ class Handler(BaseHTTPRequestHandler):
                 prm = payload.get("params", {})
                 base_vdd = float(prm.get("vdd", run_sim.DEFAULT_PARAMS["vdd"]))
                 sky = prm.get("model") == "sky130"
-                cmap = {"SS": "ss", "TT": "tt", "FF": "ff"}
+                cmap = {"SS": "ss", "TT": "tt", "FF": "ff", "SF": "sf", "FS": "fs"}
+                # 5개 공정 코너 — 정렬(SS/TT/FF) + 교차(SF=slow N/fast P, FS=fast N/slow P)
                 specs = []
-                for pl, ps in (("SS", 0.05), ("TT", 0.0), ("FF", -0.05)):
+                for pl, ns, ps in (("SS", 0.05, 0.05), ("TT", 0.0, 0.0), ("FF", -0.05, -0.05),
+                                   ("SF", 0.05, -0.05), ("FS", -0.05, 0.05)):
                     for t in (-40, 27, 125):
                         for vf in (0.9, 1.0, 1.1):
                             vdd = round(base_vdd * vf, 3)
-                            proc = {"corner": cmap[pl]} if sky else {"pskew": ps}   # real PDK corner vs Vth skew
+                            proc = {"corner": cmap[pl]} if sky else {"nskew": ns, "pskew_p": ps}   # real PDK corner vs Vth skew
                             specs.append((pl, t, vf, vdd, proc))
 
                 def _corner(s):
@@ -1221,7 +1223,7 @@ class Handler(BaseHTTPRequestHandler):
                             "power_uw": nom.get("power_uw"),
                             "functional": bool(nom.get("functional"))}
 
-                corners = _pmap(_corner, specs)   # 27 independent corners, parallel
+                corners = _pmap(_corner, specs)   # 45 independent corners (5 process x 3T x 3V), parallel
                 decs = [c["decision_time_ps"] for c in corners if c["decision_time_ps"] is not None]
                 pws = [c["power_uw"] for c in corners if c["power_uw"] is not None]
                 self._json({"corners": corners, "base_vdd": base_vdd, "worst": {

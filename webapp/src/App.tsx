@@ -321,7 +321,7 @@ export default function App() {
     if (berRes) lines.push(``, `## Noise / BER`, ``, `- Input-referred noise σ: ${berRes.noise_uv_rms} µV`, `- Offset σ: ${fmt(berRes.offset_sigma_mv, 'mV')}`, `- Min detectable input @ BER ${berRes.ber_target}: ${berRes.min_input_total_uv} µV (with offset), ${berRes.min_input_noise_uv} µV (noise only)`)
     if (fclkRes) lines.push(``, `## Max clock rate`, ``, `- Max f_clk: ${fclkRes.max_fclk_ghz != null ? fclkRes.max_fclk_ghz + ' GHz' : 'none'} (min period ${fmt(fclkRes.min_period_ns, 'ns')})`, `- Energy / conversion: ${fmt(fclkRes.energy_fj_at_max, 'fJ')}`)
     if (yieldRes) lines.push(``, `## Parametric yield`, ``, `- Yield: ${yieldRes.yield_pct}% (${yieldRes.pass}/${yieldRes.n}, mismatch × PVT)`, `- Fails — offset ${yieldRes.fail_breakdown.offset}, speed ${yieldRes.fail_breakdown.speed}, wrong ${yieldRes.fail_breakdown.decision_wrong}`)
-    if (pvtRes) lines.push(``, `## PVT sign-off (27 corners)`, ``, `- Worst decision: ${fmt(pvtRes.worst.decision_time_ps, 'ps')}`, `- Worst power: ${fmt(pvtRes.worst.power_uw, 'µW')}`, `- All corners resolve: ${pvtRes.worst.any_nonfunctional ? 'NO' : 'yes'}`)
+    if (pvtRes) lines.push(``, `## PVT sign-off (45 corners)`, ``, `- Worst decision: ${fmt(pvtRes.worst.decision_time_ps, 'ps')}`, `- Worst power: ${fmt(pvtRes.worst.power_uw, 'µW')}`, `- All corners resolve: ${pvtRes.worst.any_nonfunctional ? 'NO' : 'yes'}`)
     if (sensRes) lines.push(``, `## Sensitivity (±${sensRes.delta_pct}% W)`, ``, ...sensRes.devices.map((d) => `- ${DEVICE_META[d.key].name}: decision ${d.low.decision_time_ps}→${d.high.decision_time_ps} ps, offset ${d.low.offset_sigma_mv}→${d.high.offset_sigma_mv} mV`))
     if (paretoRes) lines.push(``, `## Pareto front`, ``, `- ${paretoRes.front.length} non-dominated designs (power ↔ decision-time)`)
     lines.push(``, `---`, ``, `<details><summary>Raw JSON</summary>`, ``, '```json', JSON.stringify({ params, targets, result, metaRes, berRes, sensRes, fclkRes, yieldRes, pvtRes: pvtRes?.worst, generated: ts }, null, 2), '```', ``, `</details>`, ``)
@@ -908,7 +908,7 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>PVT · worst-case across process / voltage / temperature</div>
                 <button onClick={runPvt} disabled={busy || pvtLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
-                  {pvtLoading ? 'sweeping 27 corners…' : '◫ run PVT sweep'}
+                  {pvtLoading ? 'sweeping 45 corners…' : '◫ run PVT sweep'}
                 </button>
               </div>
               {pvtRes ? (
@@ -921,12 +921,12 @@ export default function App() {
                         return <Gauge key={k} label={`${TARGET_META[k].label} (worst corner)`} value={val} limit={lim} unit={TARGET_META[k].unit} pass={val == null ? null : val <= lim} />
                       })}
                       <div className="mono text-[11px]" style={{ color: pvtRes.worst.any_nonfunctional ? 'var(--bad)' : 'var(--good)' }}>
-                        {pvtRes.worst.any_nonfunctional ? '✗ some corner failed to resolve' : '✓ resolves to a rail in all 27 corners'}
+                        {pvtRes.worst.any_nonfunctional ? '✗ some corner failed to resolve' : '✓ resolves to a rail in all 45 corners'}
                       </div>
                     </div>
                   </div>
                   <div className="rounded-2xl p-4 overflow-x-auto" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                    {(['SS', 'TT', 'FF'] as const).map((proc) => (
+                    {(['SS', 'SF', 'TT', 'FS', 'FF'] as const).map((proc) => (
                       <div key={proc} className="flex items-center gap-1.5 mb-1.5">
                         <span className="mono text-[11px] w-7 shrink-0" style={{ color: 'var(--muted)' }}>{proc}</span>
                         {pvtRes.corners.filter((c) => c.process === proc).map((c, i) => {
@@ -940,7 +940,7 @@ export default function App() {
                       </div>
                     ))}
                     <div className="mono text-[10px] mt-1.5 leading-relaxed" style={{ color: 'var(--faint)' }}>
-                      each cell = decision (ps) at one corner; 9 cols = T(−40/27/125°C) × V(0.9/1.0/1.1×VDD); process = ±50 mV Vth skew (delvto). teal ≤ {targets.decision_time_ps} ps, red = miss. Nominal passing ≠ PVT passing.
+                      each cell = decision (ps) at one corner; 9 cols = T(−40/27/125°C) × V(0.9/1.0/1.1×VDD); process = 5 corners (SS/TT/FF + cross SF/FS, ±50 mV Vth skew per device type). teal ≤ {targets.decision_time_ps} ps, red = miss. Nominal passing ≠ PVT passing.
                     </div>
                   </div>
                 </>
