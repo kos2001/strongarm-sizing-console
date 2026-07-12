@@ -311,3 +311,12 @@ export const DEVICE_META: Record<DeviceKey, { name: string; role: string; world:
   pre: { name: 'S3 / S4', role: 'precharge X·Y (outputs)', world: 'si' },
   prei: { name: 'S1 / S2', role: 'precharge P·Q (internal)', world: 'si' },
 }
+
+export interface ProbitResult {
+  sigma_uv_probit?: number
+  sigma_uv_analytic?: number
+  ratio?: number
+  points?: { vin_uv: number; p_plus: number; n: number }[]
+  n_sims?: number
+  error?: string
+}

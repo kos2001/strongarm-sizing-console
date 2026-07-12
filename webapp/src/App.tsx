@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { BerResult, Device, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
+import type { BerResult, ProbitResult, Device, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
 import { DEVICE_META } from './types'
 import { ber, fullflow, getDefaults, health, layout, maxfclk, metastability, optimize, pareto, postlayout, pvt, sensitivity, simulate, waveform, yieldRun } from './api'
 import BerChart from './components/BerChart'
@@ -141,6 +141,8 @@ export default function App() {
   const [metaSel, setMetaSel] = useState<number | null>(null) // 메타안정성 선택점(상세)
   const [metaLoading, setMetaLoading] = useState(false)
   const [berRes, setBerRes] = useState<BerResult | null>(null)
+  const [probitRes, setProbitRes] = useState<ProbitResult | null>(null)
+  const [probitLoading, setProbitLoading] = useState(false)
   const [berLoading, setBerLoading] = useState(false)
   const [sensRes, setSensRes] = useState<SensitivityResult | null>(null)
   const [sensLoading, setSensLoading] = useState(false)
@@ -244,6 +246,13 @@ export default function App() {
     }
   }
 
+  const runProbit = async () => {
+    setProbitLoading(true)
+    try {
+      const r = await fetch('/api/noise/probit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
+      setProbitRes(await r.json())
+    } catch (e) { setProbitRes({ error: String(e) } as ProbitResult) } finally { setProbitLoading(false) }
+  }
   const runBer = async () => {
     setBerLoading(true)
     try {
@@ -1096,10 +1105,29 @@ export default function App() {
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Noise / BER · decision error rate vs input</div>
-                <button onClick={runBer} disabled={busy || berLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
-                  {berLoading ? 'computing…' : '⊹ compute BER'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={runBer} disabled={busy || berLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
+                    {berLoading ? 'computing…' : '⊹ compute BER'}
+                  </button>
+                  <button onClick={runProbit} disabled={busy || probitLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                    title="프로빗(noise-counting) 실측: 준안정점 근처에서 열잡음 주입 판정을 반복해 P(+|vin)→Φ⁻¹ 피팅으로 σ 를 잰다">
+                    {probitLoading ? 'counting…' : '∿ σ 프로빗 실측'}
+                  </button>
+                </div>
               </div>
+              {probitRes && !probitRes.error && (
+                <div className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid color-mix(in srgb, var(--si) 30%, var(--line))' }}>
+                  <div className="grid grid-cols-3 gap-3">
+                    <Detail label="σ 프로빗 실측" value={`${probitRes.sigma_uv_probit} µV`} />
+                    <Detail label="σ 해석 추정" value={`${probitRes.sigma_uv_analytic} µV`} />
+                    <Detail label="실측/해석 비" value={`${probitRes.ratio}×`} />
+                  </div>
+                  <p className="mono text-[10.5px] mt-2" style={{ color: 'var(--faint)' }}>
+                    {probitRes.n_sims} 판정 · P(+|vin): {(probitRes.points ?? []).map((pt) => `${pt.vin_uv}µV→${pt.p_plus}`).join(' · ')} — Φ⁻¹(P)=vin/σ 최소자승 · n=24/점이라 σ 추정에 ±수십% 산포가 있음(경향 확인용, 정밀값은 n_per_point 상향)
+                  </p>
+                </div>
+              )}
+              {probitRes?.error && <p className="mono text-[11px]" style={{ color: 'var(--warn)' }}>{probitRes.error}</p>}
               {berRes ? (
                 <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
                   <BerChart res={berRes} theme={theme} />

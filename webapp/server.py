@@ -1323,6 +1323,10 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/metastability":
                 payload = self._read_json()
                 self._json(run_sim.metastability_sweep(payload.get("params", {})))
+            elif self.path == "/api/noise/probit":
+                payload = self._read_json()
+                self._json(run_sim.noise_probit(payload.get("params", {}),
+                                                n_per_point=int(payload.get("n_per_point", 24))))
             elif self.path == "/api/ber":
                 payload = self._read_json()
                 full = copy.deepcopy(run_sim.DEFAULT_PARAMS)
