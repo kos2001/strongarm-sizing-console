@@ -523,6 +523,26 @@ def agent_chat(message, session_id=None, timeout=600):
         return {"error": f"에이전트 호출 실패: {e}", "sessionId": sid}
 
 
+def run_raw_netlist(netlist):
+    """임의 SPICE 덱을 ngspice -b 로 실행 — 자연어 회로 변경 루프의 검증 단계.
+
+    반환: 모든 .meas 결과(이름→값), 콘솔 로그 꼬리. `shell` 명령은 차단
+    (로컬 도구지만 ngspice control 의 셸 이스케이프는 막는다).
+    """
+    import re
+    if re.search(r"^\s*shell\b", netlist, re.M | re.I):
+        return {"error": "netlist 에 shell 명령은 허용되지 않습니다."}
+    out = run_sim._run(netlist)
+    meas = {}
+    for m in re.finditer(r"^(\w+)\s*=\s*([-+0-9.eE]+)", out, re.M):
+        try:
+            meas[m.group(1)] = float(m.group(2))
+        except ValueError:
+            pass
+    tail = "\n".join(out.strip().splitlines()[-25:])
+    return {"measures": meas, "log_tail": tail}
+
+
 def parse_netlist_text(text):
     """SPICE 덱에서 MOS/전원/커패시터를 파싱해 소자 표 + (가능하면) 파라미터로.
 
@@ -946,7 +966,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path == "/api/agent/chat":
+            if self.path == "/api/spice/run":
+                payload = self._read_json()
+                self._json(run_raw_netlist(str(payload.get("netlist", ""))))
+            elif self.path == "/api/agent/chat":
                 payload = self._read_json()
                 self._json(agent_chat(str(payload.get("message", "")),
                                       payload.get("sessionId")))
