@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { BerResult, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
+import type { BerResult, Device, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
 import { DEVICE_META } from './types'
 import { ber, fullflow, getDefaults, health, layout, maxfclk, metastability, optimize, pareto, postlayout, pvt, sensitivity, simulate, waveform, yieldRun } from './api'
 import BerChart from './components/BerChart'
@@ -14,6 +14,7 @@ import PageHelp from './components/PageHelp'
 import Schematic from './components/Schematic'
 import { downloadNetlist } from './netlist'
 import NetlistImport from './components/NetlistImport'
+import AgentSizing from './components/AgentSizing'
 import SensitivityChart from './components/SensitivityChart'
 import VcoPage from './components/VcoPage'
 import WaveformChart from './components/WaveformChart'
@@ -583,6 +584,18 @@ export default function App() {
           </div>
 
           <DeviceEditor params={params} onChange={updateParams} disabled={busy} lang={lang} />
+
+          <AgentSizing params={params} targets={targets} ko={lang === 'ko'} disabled={busy}
+            onApply={(pr) => {
+              if (pr.targets) setTargets((tg) => ({ ...tg, ...pr.targets }))
+              updateParams({
+                ...params,
+                ...(pr.vdd != null ? { vdd: pr.vdd } : {}),
+                ...(pr.cload_ff != null ? { cload_ff: pr.cload_ff } : {}),
+                ...(pr.topology ? { topology: pr.topology } : {}),
+                devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => [k, { ...params.devices[k], ...(pr.devices?.[k] ?? {}) }])) as Record<DeviceKey, Device>,
+              })
+            }} />
 
           <div className="grid grid-cols-3 gap-3">
             {([
