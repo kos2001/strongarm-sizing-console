@@ -111,10 +111,11 @@ export default function Schematic({ devices, changed, topology = 'strongarm' }: 
         <Mos cx={420} cy={190} flash={changed === 'ncc'} />
         <Prop x={432} y={204} k="ncc" />
         <Wire d={`340,203 340,${GND}`} /><Wire d={`420,203 420,${GND}`} />
-        {/* 래치 X 결선 */}
-        <Wire d={`358,118 358,190`} /><Wire d={`402,118 402,190`} />
-        <Wire d={`358,138 420,170`} /><Wire d={`402,138 340,170`} />
-        <Dot x={358} y={138} /><Dot x={402} y={138} /><Dot x={340} y={170} /><Dot x={420} y={170} />
+        {/* 래치 X 결선 — 쌍별 소형 X */}
+        <Wire d={`358,118 420,140`} /><Wire d={`402,118 340,140`} />
+        <Dot x={340} y={140} /><Dot x={420} y={140} />
+        <Wire d={`358,190 420,168`} /><Wire d={`402,190 340,168`} />
+        <Dot x={340} y={168} /><Dot x={420} y={168} />
         {/* 결합/리셋 NMOS — 게이트 = fn/fp */}
         <Mos cx={280} cy={190} flash={changed === 'ncc'} />
         <Wire d={`280,177 280,150 340,150`} />
@@ -179,14 +180,14 @@ export default function Schematic({ devices, changed, topology = 'strongarm' }: 
       <Mos cx={RX} cy={yLatN} hot flash={changed === 'ncc'} />
       <Prop x={RX + 12} y={yLatN + 11} k="ncc" />
 
-      {/* cross-couple wiring — 래치 표기: 좌우 게이트 버스를 반대편 출력 노드에
-          대각선 두 줄로 연결해 중앙에서 X 로 교차시킨다(참고 자료의 latch 표기). */}
-      <Wire d={`${LX + 18},${yLatP} ${LX + 18},${yLatN}`} />
-      <Wire d={`${RX - 18},${yLatP} ${RX - 18},${yLatN}`} />
-      <Wire d={`${LX + 18},125 ${RX},172`} />
-      <Wire d={`${RX - 18},125 ${LX},172`} />
-      <Dot x={LX + 18} y={125} /><Dot x={RX - 18} y={125} />
-      <Dot x={LX} y={172} /><Dot x={RX} y={172} />
+      {/* cross-couple wiring — 쌍별 X: 각 래치 쌍의 게이트가 반대편 드레인
+          기둥으로 곧장 교차한다(PMOS 쌍 아래·NMOS 쌍 위에 소형 X 하나씩). */}
+      <Wire d={`${LX + 18},${yLatP} ${RX},${yLatP + 22}`} />
+      <Wire d={`${RX - 18},${yLatP} ${LX},${yLatP + 22}`} />
+      <Dot x={LX} y={yLatP + 22} /><Dot x={RX} y={yLatP + 22} />
+      <Wire d={`${LX + 18},${yLatN} ${RX},${yLatN - 22}`} />
+      <Wire d={`${RX - 18},${yLatN} ${LX},${yLatN - 22}`} />
+      <Dot x={LX} y={yLatN - 22} /><Dot x={RX} y={yLatN - 22} />
 
       {/* input pair: X/Y -> tail */}
       <Wire d={`${LX},${yLatN + 13} ${LX},${yIn - 13}`} />
