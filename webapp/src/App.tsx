@@ -578,6 +578,8 @@ export default function App() {
                   key={m}
                   disabled={busy}
                   onClick={() => updateParams({ ...params, model: m, vdd: v,
+                    // Pelgrom A_VT: GAA 2nm 급은 얇은 EOT·언도프드 채널로 매칭 우수(~1.2mV·µm)
+                    avt_mv_um: m === 'gaa2nm' ? 1.2 : 2.0,
                     devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => {
                       const dd = params.devices[k]
                       const l_nm = k === 'input' ? lmap.input : lmap.other
@@ -800,7 +802,7 @@ export default function App() {
                   </div>
                 </div>
               )}
-            <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.topology ? { topology: pp.topology as 'strongarm' | 'doubletail' } : {}), devices: { ...params.devices, ...pp.devices } })} />
+            <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.topology ? { topology: pp.topology as 'strongarm' | 'doubletail' } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'sky130' | 'gaa2nm' } : {}), devices: { ...params.devices, ...pp.devices } })} />
             </div>
           )}
 

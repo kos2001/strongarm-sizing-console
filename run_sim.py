@@ -62,6 +62,12 @@ MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 W_SHEET_UM = 0.2
 
 
+def skew_scale(p):
+    """공정 코너/시그마 Vth 스큐 스케일. gaa2nm 은 |Vth0|=0.20V 라 45nm급
+    ±50mV 코너가 25% 스큐로 과대 — 절반(±25mV)으로 줄인다."""
+    return 0.5 if p.get("model") == "gaa2nm" else 1.0
+
+
 def quantize_devices(p):
     """gaa2nm: W 를 시트 그리드(W_SHEET_UM 정수배, 최소 1스택)에 스냅.
     W 를 시트폭 고정 + M=finger 로 접지 않는 이유: 카드가 geoMod=1(비공유
@@ -490,6 +496,10 @@ def _full(params):
     p = dict(DEFAULT_PARAMS)
     p.update({k: v for k, v in params.items() if k != "devices"})
     p["devices"] = merge_devices(params.get("devices"))
+    # Pelgrom A_VT: 호출자가 명시하지 않으면 모델별 기본 — gaa2nm 은 얇은
+    # EOT·언도프드 채널로 매칭이 좋아 ~1.2mV·µm (45nm급 기본 2.0)
+    if p.get("model") == "gaa2nm" and "avt_mv_um" not in params:
+        p["avt_mv_um"] = 1.2
     return p
 
 

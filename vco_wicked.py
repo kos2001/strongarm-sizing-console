@@ -158,8 +158,9 @@ def wco_operating(params, targets=None):
     """Worst-case operation over the 45 process/temperature/VDD corners (5 corners incl. SF/FS)."""
     p, t = _full(params), _targets(targets)
     base_vdd = float(p["vdd"])
+    _sk = 0.05 * run_sim.skew_scale(p)   # gaa2nm: |Vth0| 0.2V 에 맞춰 ±25mV
     specs = [(lbl, ns, ps, temp, vf)
-             for lbl, ns, ps in (("SS", 0.05, 0.05), ("TT", 0.0, 0.0), ("FF", -0.05, -0.05), ("SF", 0.05, -0.05), ("FS", -0.05, 0.05))
+             for lbl, ns, ps in (("SS", _sk, _sk), ("TT", 0.0, 0.0), ("FF", -_sk, -_sk), ("SF", _sk, -_sk), ("FS", -_sk, _sk))
              for temp in (-40, 27, 125) for vf in (0.9, 1.0, 1.1)]
 
     def one(s):
@@ -208,7 +209,7 @@ def worst_case_distance(params, targets=None, n_samples=24, seed=19):
     samples = []
     for _ in range(max(1, int(n_samples))):
         z = [_clip(rng.gauss(0, 1), -3.5, 3.5) for _ in range(3)]
-        cfg = {**p, "pskew": 0.03 * z[0],
+        cfg = {**p, "pskew": 0.03 * run_sim.skew_scale(p) * z[0],
                "vdd": round(_clip(base_vdd * (1.0 - 0.05 * z[1]), 0.75 * base_vdd, 1.25 * base_vdd), 4),
                "temp": round(_clip(27.0 + 45.0 * z[2], -40.0, 125.0), 2)}
         samples.append((z, cfg))
@@ -255,7 +256,9 @@ def _netlist_with_mismatch(p, rng, tstop_ns=18.0):
     This is the VCO analog of the comparator's Monte-Carlo offset injection:
     every MOSFET (both rails, bias mirror, cross-couple, reset) gets its own
     delvto sample sigma = AVT/sqrt(W*L*M), instead of the global corner skew."""
-    avt = float(p.get("avt_mv_um", run_sim.DEFAULT_PARAMS.get("avt_mv_um", 2.0)))
+    # Pelgrom A_VT 기본값: gaa2nm 은 얇은 EOT·언도프드 채널로 매칭 우수(~1.2mV·µm)
+    _avt_default = 1.2 if p.get("model") == "gaa2nm" else run_sim.DEFAULT_PARAMS.get("avt_mv_um", 2.0)
+    avt = float(p.get("avt_mv_um", _avt_default))
     pskew = float(p.get("pskew", 0.0))   # substitution drops the {dvtn}/{dvtp}
     nl = vco_sim.gen_vco_netlist(p, tstop_ns=tstop_ns)   # refs, so re-add the corner skew here
 
@@ -308,7 +311,8 @@ def yield_sweep(params, targets=None, n_points=7, n_mc=6, seed=53):
     rng = random.Random(seed)
     lo, hi = _band(t)
     vdd0 = float(p["vdd"])
-    skews = [round(-0.06 + 0.12 * i / max(1, n_points - 1), 4) for i in range(n_points)]
+    _sk6 = 0.06 * run_sim.skew_scale(p)   # gaa2nm: 스윕 범위도 절반
+    skews = [round(-_sk6 + 2 * _sk6 * i / max(1, n_points - 1), 4) for i in range(n_points)]
 
     def one_point(skw):
         passes, samples = 0, []
