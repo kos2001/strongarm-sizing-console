@@ -137,7 +137,7 @@ def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
         "set noaskquit",
         _osdi_line(p),
         f"tran {tstep_ps}p {tstop_ns}n uic",
-        # period across 5 cycles (rise 3..8) of o1, measured after startup settles
+        # period across 5 CYCLES (rise 3..8): f_osc = 5/per — NOT 1/per
         f"meas tran per TRIG v(o1) VAL='{vdd/2.0}' RISE=3 TARG v(o1) VAL='{vdd/2.0}' RISE=8",
         "meas tran vpp PP v(o1)",
         f"meas tran iavg AVG i(Vdd) FROM={tstop_ns*0.2}n TO={tstop_ns}n",
@@ -218,8 +218,8 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
         "set noaskquit",
         _osdi_line(p),
         f"tran {tstep_ps}p {tstop_ns}n",
-        # rising edges only exist after the reset release, so RISE=3..8 measures
-        # the settled oscillation just like the starved topology
+        # rising edges only exist after the reset release; RISE=3..8 spans 5 CYCLES
+        # of settled oscillation: f_osc = 5/per — NOT 1/per
         f"meas tran per TRIG v(o1) VAL='{vdd/2.0}' RISE=3 TARG v(o1) VAL='{vdd/2.0}' RISE=8",
         "meas tran vpp PP v(o1)",
         f"meas tran iavg AVG i(Vdd) FROM={tstop_ns*0.2}n TO={tstop_ns}n",
