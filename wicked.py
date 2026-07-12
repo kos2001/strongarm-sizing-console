@@ -34,7 +34,7 @@ DEFAULT_TARGETS = {
     "offset_sigma_mv": 5.0,
     "yield_pct": 99.0,
 }
-DEV_KEYS = ["input", "tail", "ncc", "pcc", "pre"]
+DEV_KEYS = ["input", "tail", "ncc", "pcc", "pre", "prei"]
 _WORKERS = max(2, min(8, __import__("os").cpu_count() or 4))
 
 

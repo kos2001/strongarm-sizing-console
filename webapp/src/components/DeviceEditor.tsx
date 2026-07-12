@@ -9,7 +9,7 @@ interface Props {
   lang: Lang
 }
 
-const KEYS: DeviceKey[] = ['input', 'tail', 'ncc', 'pcc', 'pre']
+const KEYS: DeviceKey[] = ['input', 'tail', 'ncc', 'pcc', 'pre', 'prei']
 const FIELDS: { k: 'w_um' | 'l_nm' | 'm'; label: string; step: number }[] = [
   { k: 'w_um', label: 'W (µm)', step: 0.5 },
   { k: 'l_nm', label: 'L (nm)', step: 5 },
@@ -39,7 +39,8 @@ export default function DeviceEditor({ params, onChange, disabled, lang }: Props
         <span>L (nm)</span>
         <span>M</span>
       </div>
-      {KEYS.map((dk) => {
+      {/* doubletail 은 S1/S2(내부 프리차지) 그룹을 쓰지 않는다 */}
+      {KEYS.filter((dk) => dk !== 'prei' || params.topology !== 'doubletail').map((dk) => {
         const meta = DEVICE_META[dk]
         return (
           <div

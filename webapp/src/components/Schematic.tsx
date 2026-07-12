@@ -10,8 +10,8 @@ export default function Schematic({ devices, changed, topology = 'strongarm' }: 
   const d = devices
   const sz = (k: DeviceKey) => `${d[k].w_um}u×${d[k].m}`
   const REF: Record<DeviceKey, string> = topology === 'doubletail'
-    ? { pre: 'M3/4', pcc: 'M5/6', ncc: 'M7~10', input: 'M1/2', tail: 'Mt1·2' }
-    : { pre: 'S1~S4', pcc: 'M5/6', ncc: 'M3/4', input: 'M1/2', tail: 'M7' }
+    ? { pre: 'M3/4', prei: '—', pcc: 'M5/6', ncc: 'M7~10', input: 'M1/2', tail: 'Mt1·2' }
+    : { pre: 'S3/4', prei: 'S1/2', pcc: 'M5/6', ncc: 'M3/4', input: 'M1/2', tail: 'M7' }
 
   // one analogLib-style MOSFET symbol. anchors: drain=top, source=bottom,
   // gate=left (flip=true 면 좌우반전 — 게이트가 오른쪽을 향한다).
@@ -167,19 +167,20 @@ export default function Schematic({ devices, changed, topology = 'strongarm' }: 
       {/* ── 상단 PMOS 행: S1 S3 M5 M6 S4 S2 (전원 → 각 드레인) ── */}
       {[S1X, S3X, S4X, S2X].map((x) => <Wire key={x} d={`${x},${V0} ${x},${yP - 13}`} />)}
       <Wire d={`${M5X},${V0} ${M5X},${yP - 13}`} /><Wire d={`${M6X},${V0} ${M6X},${yP - 13}`} />
-      <Mos cx={S1X} cy={yP} p flash={changed === 'pre'} />
+      <Mos cx={S1X} cy={yP} p flash={changed === 'prei'} />
       <Mos cx={S3X} cy={yP} p flash={changed === 'pre'} />
       <Mos cx={M5X} cy={yP} p hot flip flash={changed === 'pcc'} />
       <Mos cx={M6X} cy={yP} p hot flash={changed === 'pcc'} />
       <Mos cx={S4X} cy={yP} p flip flash={changed === 'pre'} />
-      <Mos cx={S2X} cy={yP} p flip flash={changed === 'pre'} />
-      <Name x={S1X - 4} y={yP - 16} k="pre" anchor="middle">S1</Name>
+      <Mos cx={S2X} cy={yP} p flip flash={changed === 'prei'} />
+      <Name x={S1X - 4} y={yP - 16} k="prei" anchor="middle">S1</Name>
       <Name x={S3X - 4} y={yP - 16} k="pre" anchor="middle">S3</Name>
       <Name x={M5X - 14} y={yP - 16} k="pcc" anchor="middle">M5</Name>
       <Name x={M6X + 14} y={yP - 16} k="pcc" anchor="middle">M6</Name>
       <Name x={S4X + 4} y={yP - 16} k="pre" anchor="middle">S4</Name>
-      <Name x={S2X + 4} y={yP - 16} k="pre" anchor="middle">S2</Name>
+      <Name x={S2X + 4} y={yP - 16} k="prei" anchor="middle">S2</Name>
       <Prop x={S3X - 34} y={yP + 26} k="pre" />
+      <Prop x={S2X - 6} y={yP + 26} k="prei" />
       <Prop x={M6X + 24} y={yP + 30} k="pcc" />
 
       {/* CK — 왼쪽(S1·S3)과 오른쪽(S4·S2) */}

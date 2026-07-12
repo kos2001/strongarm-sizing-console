@@ -138,8 +138,8 @@ def _build_layout(blocks, cell_name, gds_path, gds_default, gaa=False):
 def generate_layout(params, gds_path=None):
     devices = params.get("devices", {})
     gaa = params.get("model") == "gaa2nm"
-    order = ["tail", "input", "ncc", "pcc", "pre"]
-    kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p"}
+    order = ["tail", "input", "ncc", "pcc", "pre", "prei"]
+    kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p", "prei": "p"}
     blocks = [(k, devices[k], kind[k]) for k in order if k in devices]
     return _build_layout(blocks, "STRONGARM_COMPARATOR", gds_path, "strongarm.gds", gaa=gaa)
 
@@ -201,10 +201,10 @@ def extract_parasitics(params):
     geometry. Real geometry × areal/fringe cap — a PoC extraction, not sign-off."""
     dv = {**{k: v for k, v in params.get("devices", {}).items()}}
     gaa = params.get("model") == "gaa2nm"
-    kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p"}
+    kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p", "prei": "p"}
     cap = {k: _device_cap_ff(dv[k], kind[k], gaa) for k in dv if k in kind}
     c_out = 0.5 * (cap.get("pcc", 0) + cap.get("ncc", 0) + cap.get("pre", 0))
-    c_int = 0.5 * (cap.get("input", 0) + cap.get("ncc", 0))
+    c_int = 0.5 * (cap.get("input", 0) + cap.get("ncc", 0) + cap.get("prei", 0))
     return {"c_out_ff": round(c_out, 3), "c_int_ff": round(c_int, 3),
             "per_device_ff": {k: round(v, 3) for k, v in cap.items()},
             "method": ("drawn nanosheet-grid geometry × 2nm-class cap densities (approx)" if gaa

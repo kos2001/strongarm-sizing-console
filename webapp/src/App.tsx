@@ -49,7 +49,8 @@ const DEFAULTS: Params = {
     tail: { w_um: 12.0, l_nm: 45.0, m: 6 },
     ncc: { w_um: 4.0, l_nm: 45.0, m: 2 },
     pcc: { w_um: 9.0, l_nm: 45.0, m: 4 },
-    pre: { w_um: 4.0, l_nm: 45.0, m: 2 },
+    pre: { w_um: 4.0, l_nm: 45.0, m: 2 },    // S3/S4 — 출력 X·Y 프리차지
+    prei: { w_um: 4.0, l_nm: 45.0, m: 2 },   // S1/S2 — 내부 P·Q 프리차지
   },
 }
 
@@ -576,7 +577,7 @@ export default function App() {
               // 모델별 채널 길이: gaa2nm 은 Lg 14nm 급(입력쌍 20nm), 나머지는 45nm 노드 기본
               const lmap = m === 'gaa2nm' ? { input: 20, other: 14 } : m === 'asap7' ? { input: 21, other: 21 } : { input: 80, other: 45 }
               // asap7: 핀 수 기준 현실적 사이징(input 16 / tail 36 / ncc·pre 8 / pcc 20핀, 검증됨)
-              const wmap7: Record<DeviceKey, number> = { input: 0.28, tail: 0.42, ncc: 0.28, pcc: 0.35, pre: 0.28 }
+              const wmap7: Record<DeviceKey, number> = { input: 0.28, tail: 0.42, ncc: 0.28, pcc: 0.35, pre: 0.28, prei: 0.28 }
               return (
                 <button
                   key={m}

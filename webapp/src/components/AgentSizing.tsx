@@ -28,7 +28,7 @@ function downloadDeck(text: string, filename: string) {
   URL.revokeObjectURL(url)
 }
 
-const DEV_KEYS: DeviceKey[] = ['input', 'tail', 'ncc', 'pcc', 'pre']
+const DEV_KEYS: DeviceKey[] = ['input', 'tail', 'ncc', 'pcc', 'pre', 'prei']
 
 function extractProposal(answer: string): Proposal | null {
   const m = answer.match(/```json\s*([\s\S]*?)```/)

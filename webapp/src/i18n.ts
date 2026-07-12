@@ -297,7 +297,8 @@ export const DEVICE_ROLES: Record<string, Bi> = {
   tail: { ko: '테일 스위치 — 속도', en: 'tail switch — speed' },
   ncc: { ko: 'NMOS 래치 — 재생', en: 'latch NMOS — regeneration' },
   pcc: { ko: 'PMOS 래치 — 재생', en: 'latch PMOS — regeneration' },
-  pre: { ko: '프리차지 — 리셋', en: 'precharge — reset' },
+  pre: { ko: 'S3/S4 프리차지 — 출력 X·Y 리셋', en: 'S3/S4 precharge — output X·Y reset' },
+  prei: { ko: 'S1/S2 프리차지 — 내부 P·Q 리셋', en: 'S1/S2 precharge — internal P·Q reset' },
 }
 
 // Small bits of shared UI chrome.

@@ -103,7 +103,7 @@ def _verdicts(nominal, offset, targets):
     return meas, v
 
 
-DEV_KEYS = ["input", "tail", "ncc", "pcc", "pre"]
+DEV_KEYS = ["input", "tail", "ncc", "pcc", "pre", "prei"]
 
 
 def _pred_offset_mv(p):
@@ -728,7 +728,7 @@ def parse_netlist_text(text):
     if "Mt" in names and {"M1", "M3", "M5"} <= names:
         # ── comparator (single-tail strongarm) ──
         role = {"M1": "input", "M2": "input", "Mt": "tail", "M3": "ncc", "M4": "ncc",
-                "M5": "pcc", "M6": "pcc", "M7": "pre", "M8": "pre", "M9": "pre", "M10": "pre"}
+                "M5": "pcc", "M6": "pcc", "M7": "pre", "M8": "pre", "M9": "prei", "M10": "prei"}
         dev_params = {}
         for d in devices:
             key = role.get(d["name"])
