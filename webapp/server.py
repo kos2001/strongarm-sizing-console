@@ -242,49 +242,109 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
                 results[i] = results[r[1]]
         return results
 
-    base_x = [max(LO, min(HI, math.log10(base["devices"][dv]["w_um"]))) for dv in DEV_KEYS]
-    pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in DEV_KEYS] for _ in range(pop - 1)]
-    pop_e = evaluate_many(pop_x)
     traj = []
 
-    def record(gen):
-        bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
-        e = pop_e[bi]
-        meas, v = _verdicts(e["nom"], None, targets)
-        traj.append({
-            "action": f"DE gen {gen}: best power {round(e['nom'].get('power_uw') or 0, 1)}µW (cost {round(e['cost'], 1)})",
-            "measured": meas, "verdicts": v, "predicted_offset_mv": round(e["offp"], 3),
-            "total_w_um": _total_w(e["p"]), "params": copy.deepcopy(e["p"]["devices"]),
-        })
-        return bi
+    if base.get("model") == "gaa2nm":
+        # ---- 2nm: 정수 스택 좌표 하강(coordinate descent) -----------------
+        # W 가 0.2µ 그리드 위에만 있으므로 탐색 공간은 소자당 정수 스택 수다.
+        # DE(연속 완화) 대신 정수 공간을 직접 걷는다: 소자별로 거친 배수 이동
+        # (×0.5…×2)을 병렬 평가해 최선을 채택, 전 소자 수렴 후 ±1 미세 단계.
+        # 캐시 키가 스택 튜플이라 재방문 점은 SPICE 를 다시 돌지 않는다.
+        s0 = run_sim.W_SHEET_UM
+        NMAX = int(round(10 ** HI / s0))     # W 상한(40µm) → 최대 스택 수
+        budget = pop * gens + pop            # DE 와 같은 SPICE 예산
+        cur = [min(NMAX, max(1, round(base["devices"][dv]["w_um"] / s0))) for dv in DEV_KEYS]
 
-    record(0)
-    F, CR = 0.6, 0.9
-    for g in range(1, gens + 1):
-        _fit_gp()  # refit surrogate on all SPICE-evaluated points so far
-        survivors = []  # (target index, trial vector) that clear the surrogate gate
-        for i in range(pop):
-            a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
-            jr = rng.randrange(len(DEV_KEYS))
-            trial = []
-            for j in range(len(DEV_KEYS)):
-                if rng.random() < CR or j == jr:
-                    val = pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j])
-                    trial.append(max(LO, min(HI, val)))
+        def x_of(ns):
+            return [math.log10(v * s0) for v in ns]
+
+        cur_e = evaluate_many([x_of(cur)])[0]
+
+        def rec(tag, e, ns):
+            meas, v = _verdicts(e["nom"], None, targets)
+            stacks_note = " ".join(f"{dv} {n}" for dv, n in zip(DEV_KEYS, ns))
+            traj.append({
+                "action": f"{tag}: power {round(e['nom'].get('power_uw') or 0, 1)}µW (cost {round(e['cost'], 1)}) · stacks {stacks_note}",
+                "measured": meas, "verdicts": v, "predicted_offset_mv": round(e["offp"], 3),
+                "total_w_um": _total_w(e["p"]), "params": copy.deepcopy(e["p"]["devices"]),
+            })
+
+        rec("CD start", cur_e, cur)
+        coarse = True
+        for pass_i in range(1, 13):
+            improved = False
+            for ci in range(len(DEV_KEYS)):
+                b_n = cur[ci]
+                if coarse:
+                    cands = sorted({max(1, min(NMAX, round(b_n * f)))
+                                    for f in (0.5, 0.67, 0.8, 1.25, 1.5, 2.0)} - {b_n})
                 else:
-                    trial.append(pop_x[i][j])
-            if _reject(trial, pop_e[i]["cost"]):
-                n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
-                continue
-            survivors.append((i, trial))
-        # evaluate this generation's surviving trials in parallel, then select
-        for (i, trial), te in zip(survivors, evaluate_many([t for _, t in survivors])):
-            if te["cost"] <= pop_e[i]["cost"]:
-                pop_x[i], pop_e[i] = trial, te
-        record(g)
+                    cands = [v for v in (b_n - 1, b_n + 1) if 1 <= v <= NMAX]
+                if not cands:
+                    continue
+                trials = []
+                for v in cands:
+                    t = list(cur)
+                    t[ci] = v
+                    trials.append(x_of(t))
+                evs = evaluate_many(trials)   # 한 좌표의 이동 후보들을 병렬 평가
+                bi2 = min(range(len(evs)), key=lambda i: evs[i]["cost"])
+                if evs[bi2]["cost"] < cur_e["cost"]:
+                    cur[ci], cur_e, improved = cands[bi2], evs[bi2], True
+                if n_sims[0] >= budget:
+                    break
+            rec(f"CD pass {pass_i} ({'coarse ×' if coarse else 'fine ±1'})", cur_e, cur)
+            if n_sims[0] >= budget:
+                break
+            if not improved:
+                if coarse:
+                    coarse = False           # 거친 배수 단계 수렴 → ±1 미세 단계
+                else:
+                    break                    # 정수 국소 최적 도달
+        best = cur_e["p"]
+    else:
+        base_x = [max(LO, min(HI, math.log10(base["devices"][dv]["w_um"]))) for dv in DEV_KEYS]
+        pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in DEV_KEYS] for _ in range(pop - 1)]
+        pop_e = evaluate_many(pop_x)
 
-    bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
-    best = pop_e[bi]["p"]
+        def record(gen):
+            bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
+            e = pop_e[bi]
+            meas, v = _verdicts(e["nom"], None, targets)
+            traj.append({
+                "action": f"DE gen {gen}: best power {round(e['nom'].get('power_uw') or 0, 1)}µW (cost {round(e['cost'], 1)})",
+                "measured": meas, "verdicts": v, "predicted_offset_mv": round(e["offp"], 3),
+                "total_w_um": _total_w(e["p"]), "params": copy.deepcopy(e["p"]["devices"]),
+            })
+            return bi
+
+        record(0)
+        F, CR = 0.6, 0.9
+        for g in range(1, gens + 1):
+            _fit_gp()  # refit surrogate on all SPICE-evaluated points so far
+            survivors = []  # (target index, trial vector) that clear the surrogate gate
+            for i in range(pop):
+                a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
+                jr = rng.randrange(len(DEV_KEYS))
+                trial = []
+                for j in range(len(DEV_KEYS)):
+                    if rng.random() < CR or j == jr:
+                        val = pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j])
+                        trial.append(max(LO, min(HI, val)))
+                    else:
+                        trial.append(pop_x[i][j])
+                if _reject(trial, pop_e[i]["cost"]):
+                    n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
+                    continue
+                survivors.append((i, trial))
+            # evaluate this generation's surviving trials in parallel, then select
+            for (i, trial), te in zip(survivors, evaluate_many([t for _, t in survivors])):
+                if te["cost"] <= pop_e[i]["cost"]:
+                    pop_x[i], pop_e[i] = trial, te
+            record(g)
+
+        bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
+        best = pop_e[bi]["p"]
     r = run_sim.run_sim(best, do_offset=True, with_noise=True)   # confirm the winner's offset (MC) + report noise
     meas, v = _verdicts(r["nominal"], r.get("offset"), targets)
     surrogate_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
@@ -612,6 +672,9 @@ def parse_netlist_text(text):
         if mc:
             caps.append({"name": "C" + mc.group(1), "node": mc.group(2), "ff": float(mc.group(4))})
     names = {d["name"] for d in devices}
+    # 모델 백엔드 감지 — 이 콘솔이 내보내는 .include/.lib 헤더 기준(왕복 보존)
+    model = ("gaa2nm" if "gaa2nm_approx" in text
+             else ("sky130" if "sky130" in text.lower() else None))
     out = {"devices": devices, "n_mos": len(devices), "caps": caps, "sources": sources}
     if any(n.startswith("Mx") for n in names) and any(n.startswith("Mbp") for n in names):
         # ── VCO(xcpl) ──
@@ -627,6 +690,7 @@ def parse_netlist_text(text):
                     dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
                     break
         params = {"devices": dev_params}
+        if model == "gaa2nm": params["model"] = model
         if "dd" in sources: params["vdd"] = sources["dd"]
         if "c" in sources: params["vctrl"] = sources["c"]
         if stages: params["n_stages"] = max(stages)
@@ -644,6 +708,7 @@ def parse_netlist_text(text):
             if key and key not in dev_params:
                 dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
         params = {"devices": dev_params, "topology": "doubletail"}
+        if model: params["model"] = model
         if "dd" in sources: params["vdd"] = sources["dd"]
         out_caps = [c for c in caps if c["node"] in ("outp", "outn")]
         if out_caps: params["cload_ff"] = out_caps[0]["ff"]
@@ -659,6 +724,7 @@ def parse_netlist_text(text):
             if key and key not in dev_params:
                 dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
         params = {"devices": dev_params, "topology": "strongarm"}
+        if model: params["model"] = model
         if "dd" in sources: params["vdd"] = sources["dd"]
         out_caps = [c for c in caps if c["node"] in ("outp", "outn")]
         if out_caps: params["cload_ff"] = out_caps[0]["ff"]
@@ -746,39 +812,95 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
                 res[i] = res[r[1]]
         return res
 
-    base_x = [max(LO, min(HI, math.log10(base["devices"][k]["w_um"]))) for k in keys]
-    pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in keys] for _ in range(pop - 1)]
-    pop_e = evaluate_many(pop_x)
     traj = []
 
-    def record(gen):
-        e = min(pop_e, key=lambda z: z["cost"])
-        m = e["m"]
-        traj.append({"action": f"DE gen {gen}: {m['f_osc_ghz']}GHz, {m['power_uw']}µW"
-                                + ("" if m["oscillates"] else " (no osc)"),
-                     "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
-                     "oscillates": m["oscillates"], "params": copy.deepcopy(e["p"]["devices"])})
+    if base.get("model") == "gaa2nm":
+        # ---- 2nm: 정수 스택 좌표 하강 — comparator 쪽과 같은 패턴 ----------
+        s0 = run_sim.W_SHEET_UM
+        NMAX = int(round(10 ** HI / s0))
+        budget = pop * gens + pop
+        cur = [min(NMAX, max(1, round(base["devices"][k]["w_um"] / s0))) for k in keys]
 
-    record(0)
-    F, CR = 0.6, 0.9
-    for g in range(1, gens + 1):
-        _fit_gp()   # refit surrogate on all SPICE-evaluated points so far
-        trials = []
-        for i in range(pop):
-            a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
-            jr = rng.randrange(len(keys))
-            trial = [max(LO, min(HI, pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j]))) if (rng.random() < CR or j == jr) else pop_x[i][j]
-                     for j in range(len(keys))]
-            if _reject(trial, pop_e[i]["cost"]):
-                n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
-                continue
-            trials.append((i, trial))
-        for (i, trial), te in zip(trials, evaluate_many([t for _, t in trials])):
-            if te["cost"] <= pop_e[i]["cost"]:
-                pop_x[i], pop_e[i] = trial, te
-        record(g)
+        def x_of(ns):
+            return [math.log10(v * s0) for v in ns]
 
-    best = min(pop_e, key=lambda z: z["cost"])
+        cur_e = evaluate_many([x_of(cur)])[0]
+
+        def rec(tag, e, ns):
+            m = e["m"]
+            stacks_note = " ".join(f"{k} {n}" for k, n in zip(keys, ns))
+            traj.append({"action": f"{tag}: {m['f_osc_ghz']}GHz, {m['power_uw']}µW"
+                                    + ("" if m["oscillates"] else " (no osc)") + f" · stacks {stacks_note}",
+                         "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
+                         "oscillates": m["oscillates"], "params": copy.deepcopy(e["p"]["devices"])})
+
+        rec("CD start", cur_e, cur)
+        coarse = True
+        for pass_i in range(1, 13):
+            improved = False
+            for ci in range(len(keys)):
+                b_n = cur[ci]
+                if coarse:
+                    cands = sorted({max(1, min(NMAX, round(b_n * f)))
+                                    for f in (0.5, 0.67, 0.8, 1.25, 1.5, 2.0)} - {b_n})
+                else:
+                    cands = [v for v in (b_n - 1, b_n + 1) if 1 <= v <= NMAX]
+                if not cands:
+                    continue
+                trials = []
+                for v in cands:
+                    t = list(cur)
+                    t[ci] = v
+                    trials.append(x_of(t))
+                evs = evaluate_many(trials)   # 한 좌표의 이동 후보들을 병렬 평가
+                bi2 = min(range(len(evs)), key=lambda i: evs[i]["cost"])
+                if evs[bi2]["cost"] < cur_e["cost"]:
+                    cur[ci], cur_e, improved = cands[bi2], evs[bi2], True
+                if n_sims[0] >= budget:
+                    break
+            rec(f"CD pass {pass_i} ({'coarse ×' if coarse else 'fine ±1'})", cur_e, cur)
+            if n_sims[0] >= budget:
+                break
+            if not improved:
+                if coarse:
+                    coarse = False
+                else:
+                    break
+        best = cur_e
+    else:
+        base_x = [max(LO, min(HI, math.log10(base["devices"][k]["w_um"]))) for k in keys]
+        pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in keys] for _ in range(pop - 1)]
+        pop_e = evaluate_many(pop_x)
+
+        def record(gen):
+            e = min(pop_e, key=lambda z: z["cost"])
+            m = e["m"]
+            traj.append({"action": f"DE gen {gen}: {m['f_osc_ghz']}GHz, {m['power_uw']}µW"
+                                    + ("" if m["oscillates"] else " (no osc)"),
+                         "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
+                         "oscillates": m["oscillates"], "params": copy.deepcopy(e["p"]["devices"])})
+
+        record(0)
+        F, CR = 0.6, 0.9
+        for g in range(1, gens + 1):
+            _fit_gp()   # refit surrogate on all SPICE-evaluated points so far
+            trials = []
+            for i in range(pop):
+                a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
+                jr = rng.randrange(len(keys))
+                trial = [max(LO, min(HI, pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j]))) if (rng.random() < CR or j == jr) else pop_x[i][j]
+                         for j in range(len(keys))]
+                if _reject(trial, pop_e[i]["cost"]):
+                    n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
+                    continue
+                trials.append((i, trial))
+            for (i, trial), te in zip(trials, evaluate_many([t for _, t in trials])):
+                if te["cost"] <= pop_e[i]["cost"]:
+                    pop_x[i], pop_e[i] = trial, te
+            record(g)
+
+        best = min(pop_e, key=lambda z: z["cost"])
+
     fin = best["p"]
     tuning = vco_sim.vco_tuning(fin)
     m = best["m"]

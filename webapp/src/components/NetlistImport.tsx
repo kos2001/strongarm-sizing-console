@@ -9,7 +9,7 @@ export interface ParsedNetlist {
   kind: 'comparator' | 'vco' | 'unknown'
   n_mos: number
   devices: ParsedDevice[]
-  params?: { devices: Record<string, { w_um: number; l_nm: number; m: number }>; vdd?: number; vctrl?: number; n_stages?: number; cload_ff?: number; topology?: string }
+  params?: { devices: Record<string, { w_um: number; l_nm: number; m: number }>; vdd?: number; vctrl?: number; n_stages?: number; cload_ff?: number; topology?: string; model?: string }
   error?: string
 }
 

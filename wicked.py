@@ -209,8 +209,9 @@ def robust_refine(params, targets=None, iterations=2):
     """
     p, t = _full(params), _targets(targets)
     history = []
-    reps = [("SS_cold_lowV", 0.05, -40, 0.90), ("SS_hot_lowV", 0.05, 125, 0.90),
-            ("TT_room_nomV", 0.0, 27, 1.0), ("FF_cold_highV", -0.05, -40, 1.10)]
+    _sk = 0.05 * run_sim.skew_scale(p)   # gaa2nm: |Vth0| 0.2V 에 맞춰 ±25mV
+    reps = [("SS_cold_lowV", _sk, -40, 0.90), ("SS_hot_lowV", _sk, 125, 0.90),
+            ("TT_room_nomV", 0.0, 27, 1.0), ("FF_cold_highV", -_sk, -40, 1.10)]
     base_vdd = float(p.get("vdd", run_sim.DEFAULT_PARAMS["vdd"]))
     for it in range(max(0, int(iterations))):
         def one(r):
@@ -244,8 +245,9 @@ def wco_operating(params, targets=None):
     sky = p.get("model") == "sky130"
     cmap = {"SS": "ss", "TT": "tt", "FF": "ff", "SF": "sf", "FS": "fs"}
     specs = []
-    for label, ns, ps in (("SS", 0.05, 0.05), ("TT", 0.0, 0.0), ("FF", -0.05, -0.05),
-                          ("SF", 0.05, -0.05), ("FS", -0.05, 0.05)):
+    _sk = 0.05 * run_sim.skew_scale(p)   # gaa2nm: ±25mV
+    for label, ns, ps in (("SS", _sk, _sk), ("TT", 0.0, 0.0), ("FF", -_sk, -_sk),
+                          ("SF", _sk, -_sk), ("FS", -_sk, _sk)):
         for temp in (-40, 27, 125):
             for vf in (0.9, 1.0, 1.1):
                 proc = {"corner": cmap[label]} if sky else {"nskew": ns, "pskew_p": ps}
@@ -295,7 +297,7 @@ def worst_case_distance(params, targets=None, n_samples=24, seed=19):
         z_vdd = _clip(rng.gauss(0, 1), -3.5, 3.5)
         z_temp = _clip(rng.gauss(0, 1), -3.5, 3.5)
         cfg = {**p,
-               "pskew": 0.03 * z_proc,
+               "pskew": 0.03 * run_sim.skew_scale(p) * z_proc,
                "vdd": round(_clip(base_vdd * (1.0 - 0.05 * z_vdd), 0.75 * base_vdd, 1.25 * base_vdd), 4),
                "temp": round(_clip(27.0 + 45.0 * z_temp, -40.0, 125.0), 2)}
         samples.append((z_proc, z_vdd, z_temp, cfg))
@@ -394,7 +396,7 @@ def importance_sampling_yield(params, targets=None, n=24, shift_beta=None, seed=
         z = [rng.gauss(mu[i], 1.0) for i in range(3)]
         off = rng.gauss(0.0, sig_off_v)
         cfg = {**p,
-               "pskew": 0.03 * _clip(z[0], -4.0, 4.0),
+               "pskew": 0.03 * run_sim.skew_scale(p) * _clip(z[0], -4.0, 4.0),
                "vdd": round(_clip(base_vdd * (1.0 - 0.05 * z[1]), 0.75 * base_vdd, 1.25 * base_vdd), 4),
                "temp": round(_clip(27.0 + 45.0 * z[2], -40.0, 125.0), 2)}
         out = run_sim._run(run_sim.gen_netlist(cfg, vdiff=0.05, dvth1=off / 2.0, dvth2=-off / 2.0))
@@ -528,7 +530,8 @@ def yield_sweep(params, targets=None, n_points=7, seed=53):
     """
     p, t = _full(params), _targets(targets)
     rng = random.Random(seed)
-    skews = [round(-0.06 + 0.12 * i / max(1, n_points - 1), 4) for i in range(n_points)]
+    _sk6 = 0.06 * run_sim.skew_scale(p)   # gaa2nm: 스윕 범위도 절반
+    skews = [round(-_sk6 + 2 * _sk6 * i / max(1, n_points - 1), 4) for i in range(n_points)]
     mb = mismatch_budget(p)
     sig_off_v = mb["total_sigma_mv"] / 1000.0
 
