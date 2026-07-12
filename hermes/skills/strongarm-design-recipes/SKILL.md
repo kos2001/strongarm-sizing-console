@@ -37,10 +37,10 @@ Spec math (before any tool call):
 
 ## Corner-failure playbook
 
-- **Low-VDD (≤0.7 V) + slow NMOS (SS/SF) → single-tail dies.** Don't fight it
-  with widths: propose `topology: "doubletail"`. Measured: single-tail 530 ps
-  @0.7 V TT but fails SS/0.63 V; doubletail 155.6 ps @0.7 V TT and survives
-  SS/−40 °C/0.63 V at 890 ps.
+- **Low-VDD (≤0.7 V) + slow NMOS (SS/SF) is the binding corner** for this
+  latch (single-tail 530 ps @0.7 V TT fails SS/0.63 V). Mitigate with
+  tail/ncc ~1.5× and input gm; if the corner still fails, the honest answer
+  is a vdd floor — report it rather than over-widening.
 - Corner skew is model-aware (±50 mV; ±25 mV on gaa2nm/asap7) — cross corners
   SF/FS often bind before SS/FF on this latch (NMOS-dominated).
 - After any topology/model change, re-run PVT (45 corners) before declaring pass.

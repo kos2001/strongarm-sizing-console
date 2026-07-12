@@ -4,7 +4,7 @@ An agent-driven analog design tool that closes the loop **simulate → evaluate 
 optimize → sign-off** against real ngspice, with a React web console. Two circuit
 domains share the same backend and algorithms:
 
-- **Comparator** (StrongARM **single-tail + Schinkel double-tail**, 13 pages) —
+- **Comparator** (StrongARM latch, 13 pages) —
   sizing, transient, metastability (τ), max f_clk + energy, auto-find (DE +
   GP-surrogate, or **integer coordinate descent** on quantized-W backends),
   sensitivity, NSGA-II Pareto, Monte-Carlo offset, noise/BER, PVT (45 corners:

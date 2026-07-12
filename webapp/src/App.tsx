@@ -556,21 +556,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>Topology</span>
-            {([['strongarm', 'StrongARM (single-tail)'], ['doubletail', 'Double-tail (Schinkel)']] as const).map(([tp, label]) => {
-              const on = (params.topology ?? 'strongarm') === tp
-              return (
-                <button key={tp} disabled={busy} onClick={() => updateParams({ ...params, topology: tp })}
-                  className="mono text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-50"
-                  style={{ color: on ? 'var(--ag)' : 'var(--muted)', background: on ? 'color-mix(in srgb, var(--ag) 12%, transparent)' : 'transparent', border: `1px solid ${on ? 'color-mix(in srgb, var(--ag) 35%, var(--line))' : 'var(--line)'}` }}
-                  title={tp === 'doubletail' ? '2단(입력단+래치단)·테일 2개 — 저전압에 유리, 킥백 작음' : '단일 테일 클래식 — 간단·저전력'}>
-                  {label}
-                </button>
-              )
-            })}
-          </div>
-
-          <div className="flex items-center gap-2">
             <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>Model</span>
             {([['ptm', 'PTM 45nm', 1.0], ['sky130', 'SKY130 (real)', 1.8], ['gaa2nm', 'GAA 2nm≈', 0.65], ['asap7', 'ASAP7 7nm', 0.7]] as const).map(([m, label, v]) => {
               const on = (params.model ?? 'ptm') === m
@@ -751,7 +736,7 @@ export default function App() {
                   <button onClick={runPostLayout} disabled={busy || plLoading} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
                     {plLoading ? 'extracting…' : '⚡ parasitics'}
                   </button>
-                  <button onClick={() => downloadNetlist('/api/netlist', params, `${params.topology === 'doubletail' ? 'doubletail' : 'strongarm'}.sp`).catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                  <button onClick={() => downloadNetlist('/api/netlist', params, 'strongarm.sp').catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
                     title="현재 파라미터의 SPICE 덱(.sp) 다운로드 — ngspice 로 직접 실행 가능">
                     ⤓ netlist
                   </button>
@@ -767,7 +752,7 @@ export default function App() {
                 </div>
               )}
               <div className="grid gap-4 items-center" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                <Schematic devices={dispDevices} changed={stepChanged} topology={params.topology ?? 'strongarm'} />
+                <Schematic devices={dispDevices} changed={stepChanged} />
                 <div className="min-w-0">
                   {wf ? (
                     <WaveformChart wf={wf} before={wfBefore} theme={theme} />
@@ -813,7 +798,7 @@ export default function App() {
                   </div>
                 </div>
               )}
-            <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.topology ? { topology: pp.topology as 'strongarm' | 'doubletail' } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'sky130' | 'gaa2nm' | 'asap7' } : {}), devices: { ...params.devices, ...pp.devices } })} />
+            <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'sky130' | 'gaa2nm' | 'asap7' } : {}), devices: { ...params.devices, ...pp.devices } })} />
             </div>
           )}
 
@@ -830,7 +815,7 @@ export default function App() {
                   <div className="grid gap-4" style={{ gridTemplateColumns: 'minmax(0, 230px) 1fr' }}>
                     <div>
                       {stepNow && <div className="mono text-[11px] mb-1" style={{ color: 'var(--ag)' }}>replay · step {play!.idx + 1}/{play!.steps.length}</div>}
-                      <Schematic devices={dispDevices} changed={stepChanged} topology={params.topology ?? 'strongarm'} />
+                      <Schematic devices={dispDevices} changed={stepChanged} />
                     </div>
                     <ol className="flex flex-col gap-1.5">
                       {opt.trajectory.map((s, i) => {
@@ -1260,7 +1245,6 @@ export default function App() {
                 ...params,
                 ...(pr.vdd != null ? { vdd: pr.vdd } : {}),
                 ...(pr.cload_ff != null ? { cload_ff: pr.cload_ff } : {}),
-                ...(pr.topology ? { topology: pr.topology } : {}),
                 devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => [k, { ...params.devices[k], ...(pr.devices?.[k] ?? {}) }])) as Record<DeviceKey, Device>,
               })
             }} />
