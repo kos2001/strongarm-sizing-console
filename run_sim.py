@@ -227,7 +227,7 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
         dline("M1", "nX g1 tail 0", "input", "n"),
         dline("M2", "nY g2 tail 0", "input", "n"),
         "* --- tail switch ---",
-        dline("Mt", "tail clk 0 0", "tail", "n"),
+        dline("M7", "tail clk 0 0", "tail", "n"),     # 그림 표기: 테일 = M7
         "* --- cross-coupled NMOS latch ---",
         dline("M3", "outp outn nX 0", "ncc", "n"),
         dline("M4", "outn outp nY 0", "ncc", "n"),
@@ -235,10 +235,10 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
         dline("M5", "outp outn vdd vdd", "pcc", "p"),
         dline("M6", "outn outp vdd vdd", "pcc", "p"),
         "* --- precharge PMOS (on when clk low) ---",
-        dline("M7", "outp clk vdd vdd", "pre", "p"),
-        dline("M8", "outn clk vdd vdd", "pre", "p"),
-        dline("M9", "nX clk vdd vdd", "prei", "p"),
-        dline("M10", "nY clk vdd vdd", "prei", "p"),
+        dline("MS3", "outp clk vdd vdd", "pre", "p"),   # S3/S4 — 출력 X/Y 프리차지
+        dline("MS4", "outn clk vdd vdd", "pre", "p"),
+        dline("MS1", "nX clk vdd vdd", "prei", "p"),    # S1/S2 — 내부 P/Q 프리차지
+        dline("MS2", "nY clk vdd vdd", "prei", "p"),
     ])
     # clock timing (defaults reproduce the original 200p/3n-high/6n-period run)
     clk_hi = p.get("clk_high_ns", 3.0)

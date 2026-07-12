@@ -10,7 +10,7 @@ def test_xcpl_netlist_structure():
     nl = vco_sim.gen_vco_netlist(p)
     # cross-coupled PMOS pair per stage: drain=own node, gate=complement
     assert "Mx1" in nl and "Mxb1" in nl
-    assert f"Mx5" in nl                          # default n_stages=5, both rails coupled
+    assert f"Mx3" in nl                          # default n_stages=3, both rails coupled
     # reset PMOS clamps o1 high while rstb is low, released by a PULSE source
     assert "Mrst o1 rstb vdd vdd pmos" in nl
     assert "Vrst rstb 0 PULSE(0" in nl
@@ -19,8 +19,8 @@ def test_xcpl_netlist_structure():
 
 
 def test_starved_netlist_unchanged():
-    """Default topology stays the current-starved ring with .ic kick-start."""
-    p = vco_sim._full({})
+    """Explicit starved topology keeps the .ic kick-start ring (default is xcpl)."""
+    p = vco_sim._full({"topology": "starved"})
     nl = vco_sim.gen_vco_netlist(p)
     assert "Mrst" not in nl and "Mx1" not in nl
     assert ".ic" in nl

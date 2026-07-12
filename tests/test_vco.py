@@ -42,7 +42,7 @@ def test_vco_waveform_captured():
 
 def test_vco_pvt_corners():
     r = server.vco_pvt({})
-    assert len(r["corners"]) == 27
+    assert len(r["corners"]) == 45   # 5 process(SS/SF/TT/FS/FF) × 3 temp × 3 VDD
     osc = [c for c in r["corners"] if c["oscillates"]]
     assert len(osc) >= 20                       # oscillates across most corners
     assert r["f_max_ghz"] >= r["f_min_ghz"] > 0
@@ -102,7 +102,8 @@ def test_vco_phase_noise_flicker_region():
 
 def test_vco_phase_noise_measured_agrees():
     """The multi-seed SPICE trnoise jitter should corroborate the analytic 1/f^2."""
-    r = vco_sim.phase_noise({})
+    # measured(트랜지언트 trnoise) 경로는 starved 링 전용 — 명시 요청
+    r = vco_sim.phase_noise({"topology": "starved", "n_stages": 5})
     m = r.get("measured")
     assert m is not None and m["n_seeds"] >= 2 and m["cycles"] >= 60
     assert "jitter_spread_fs" in m

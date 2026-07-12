@@ -644,7 +644,8 @@ def parse_netlist_text(text):
     """SPICE 덱에서 MOS/전원/커패시터를 파싱해 소자 표 + (가능하면) 파라미터로.
 
     이 콘솔이 내보내는 덱의 명명 규칙을 안다:
-      comparator — M1/M2=input, Mt=tail, M3/M4=ncc, M5/M6=pcc, M7..M10=pre
+      comparator — M1/M2=input, M7=tail, M3/M4=ncc, M5/M6=pcc,
+                   MS3/MS4=pre(출력), MS1/MS2=prei(내부) — 구 표기(Mt, M7~M10)도 인식
       vco(xcpl)  — Mbp*/Mbpb*=starvep, Mp*/Mpb*=invp, Mn*/Mnb*=invn,
                    Mbn*/Mbnb*=starven, Mx*/Mxb*=xcplp, Mrst=rstp (스테이지 번호로 N)
     규칙 밖 넷리스트도 소자 표/노드는 반환한다(kind='unknown').
@@ -725,10 +726,14 @@ def parse_netlist_text(text):
         if out_caps: params["cload_ff"] = out_caps[0]["ff"]
         out.update({"kind": "comparator", "params": params})
         return out
-    if "Mt" in names and {"M1", "M3", "M5"} <= names:
+    if ("Mt" in names or "M7" in names) and {"M1", "M3", "M5"} <= names:
         # ── comparator (single-tail strongarm) ──
-        role = {"M1": "input", "M2": "input", "Mt": "tail", "M3": "ncc", "M4": "ncc",
-                "M5": "pcc", "M6": "pcc", "M7": "pre", "M8": "pre", "M9": "prei", "M10": "prei"}
+        if "MS3" in names:   # 새 표기(new_cmp.png): M7=tail, MS3/4=pre, MS1/2=prei
+            role = {"M1": "input", "M2": "input", "M7": "tail", "M3": "ncc", "M4": "ncc",
+                    "M5": "pcc", "M6": "pcc", "MS3": "pre", "MS4": "pre", "MS1": "prei", "MS2": "prei"}
+        else:                # 구 표기(레거시 덱): Mt=tail, M7/8=pre, M9/10=prei
+            role = {"M1": "input", "M2": "input", "Mt": "tail", "M3": "ncc", "M4": "ncc",
+                    "M5": "pcc", "M6": "pcc", "M7": "pre", "M8": "pre", "M9": "prei", "M10": "prei"}
         dev_params = {}
         for d in devices:
             key = role.get(d["name"])

@@ -349,7 +349,9 @@ def mismatch_budget(params):
     instead of hiding them. Values are input-referred mV sigma contributions.
     """
     p = _full(params)
-    weights = {"input": math.sqrt(2.0), "ncc": 0.35, "pcc": 0.30, "tail": 0.18, "pre": 0.08}
+    weights = {"input": math.sqrt(2.0), "ncc": 0.35, "pcc": 0.30, "tail": 0.18,
+               # S3/S4(출력)·S1/S2(내부 P/Q) — 내부 노드 불평형은 입력단에 더 직접 환산
+               "pre": 0.08, "prei": 0.10}
     items = []
     total2 = 0.0
     for k in DEV_KEYS:
