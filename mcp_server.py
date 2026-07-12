@@ -269,6 +269,13 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
     },
     {
+        "name": "spice_run_netlist",
+        "description": "Run an ARBITRARY ngspice deck (.sp text) and return every .meas result + the log tail. "
+                       "Use for structural circuit edits: fetch a deck with strongarm_netlist/vco_netlist, "
+                       "add/remove/rewire devices, then verify here. `shell` commands are rejected.",
+        "inputSchema": {"type": "object", "properties": {"netlist": {"type": "string"}}, "required": ["netlist"]},
+    },
+    {
         "name": "vco_wicked",
         "description": "WiCkeD-inspired flow for the ring VCO (starved or xcpl topology): FEO feasibility, "
                        "DNO frequency-centering refinement, WCO PVT worst case, WCD sigma/yield proxy, "
@@ -317,6 +324,7 @@ _TOOL_ENDPOINT = {
     "strongarm_layout": "/api/layout",
     "strongarm_postlayout": "/api/postlayout",
     "strongarm_netlist_parse": "/api/netlist/parse",
+    "spice_run_netlist": "/api/spice/run",
     "strongarm_wicked_wcd": "/api/wicked/wcd",
     "strongarm_wicked_mismatch": "/api/wicked/mismatch",
     "strongarm_wicked_dno": "/api/wicked/dno",

@@ -14,7 +14,18 @@ interface Proposal {
   cload_ff?: number
   target_f_ghz?: number
 }
-interface Msg { role: 'user' | 'assistant'; text: string; proposal?: Proposal | null }
+interface Msg { role: 'user' | 'assistant'; text: string; proposal?: Proposal | null; deck?: string | null }
+
+function extractDeck(answer: string): string | null {
+  const m = answer.match(/```spice\s*([\s\S]*?)```/)
+  return m ? m[1].trim() : null
+}
+
+function downloadDeck(text: string, filename: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
+  URL.revokeObjectURL(url)
+}
 
 const KEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven', 'xcplp', 'rstp']
 
@@ -62,14 +73,14 @@ export default function VcoAgentSizing({ params, targetF, onApply, ko, disabled 
       }
       const message =
         `현재 ring VCO(xcpl) 설계 상태(JSON):\n${JSON.stringify(ctx)}\n\n` +
-        `규칙: 아래 사용자의 요청을 처리하라. 시뮬레이션·사이징이 필요하면 오직 vco MCP 도구(vco_simulate/vco_optimize/vco_wicked)만 사용하고, params 인자에 위 설계 상태(및 변경분)를 그대로 넣어 한 번에 호출하라. terminal·파일 등 다른 도구는 절대 사용하지 말고, 도구 호출은 최대 2회, 탐색·검증 반복 없이 결과를 바로 보고하라. ` +
+        `규칙: 아래 사용자의 요청을 처리하라. 시뮬레이션·사이징이 필요하면 오직 vco MCP 도구(vco_simulate/vco_optimize/vco_wicked)만 사용하고, params 인자에 위 설계 상태(및 변경분)를 그대로 넣어 한 번에 호출하라. terminal·파일 등 다른 도구는 절대 사용하지 말고, 도구 호출은 최대 2회, 탐색·검증 반복 없이 결과를 바로 보고하라. 회로 구조 자체를 바꾸는 요청(소자 추가/삭제/결선 변경)이면: ① vco_netlist 도구로 현재 덱(.sp)을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 도구로 실행해 측정값을 확인하고 ④ 수정된 덱 전체를 답변에 \`\`\`spice 코드블록으로 포함하라(이때는 도구 3회까지 허용). ` +
         `n_stages 는 반드시 홀수(≥3). 변경을 제안/적용할 때는 답변 마지막에 \`\`\`json {"devices":{...변경 소자만...},"vdd":...,"vctrl":...,"n_stages":...,"cload_ff":...,"target_f_ghz":...} \`\`\` 블록을 포함하라(변경 없으면 생략). 간결한 한국어로 답하라.\n\n` +
         `사용자 요청: ${q}`
       const r = await fetch('/api/agent/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, sessionId }) })
       const d = await r.json()
       if (d.error) { setMsgs((m) => [...m, { role: 'assistant', text: '⚠ ' + d.error }]); return }
       setSessionId(d.sessionId)
-      setMsgs((m) => [...m, { role: 'assistant', text: d.answer, proposal: extractProposal(d.answer) }])
+      setMsgs((m) => [...m, { role: 'assistant', text: d.answer, proposal: extractProposal(d.answer), deck: extractDeck(d.answer) }])
     } catch (e) {
       setMsgs((m) => [...m, { role: 'assistant', text: '⚠ ' + String(e) }])
     } finally { setBusy(false) }
@@ -98,7 +109,15 @@ export default function VcoAgentSizing({ params, targetF, onApply, ko, disabled 
           <div key={i} className="self-end rounded-lg px-2.5 py-1.5 text-xs" style={{ background: 'color-mix(in srgb, var(--ag) 14%, transparent)', color: 'var(--text)' }}>{m.text}</div>
         ) : (
           <div key={i} className="rounded-lg px-2.5 py-1.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
-            <div className="text-xs whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text)' }}>{m.text.replace(/```json[\s\S]*?```/, '').trim()}</div>
+            <div className="text-xs whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--text)' }}>{m.text.replace(/```json[\s\S]*?```/, '').replace(/```spice[\s\S]*?```/, '(수정된 넷리스트 — 아래 버튼으로 저장)').trim()}</div>
+            {m.deck && (
+              <div className="flex items-center gap-2 mt-2">
+                <button onClick={() => downloadDeck(m.deck!, 'modified_circuit.sp')} className="mono text-[10.5px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}>
+                  ⤓ 수정된 넷리스트(.sp) 저장
+                </button>
+                <span className="mono text-[10px]" style={{ color: 'var(--faint)' }}>회로 화면의 ⇪ 넷리스트 불러오기에 붙여넣으면 소자 표로 확인 가능</span>
+              </div>
+            )}
             {m.proposal && (
               <div className="flex items-center gap-2 mt-2 flex-wrap">
                 <span className="mono text-[10.5px]" style={{ color: 'var(--muted)' }}>
