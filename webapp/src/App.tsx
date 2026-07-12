@@ -137,6 +137,7 @@ export default function App() {
   const [layoutRes, setLayoutRes] = useState<LayoutResult | null>(null)
   const [layoutLoading, setLayoutLoading] = useState(false)
   const [metaRes, setMetaRes] = useState<MetastabilityResult | null>(null)
+  const [metaSel, setMetaSel] = useState<number | null>(null) // 메타안정성 선택점(상세)
   const [metaLoading, setMetaLoading] = useState(false)
   const [berRes, setBerRes] = useState<BerResult | null>(null)
   const [berLoading, setBerLoading] = useState(false)
@@ -1014,7 +1015,35 @@ export default function App() {
               </div>
               {metaRes ? (
                 <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <MetastabilityChart res={metaRes} theme={theme} />
+                  <MetastabilityChart res={metaRes} theme={theme} selected={metaSel} onSelect={setMetaSel} />
+                  {/* 선택점 상세: 측정값 + τ-피팅 예측·잔차 */}
+                  {metaSel != null && metaRes.points[metaSel] && (() => {
+                    const pt = metaRes.points[metaSel]
+                    const mv = pt.vin_v * 1e3
+                    const vinLabel = mv >= 1 ? `${mv.toFixed(mv < 10 ? 2 : 1)} mV` : `${(mv * 1e3).toFixed(1)} µV`
+                    const fit = metaRes.tau_ps != null && metaRes.intercept_ps != null
+                      ? -metaRes.tau_ps * Math.log(10) * Math.log10(pt.vin_v) + metaRes.intercept_ps : null
+                    const resid = fit != null && pt.decision_time_ps != null ? pt.decision_time_ps - fit : null
+                    const specOk = pt.decision_time_ps != null && pt.decision_time_ps <= targets.decision_time_ps
+                    return (
+                      <div className="rounded-xl p-3 mt-3" style={{ background: 'color-mix(in srgb, var(--warn) 7%, var(--surface-2))', border: '1px solid color-mix(in srgb, var(--warn) 35%, var(--line))' }}>
+                        <div className="mono text-[11px] tnum flex items-center gap-3 flex-wrap" style={{ color: 'var(--text)' }}>
+                          <span>◎ V<sub>in</sub> = <span style={{ color: 'var(--ag)' }}>{vinLabel}</span></span>
+                          <span>판정시간 <span style={{ color: 'var(--si)' }}>{pt.decision_time_ps ?? '—'} ps</span>{pt.decision_time_ps != null && (
+                            <span style={{ color: specOk ? 'var(--good)' : 'var(--bad)' }}> ({specOk ? '스펙 내' : `스펙 ${targets.decision_time_ps}ps 초과`})</span>
+                          )}</span>
+                          <span>{pt.resolved ? '판정 완료 ✓' : '미판정(메타안정) ✗'}</span>
+                        </div>
+                        <div className="mono text-[10.5px] tnum mt-1.5 flex items-center gap-3 flex-wrap" style={{ color: 'var(--muted)' }}>
+                          {fit != null && <span>τ-피팅 예측 {fit.toFixed(1)} ps</span>}
+                          {resid != null && <span>잔차 {resid >= 0 ? '+' : ''}{resid.toFixed(1)} ps</span>}
+                          {metaRes.tau_ps != null && pt.decision_time_ps != null && metaRes.intercept_ps != null && (
+                            <span>≈ c + τ·ln(1/V): 이 점은 τ={metaRes.tau_ps}ps 재생루프가 {((pt.decision_time_ps - metaRes.intercept_ps) / metaRes.tau_ps).toFixed(1)}×τ 걸린 지점</span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })()}
                   <div className="grid grid-cols-2 gap-3 mt-3">
                     <Detail label="Regeneration τ" value={metaRes.tau_ps != null ? `${metaRes.tau_ps} ps` : '—'} />
                     <Detail label="Min resolved input" value={metaRes.min_resolved_v != null ? `${(metaRes.min_resolved_v * 1e6).toFixed(1)} µV` : '—'} />

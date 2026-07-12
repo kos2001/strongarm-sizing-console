@@ -4,8 +4,13 @@ import type { MetastabilityResult } from '../types'
 // Decision time vs input differential amplitude on a log-x axis. As Vin -> 0 the
 // regeneration time diverges logarithmically; the fitted line t = tau·ln(1/Vin)+c
 // (slope = regeneration time constant tau) is overlaid on the measured points.
-export default function MetastabilityChart({ res, theme }: { res: MetastabilityResult; theme: string }) {
+export default function MetastabilityChart({ res, theme, selected, onSelect }: {
+  res: MetastabilityResult; theme: string
+  selected?: number | null; onSelect?: (idx: number | null) => void
+}) {
   const ref = useRef<HTMLCanvasElement>(null)
+  // 클릭 히트테스트용 — draw() 가 계산한 각 점의 픽셀 좌표(res.points 인덱스)
+  const geom = useRef<{ x: number; y: number; idx: number }[]>([])
   useEffect(() => {
     const cv = ref.current
     if (!cv) return
@@ -50,6 +55,17 @@ export default function MetastabilityChart({ res, theme }: { res: MetastabilityR
       pts.forEach((p, i) => { const x = X(Math.log10(p.vin_v)), y = Y(p.decision_time_ps as number); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y) })
       ctx.stroke()
       for (const p of pts) { ctx.beginPath(); ctx.arc(X(Math.log10(p.vin_v)), Y(p.decision_time_ps as number), 3, 0, 7); ctx.fillStyle = css('--si'); ctx.fill() }
+      geom.current = pts.map((p) => ({ x: X(Math.log10(p.vin_v)), y: Y(p.decision_time_ps as number), idx: res.points.indexOf(p) }))
+      // 선택점 하이라이트(링 + 값 라벨)
+      if (selected != null && res.points[selected]?.decision_time_ps != null) {
+        const p = res.points[selected]
+        const x = X(Math.log10(p.vin_v)), y = Y(p.decision_time_ps as number)
+        ctx.beginPath(); ctx.arc(x, y, 6.5, 0, 7)
+        ctx.strokeStyle = css('--warn'); ctx.lineWidth = 2; ctx.stroke()
+        ctx.fillStyle = css('--warn')
+        const mv = p.vin_v * 1e3
+        ctx.fillText(`${mv >= 1 ? mv.toFixed(mv < 10 ? 1 : 0) + 'mV' : (mv * 1e3).toFixed(0) + 'µV'} · ${p.decision_time_ps}ps`, Math.min(x + 9, W - 130), y - 9)
+      }
 
       ctx.fillStyle = css('--faint')
       ctx.fillText('input Δ (log) →', W - 96, H - 6)
@@ -58,6 +74,19 @@ export default function MetastabilityChart({ res, theme }: { res: MetastabilityR
     draw()
     const ro = new ResizeObserver(draw); ro.observe(cv)
     return () => ro.disconnect()
-  }, [res, theme])
-  return <canvas ref={ref} style={{ width: '100%', height: '270px', display: 'block' }} aria-label="Decision time vs input amplitude (metastability)" />
+  }, [res, theme, selected])
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!onSelect) return
+    const r = ref.current!.getBoundingClientRect()
+    const mx = e.clientX - r.left, my = e.clientY - r.top
+    let best: { idx: number; d2: number } | null = null
+    for (const g of geom.current) {
+      const d2 = (g.x - mx) ** 2 + (g.y - my) ** 2
+      if (d2 <= 12 ** 2 && (!best || d2 < best.d2)) best = { idx: g.idx, d2 }
+    }
+    onSelect(best ? best.idx : null)
+  }
+  return <canvas ref={ref} onClick={handleClick}
+    style={{ width: '100%', height: '270px', display: 'block', cursor: onSelect ? 'pointer' : undefined }}
+    aria-label="Decision time vs input amplitude (metastability) — click a point for details" />
 }
