@@ -7,6 +7,7 @@ export interface Device {
 }
 
 export interface Params {
+  topology?: 'strongarm' | 'doubletail'
   vdd: number
   cload_ff: number
   avt_mv_um: number

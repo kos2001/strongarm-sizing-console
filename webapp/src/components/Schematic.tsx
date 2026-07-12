@@ -6,10 +6,12 @@ import { V } from '../virtuoso'
 // analogLib-style MOSFET symbols with source arrows + red pin squares, yellow
 // instance-property labels, and orange global-net names (vdd!/gnd!). `changed`
 // flashes the device the optimizer just adjusted (amber, glowing).
-export default function Schematic({ devices, changed }: { devices: Record<DeviceKey, Device>; changed?: DeviceKey | null }) {
+export default function Schematic({ devices, changed, topology = 'strongarm' }: { devices: Record<DeviceKey, Device>; changed?: DeviceKey | null; topology?: 'strongarm' | 'doubletail' }) {
   const d = devices
   const sz = (k: DeviceKey) => `${d[k].w_um}u×${d[k].m}`
-  const REF: Record<DeviceKey, string> = { pre: 'MP1', pcc: 'MP3', ncc: 'MN3', input: 'MN1', tail: 'MT' }
+  const REF: Record<DeviceKey, string> = topology === 'doubletail'
+    ? { pre: 'M3/4', pcc: 'M5/6', ncc: 'M7~10', input: 'M1/2', tail: 'Mt1·2' }
+    : { pre: 'MP1', pcc: 'MP3', ncc: 'MN3', input: 'MN1', tail: 'MT' }
 
   // one analogLib-style MOSFET symbol. anchors: drain=top, source=bottom,
   // gate=left (flip=true 면 좌우반전 — 게이트가 오른쪽을 향한다).
@@ -52,6 +54,79 @@ export default function Schematic({ devices, changed }: { devices: Record<Device
       <T x={x} y={y} c={cl(k)} sz={7.5}>{sz(k)}</T>
     </g>
   )
+
+  // ── double-tail (Schinkel) — 2단: 입력단(tail1) + 래치단(tail2, clkb) ──
+  if (topology === 'doubletail') {
+    const V0 = 24, GND = 300
+    return (
+      <svg viewBox="0 0 520 320" width="100%" style={{ display: 'block', maxHeight: 460, background: V.bg, borderRadius: 8 }} role="img" aria-label="Double-tail latch comparator schematic (Virtuoso style)">
+        <defs><pattern id="vgrid2" width={12} height={12} patternUnits="userSpaceOnUse"><circle cx={0.6} cy={0.6} r={0.6} fill={V.grid} /></pattern></defs>
+        <rect x={0} y={0} width={520} height={320} fill="url(#vgrid2)" />
+        <line x1={20} y1={V0} x2={500} y2={V0} stroke={V.wire} strokeWidth={1.5} />
+        <line x1={20} y1={GND} x2={500} y2={GND} stroke={V.wire} strokeWidth={1.5} />
+        <T x={20} y={V0 - 5} c={V.netGlobal} sz={9}>vdd!</T>
+        <T x={20} y={GND + 12} c={V.netGlobal} sz={9}>gnd!</T>
+        {/* clk 버스 */}
+        <line x1={30} y1={V0 + 8} x2={30} y2={210} stroke={V.wire} strokeWidth={1} strokeDasharray="3 3" opacity={0.8} />
+        <T x={32} y={222} c={V.net} sz={8.5}>clk</T>
+
+        {/* ── stage 1 ── */}
+        <T x={120} y={44} anchor="middle" c={V.faint} sz={8}>stage 1</T>
+        <Mos cx={90} cy={64} p flash={changed === 'pre'} />
+        <Mos cx={150} cy={64} p flash={changed === 'pre'} />
+        <Wire d={`90,${V0} 90,51`} /><Wire d={`150,${V0} 150,51`} />
+        <Wire d={`30,64 72,64`} /><Wire d={`30,64 132,64`} />
+        <Prop x={162} y={60} k="pre" />
+        <Wire d={`90,77 90,137`} /><Wire d={`150,77 150,137`} />
+        <Dot x={90} y={110} /><Dot x={150} y={110} />
+        <T x={82} y={106} anchor="end" c={V.net} sz={8.5}>fp</T>
+        <T x={158} y={106} c={V.net} sz={8.5}>fn</T>
+        <Mos cx={90} cy={150} flash={changed === 'input'} />
+        <Mos cx={150} cy={150} flip flash={changed === 'input'} />
+        <Wire d={`72,150 48,150`} /><Wire d={`168,150 192,150`} />
+        <T x={44} y={146} anchor="end" c={V.net} sz={8.5}>vinp</T>
+        <T x={196} y={146} c={V.net} sz={8.5}>vinn</T>
+        <Prop x={96} y={196} k="input" />
+        <Wire d={`90,163 90,180 120,180`} /><Wire d={`150,163 150,180 120,180`} /><Dot x={120} y={180} />
+        <Mos cx={120} cy={210} flash={changed === 'tail'} />
+        <Wire d={`120,180 120,197`} /><Wire d={`120,223 120,${GND}`} />
+        <Wire d={`30,210 102,210`} />
+        <Prop x={134} y={226} k="tail" />
+
+        {/* ── stage 2 ── */}
+        <T x={380} y={44} anchor="middle" c={V.faint} sz={8}>stage 2</T>
+        <Mos cx={380} cy={56} p flash={changed === 'tail'} />
+        <Wire d={`380,43 380,${V0}`} />
+        <Wire d={`362,56 340,56`} /><T x={336} y={59} anchor="end" c={V.prop} sz={8.5}>clkb</T>
+        <Wire d={`380,69 380,88`} /><Dot x={380} y={88} />
+        <Mos cx={340} cy={118} p flip flash={changed === 'pcc'} />
+        <Mos cx={420} cy={118} p flash={changed === 'pcc'} />
+        <Wire d={`340,105 340,96 380,88`} /><Wire d={`420,105 420,96 380,88`} />
+        <Prop x={432} y={108} k="pcc" />
+        <Wire d={`340,131 340,177`} /><Wire d={`420,131 420,177`} />
+        <Dot x={340} y={150} /><Dot x={420} y={150} />
+        <T x={332} y={146} anchor="end" c={V.net} sz={8.5}>outp</T>
+        <T x={428} y={146} c={V.net} sz={8.5}>outn</T>
+        <Mos cx={340} cy={190} flip flash={changed === 'ncc'} />
+        <Mos cx={420} cy={190} flash={changed === 'ncc'} />
+        <Prop x={432} y={204} k="ncc" />
+        <Wire d={`340,203 340,${GND}`} /><Wire d={`420,203 420,${GND}`} />
+        {/* 래치 X 결선 */}
+        <Wire d={`358,118 358,190`} /><Wire d={`402,118 402,190`} />
+        <Wire d={`358,138 420,170`} /><Wire d={`402,138 340,170`} />
+        <Dot x={358} y={138} /><Dot x={402} y={138} /><Dot x={340} y={170} /><Dot x={420} y={170} />
+        {/* 결합/리셋 NMOS — 게이트 = fn/fp */}
+        <Mos cx={280} cy={190} flash={changed === 'ncc'} />
+        <Wire d={`280,177 280,150 340,150`} />
+        <Wire d={`280,203 280,${GND}`} />
+        <Wire d={`150,110 212,110 212,190 262,190`} />
+        <Mos cx={480} cy={190} flash={changed === 'ncc'} />
+        <Wire d={`480,177 480,150 420,150`} />
+        <Wire d={`480,203 480,${GND}`} />
+        <Wire d={`90,110 60,110 60,250 448,250 448,190 462,190`} />
+      </svg>
+    )
+  }
 
   const V0 = 24, GND = 300, LX = 128, RX = 232, CX = 180
   const yPre = 52, yLatP = 96, yOut = 150, yLatN = 196, yIn = 244, yTail = 282

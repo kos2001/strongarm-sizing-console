@@ -58,6 +58,7 @@ MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # (VDD 0.7 V nominal, minimum L = 45 nm for this node)
 DEFAULT_PARAMS = {
     "vdd": 0.7,
+    "topology": "strongarm",   # "strongarm"(단일 테일) | "doubletail"(Schinkel 2단)
     "vcm_frac": 0.62,     # input common mode as fraction of vdd
     "cload_ff": 15.0,
     "avt_mv_um": 2.0,     # Pelgrom coefficient (mV*um), ~45nm-class
@@ -95,10 +96,11 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
             def _sw(*ks):
                 return sum(d[k]["w_um"] * d[k]["m"] for k in ks)
             c_out = round(0.25 * _sw("pcc", "ncc", "pre") + 1.5, 3)   # fF at outp/outn
-            c_int = round(0.25 * _sw("input", "ncc") + 1.0, 3)        # fF at nX/nY
+            c_int = round(0.25 * _sw("input", "ncc") + 1.0, 3)        # fF at internal nodes
+        _in1, _in2 = ("fp", "fn") if p.get("topology") == "doubletail" else ("nX", "nY")
         par_lines = ("* --- extracted layout parasitics ---\n"
                      f"Cpo outp 0 {c_out}f\nCpn outn 0 {c_out}f\n"
-                     f"Cpx nX 0 {c_int}f\nCpy nY 0 {c_int}f")
+                     f"Cpx {_in1} 0 {c_int}f\nCpy {_in2} 0 {c_int}f")
     temp = p.get("temp", 27)
     pskew = p.get("pskew", 0.0)   # process corner: +slow (SS), -fast (FF), 0 typical
     # model backend: generic PTM 45nm (.model) or REAL SkyWater SKY130 (.lib subckts)
@@ -121,7 +123,36 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
         def dline(label, nodes, dk, kind):
             return f"{label} {nodes} {'nmos' if kind == 'n' else 'pmos'} {_dev(d[dk], 'dvtn' if kind == 'n' else 'dvtp')}"
 
-    dev_block = "\n".join([
+    if p.get("topology") == "doubletail":
+        # Schinkel(ISSCC'07) 계열 double-tail — 기존 5개 사이징 키에 매핑:
+        #   input=1단 입력쌍, tail=Mt1(NMOS)·Mt2(PMOS, 동일 W·M), pre=1단 프리차지
+        #   PMOS(fp/fn 로드), pcc=2단 래치 PMOS, ncc=2단 래치 NMOS + 결합/리셋
+        #   NMOS(M9/M10, 게이트=fp/fn — 리셋 때 출력들을 L로 클램프).
+        # 극성: inp>inn → fp 먼저 방전 → M10(게이트 fp) 먼저 꺼짐 → outn 상승
+        #        → outdiff<0 (strongarm 과 동일 극성).
+        dev_block = "\n".join([
+            "* === stage 1: input pair + tail1, PMOS precharge loads (fp/fn) ===",
+            dline("M1", "fp g1 tail1 0", "input", "n"),
+            dline("M2", "fn g2 tail1 0", "input", "n"),
+            dline("Mt1", "tail1 clk 0 0", "tail", "n"),
+            dline("M3", "fp clk vdd vdd", "pre", "p"),
+            dline("M4", "fn clk vdd vdd", "pre", "p"),
+            "* === stage 2: latch (X-coupled) + coupling NMOS + PMOS tail2 (clkb) ===",
+            dline("Mt2", "tail2 clkb vdd vdd", "tail", "p"),
+            dline("M5", "outp outn tail2 vdd", "pcc", "p"),
+            dline("M6", "outn outp tail2 vdd", "pcc", "p"),
+            dline("M7", "outp outn 0 0", "ncc", "n"),
+            dline("M8", "outn outp 0 0", "ncc", "n"),
+            "* coupling/reset: fp/fn high during reset -> both outputs clamped low",
+            dline("M9", "outp fn 0 0", "ncc", "n"),
+            dline("M10", "outn fp 0 0", "ncc", "n"),
+        ])
+        clkb_line = f"Vclkb clkb 0 PULSE({vdd} 0 200p 12p 12p {p.get('clk_high_ns', 3.0)}n {p.get('clk_period_ns', 6.0)}n)"
+    else:
+        clkb_line = ""
+        dev_block = None
+    if dev_block is None:
+        dev_block = "\n".join([
         "* --- input differential pair ---",
         dline("M1", "nX g1 tail 0", "input", "n"),
         dline("M2", "nY g2 tail 0", "input", "n"),
@@ -157,7 +188,7 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
 {model_header}
 Vdd vdd 0 {vdd}
 * clock: precharge (clk=0) for 200ps, then evaluate
-Vclk clk 0 PULSE(0 {vdd} 200p 12p 12p {clk_hi}n {clk_per}n)
+Vclk clk 0 PULSE(0 {vdd} 200p 12p 12p {clk_hi}n {clk_per}n)\n{clkb_line}
 * differential input around common mode
 Vinp inpx 0 {vcm + vdiff/2.0}
 Vinn innx 0 {vcm - vdiff/2.0}
