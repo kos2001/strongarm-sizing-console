@@ -22,4 +22,6 @@ webapp/.vite/
 # OS / editor
 .DS_Store
 .playwright-mcp/
-third_party/
+third_party/OpenVAF/
+third_party/VA-Models/
+third_party/bsimcmg107/*.osdi
