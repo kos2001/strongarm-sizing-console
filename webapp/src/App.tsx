@@ -528,7 +528,7 @@ export default function App() {
           <div className="flex items-baseline justify-between gap-4">
             <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{pageTitle}</h1>
             <div className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
-              StrongARM latch · {params.model === 'gaa2nm' ? 'GAA 2nm≈ (BSIM4 근사)' : params.model === 'sky130' ? 'SKY130 (real PDK)' : 'BSIM4 PTM 45nm'}
+              StrongARM latch · {params.model === 'gaa2nm' ? 'GAA 2nm≈ (BSIM4 근사)' : params.model === 'asap7' ? 'ASAP7 7nm FinFET (BSIM-CMG·OSDI)' : params.model === 'sky130' ? 'SKY130 (real PDK)' : 'BSIM4 PTM 45nm'}
             </div>
           </div>
 
@@ -571,22 +571,25 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>Model</span>
-            {([['ptm', 'PTM 45nm', 1.0], ['sky130', 'SKY130 (real)', 1.8], ['gaa2nm', 'GAA 2nm≈', 0.65]] as const).map(([m, label, v]) => {
+            {([['ptm', 'PTM 45nm', 1.0], ['sky130', 'SKY130 (real)', 1.8], ['gaa2nm', 'GAA 2nm≈', 0.65], ['asap7', 'ASAP7 7nm', 0.7]] as const).map(([m, label, v]) => {
               const on = (params.model ?? 'ptm') === m
               // 모델별 채널 길이: gaa2nm 은 Lg 14nm 급(입력쌍 20nm), 나머지는 45nm 노드 기본
-              const lmap = m === 'gaa2nm' ? { input: 20, other: 14 } : { input: 80, other: 45 }
+              const lmap = m === 'gaa2nm' ? { input: 20, other: 14 } : m === 'asap7' ? { input: 21, other: 21 } : { input: 80, other: 45 }
+              // asap7: 핀 수 기준 현실적 사이징(input 16 / tail 36 / ncc·pre 8 / pcc 20핀, 검증됨)
+              const wmap7: Record<DeviceKey, number> = { input: 0.28, tail: 0.42, ncc: 0.28, pcc: 0.35, pre: 0.28 }
               return (
                 <button
                   key={m}
                   disabled={busy}
                   onClick={() => updateParams({ ...params, model: m, vdd: v,
                     // Pelgrom A_VT: GAA 2nm 급은 얇은 EOT·언도프드 채널로 매칭 우수(~1.2mV·µm)
-                    avt_mv_um: m === 'gaa2nm' ? 1.2 : 2.0,
+                    avt_mv_um: m === 'gaa2nm' ? 1.2 : m === 'asap7' ? 1.4 : 2.0,
                     devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => {
                       const dd = params.devices[k]
                       const l_nm = k === 'input' ? lmap.input : lmap.other
                       // gaa2nm: W 는 나노시트 스택 등가폭 0.2µ 의 정수배로만 존재 — 그리드에 스냅
                       if (m === 'gaa2nm') return [k, { ...dd, l_nm, w_um: Math.max(0.2, Math.round(Math.round(dd.w_um / 0.2) * 0.2 * 1000) / 1000) }]
+                      if (m === 'asap7') return [k, { ...dd, l_nm, w_um: wmap7[k] }]
                       return [k, { ...dd, l_nm }]
                     })) as Record<DeviceKey, Device> })}
                   className="mono text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-50"
@@ -598,6 +601,11 @@ export default function App() {
             })}
           </div>
 
+          {params.model === 'asap7' && (
+            <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5" style={{ color: 'var(--si)', background: 'color-mix(in srgb, var(--si) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--si) 30%, var(--line))' }}>
+              ASAP7 7nm FinFET — 진짜 BSIM-CMG 107 을 ngspice OSDI 로 실행(ASU 예측 PDK, LVT). W 는 핀 수로 양자화(1핀 ≈ Weff 0.07µ).
+            </p>
+          )}
           {params.model === 'gaa2nm' && (
             <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5" style={{ color: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--warn) 30%, var(--line))' }}>
               ≈ 2nm급 근사 모델(BSIM4, IRDS 목표치 스케일링) — W 는 나노시트 스택 단위(0.2µ = 3시트 스택 1개)의 정수배로 스냅됩니다. 경향 분석용이며 사인오프 불가. 실제 2nm PDK 는 파운드리 NDA 전용.
@@ -804,7 +812,7 @@ export default function App() {
                   </div>
                 </div>
               )}
-            <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.topology ? { topology: pp.topology as 'strongarm' | 'doubletail' } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'sky130' | 'gaa2nm' } : {}), devices: { ...params.devices, ...pp.devices } })} />
+            <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.topology ? { topology: pp.topology as 'strongarm' | 'doubletail' } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'sky130' | 'gaa2nm' | 'asap7' } : {}), devices: { ...params.devices, ...pp.devices } })} />
             </div>
           )}
 
@@ -1238,7 +1246,7 @@ export default function App() {
           )}
 
           <p className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
-            {ngspice ? `ngspice: ${ngspice}` : ''} · model: {params.model === 'gaa2nm' ? 'GAA 2nm≈ (scaled BSIM4)' : params.model === 'sky130' ? 'SKY130 PDK' : 'BSIM4 PTM 45nm bulk'} · offset via Monte-Carlo Vth mismatch
+            {ngspice ? `ngspice: ${ngspice}` : ''} · model: {params.model === 'gaa2nm' ? 'GAA 2nm≈ (scaled BSIM4)' : params.model === 'asap7' ? 'ASAP7 7nm (BSIM-CMG via OSDI)' : params.model === 'sky130' ? 'SKY130 PDK' : 'BSIM4 PTM 45nm bulk'} · offset via Monte-Carlo Vth mismatch
           </p>
         </div>
       </main>

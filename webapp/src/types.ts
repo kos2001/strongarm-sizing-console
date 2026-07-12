@@ -12,7 +12,7 @@ export interface Params {
   cload_ff: number
   avt_mv_um: number
   n_mc: number
-  model?: 'ptm' | 'sky130' | 'gaa2nm'
+  model?: 'ptm' | 'sky130' | 'gaa2nm' | 'asap7'
   devices: Record<DeviceKey, Device>
 }
 
@@ -202,7 +202,7 @@ export interface VcoParams {
   cload_ff: number
   topology?: VcoTopology
   trst_ns?: number
-  model?: 'ptm' | 'gaa2nm'   // VCO 는 .model nmos/pmos 카드 경로만 (sky130 미지원)
+  model?: 'ptm' | 'gaa2nm' | 'asap7'   // VCO 는 sky130 미지원(subckt 경로 없음)
   devices: Record<VcoDeviceKey, Device>
 }
 export interface VcoNominal {
