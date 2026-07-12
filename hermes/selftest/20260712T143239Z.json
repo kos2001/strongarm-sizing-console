@@ -1,0 +1,37 @@
+{
+ "quick": false,
+ "results": [
+  {
+   "id": "comp-diagnose",
+   "pass": true,
+   "took_s": 81,
+   "role": "diagnose",
+   "why": "",
+   "over_budget": false
+  },
+  {
+   "id": "vco-diagnose",
+   "pass": false,
+   "took_s": 129,
+   "role": "diagnose",
+   "why": "답에 실측 주파수 2.3361GHz 부재(5/per 오해석 의심)",
+   "over_budget": false
+  },
+  {
+   "id": "comp-edit",
+   "pass": false,
+   "took_s": 89,
+   "role": "edit",
+   "why": "반환 덱이 ngspice 에서 tdec 측정 실패",
+   "over_budget": false
+  },
+  {
+   "id": "vco-edit",
+   "pass": true,
+   "took_s": 163,
+   "role": "edit",
+   "why": "",
+   "over_budget": false
+  }
+ ]
+}

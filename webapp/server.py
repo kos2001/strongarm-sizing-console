@@ -661,7 +661,7 @@ def _role_rules(role, domain):
         vco_note = ("" if comp else
                     "주의: VCO 덱의 per 측정은 5주기 구간(RISE=3..8)이다 — 주파수는 f = 5/per 로 환산하라. ")
         return (f"[회로 편집 전문] ① {nlt} 로 현재 덱을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 로 실행해 "
-                f"측정값을 확인하고 ④ 수정 덱 전체를 ```spice 블록으로 포함하라. {vco_note}도구 최대 3회. " + common)
+                f"측정값을 확인하고 ④ 수정 덱 전체를 ```spice 블록으로 포함하라 — 원본의 모든 라인(.control/.end 포함)에 수정분만 더한 완전한 덱이어야 하며 생략·축약(...)은 금지다. {vco_note}도구 최대 3회. " + common)
     # size (기본)
     if not comp:
         return (f"[사이징 전문] ① {brief} 1회로 마진 파악. ② 목표에서 크게 벗어나면 {opt} 에 위임하되 "

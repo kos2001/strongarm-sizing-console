@@ -73,7 +73,26 @@ cp -r hermes/skills/* ~/.hermes/profiles/strong-arm/skills/semiconductor-eda/
   전문가가 답했는지 UI 배지에 표시된다. 기존 `/api/agent/chat`(원시 프록시)
   도 유지.
 
-## 5) 웹 콘솔 연동 확인
+## 5) 자기개선 루프 (`scripts/agent_selftest.py`)
+
+에이전트 품질이 저절로 유지되도록 하는 폐루프:
+
+```
+골든 과제 실행(/api/agent/ask) → 독립 교차검증 채점
+  (진단: 답의 수치 = 백엔드 brief 실측?  edit: 반환 덱을 ngspice 재실행해
+   에이전트 주장과 대조 — 문자열 매칭이 아니라 물리 검증)
+→ hermes/selftest/<시각>.json 기록
+→ 실패는 strongarm-lessons 스킬에 교훈 초안 append + 프로파일 재설치
+→ 다음 에이전트 턴이 교훈을 로드 → 같은 실수 반복 방지
+```
+
+- `python3 scripts/agent_selftest.py` (전체 4과제 ~10분) / `--quick` (진단 2과제 ~2분)
+- 크론 예: `0 3 * * * cd <repo> && python3 scripts/agent_selftest.py`
+- 시드 교훈 2건(직관 사이징 악화 1063ps, VCO 5주기 오해석)은 실제 발견
+  사례 — `hermes/skills/strongarm-lessons/SKILL.md` 참조. 자동 append 된
+  L-auto 항목은 사람이 검토해 정식 규칙(역할 프롬프트/레시피)으로 승격한다.
+
+## 6) 웹 콘솔 연동 확인
 
 콘솔(:8770) → 비교기/VCO 아무 페이지 → 우하단 🤖 → "입력쌍 W를 두 배로
 하고 시뮬해 줘" — 에이전트가 `strongarm_run_sim` 한 번으로 실측을 답하고
