@@ -161,6 +161,14 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
     },
     {
+        "name": "strongarm_noise_probit",
+        "description": "MEASURE input-referred noise sigma by probit noise-counting: repeated clocked "
+                       "decisions with injected device thermal noise near metastability, P(+|vin) fitted "
+                       "to a Gaussian CDF. Cross-checks the analytic estimate. ~5s.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA,
+                        "n_per_point": {"type": "integer"}}},
+    },
+    {
         "name": "strongarm_ber",
         "description": "Comparator bit-error-rate vs input amplitude (noise + metastability model).",
         "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
@@ -337,6 +345,7 @@ _TOOL_ENDPOINT = {
     "vco_optimize": "/api/vco/optimize",
     "strongarm_metastability": "/api/metastability",
     "strongarm_ber": "/api/ber",
+    "strongarm_noise_probit": "/api/noise/probit",
     "strongarm_sensitivity": "/api/sensitivity",
     "strongarm_maxfclk": "/api/maxfclk",
     "strongarm_yield": "/api/yield",

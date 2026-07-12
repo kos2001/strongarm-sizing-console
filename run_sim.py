@@ -497,6 +497,85 @@ def run_sim(params, seed=12345, do_offset=True, with_noise=False):
     return result
 
 
+
+def _probit(p):
+    """표준정규 역CDF Φ⁻¹(p) — 이분법(math.erfc 기반), 의존성 없음."""
+    lo, hi = -8.0, 8.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if 0.5 * math.erfc(-mid / math.sqrt(2.0)) < p:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def noise_probit(params, points=5, n_per_point=24, seed0=1000):
+    """입력환산 노이즈의 SPICE 실측 — 프로빗(noise-counting) 방법.
+
+    준안정점 주변의 DC 입력 vin 에서, 입력쌍 열잡음(S_v = 2·4kTγ/gm)을
+    trnoise 소스로 게이트에 주입한 클록 판정을 시드만 바꿔 반복하고
+    P(결정=+|vin) 을 센다. 가우시안 노이즈면 P = Φ(vin/σ) 이므로 probit
+    선형화 Φ⁻¹(P) = vin/σ 의 기울기에서 σ 를 얻는다. 해석적
+    √(2γkT/(gm·t_int)) 추정의 교차검증 (방법론은 공개 comparator 스킬
+    계열의 표준 기법 — 구현은 자체, VCO 지터 실측과 같은 주입 방식)."""
+    p = _full(params)
+    nom = measure_nominal(p)
+    dec = nom.get("decision_time_ps")
+    est = _estimate_noise(p, dec)          # 해석적 σ (µVrms) — 스윕 스케일
+    if not est:
+        return {"error": "해석적 노이즈 추정 실패(비기능?) — 프로빗 스윕 스케일을 정할 수 없습니다."}
+    vcm = p["vcm_frac"] * p["vdd"]
+    i0, i1 = _input_id(p, vcm), _input_id(p, vcm + 0.005)
+    gm = (i1 - i0) / 0.005
+    kT = 1.380649e-23 * (p.get("temp", 27) + 273.15)
+    tstep = p.get("tstep_ps", 1.0)
+    # 입력쌍 2개의 게이트 환산 백색잡음 → 단일 소스로 합산 주입
+    na = math.sqrt(2.0 * 4.0 * kT * (2.0 / 3.0) / gm / (tstep * 1e-12))
+
+    s = est * 1e-6
+    vins = [round(k * s, 12) for k in (-1.2, -0.6, 0.0, 0.6, 1.2)][:points]
+
+    def one(args):
+        vin, seed = args
+        nl = gen_netlist(p, vdiff=vin)
+        nl = nl.replace("Vos1 g1 inpx 0.0",
+                        f"Vos1 g1 inpx DC 0 trnoise({na:.6g} {tstep}p 0 0)")
+        nl = nl.replace("set noaskquit", f"set noaskquit\nsetseed {seed}")
+        f = _parse(_run(nl), "fdiff")
+        return None if f is None else (f < 0)   # 극성: vin>0 → outdiff<0
+
+    jobs = [(v, seed0 + i) for i in range(n_per_point) for v in vins]
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        outs = list(ex.map(one, jobs))
+
+    pts, fit = [], []
+    for v in vins:
+        ds = [o for (vv, _), o in zip(jobs, outs) if vv == v and o is not None]
+        if not ds:
+            continue
+        n = len(ds)
+        p1 = sum(ds) / n
+        pts.append({"vin_uv": round(v * 1e6, 3), "p_plus": round(p1, 4), "n": n})
+        pc = min(max(p1, 0.5 / n), 1 - 0.5 / n)   # 프로빗 정의역으로 클램프
+        fit.append((v, _probit(pc)))
+    # 최소자승 z = a + b·vin → σ = 1/b
+    m = len(fit)
+    sx = sum(v for v, _ in fit); sz = sum(z for _, z in fit)
+    sxx = sum(v * v for v, _ in fit); sxz = sum(v * z for v, z in fit)
+    denom = m * sxx - sx * sx
+    if denom <= 0:
+        return {"error": "프로빗 피팅 실패(점 부족)", "points": pts}
+    b = (m * sxz - sx * sz) / denom
+    if b <= 0:
+        return {"error": "프로빗 기울기 비양수 — 노이즈가 스윕 범위를 지배", "points": pts}
+    sigma_uv = 1e6 / b
+    return {"sigma_uv_probit": round(sigma_uv, 1), "sigma_uv_analytic": est,
+            "ratio": round(sigma_uv / est, 3), "points": pts,
+            "n_sims": len(jobs), "inject_na_v": round(na, 9),
+            "method": "probit fit of P(+|vin), input-referred trnoise (2 devices), gamma=2/3"}
+
+
 def merge_devices(override):
     """Field-wise merge of a (possibly partial) device dict over the defaults, so
     a caller sending only e.g. {"input":{"w_um":10}} keeps l_nm/m from the default

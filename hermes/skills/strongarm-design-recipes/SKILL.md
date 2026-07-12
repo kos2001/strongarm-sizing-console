@@ -35,6 +35,16 @@ Spec math (before any tool call):
   gaa2nm reached 13.6 µW from a 65 µW seed — trust `strongarm_optimize` for
   the last stretch instead of hand-iterating.
 
+## Noise: analytic vs probit-measured
+
+`strongarm_noise_probit` MEASURES input-referred σ by noise counting (probit
+fit of P(+|vin) under injected device thermal noise, ~5 s). Measured σ runs
+**1.5–2× above** the analytic √(2γkT/(gm·t_int)) estimate on the default
+design (aperture/γ assumptions) — quote the measured one for BER claims, and
+note its ±tens-of-% spread at n=24/point (raise n_per_point for precision).
+Method credit: probit noise-counting is the standard comparator technique
+(cf. Arcadia-1/analog-circuit-skills references) — implementation is ours.
+
 ## Corner-failure playbook
 
 - **Low-VDD (≤0.7 V) + slow NMOS (SS/SF) is the binding corner** for this
