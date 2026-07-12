@@ -840,7 +840,11 @@ export default function App() {
                     </ol>
                   </div>
                   <p className="mono text-[11px] mt-3 leading-relaxed flex items-center justify-between gap-2" style={{ color: 'var(--faint)' }}>
-                    <span>Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.</span>
+                    <span>Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.
+                      {opt.final_stacks && (
+                        <span style={{ color: 'var(--si)' }}> · 2nm: 탐색된 것은 정수 스택 수 — {(['input', 'tail', 'ncc', 'pcc', 'pre'] as const).map((k) => `${k} ${opt.final_stacks![k]}`).join(' / ')} (×0.2µ)</span>
+                      )}
+                    </span>
                     <button onClick={() => downloadNetlist('/api/netlist', opt.final_params, 'strongarm_opt.sp').catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full shrink-0" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
                       title="최적화된 소자 크기가 반영된 SPICE 덱(.sp) 다운로드">
                       ⤓ netlist

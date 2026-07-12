@@ -48,8 +48,24 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const [targetF, setTargetF] = useState(1.5)
   const busy = load !== ''
 
-  const setDev = (k: VcoDeviceKey, f: 'w_um' | 'l_nm' | 'm', v: number) =>
+  // gaa2nm: W 는 나노시트 스택 등가폭 0.2µ 의 정수배로만 존재 — 입력을 그리드에 스냅
+  const gaa = params.model === 'gaa2nm'
+  const setDev = (k: VcoDeviceKey, f: 'w_um' | 'l_nm' | 'm', v: number) => {
+    if (gaa && f === 'w_um') v = Math.max(0.2, Math.round(Math.round(v / 0.2) * 0.2 * 1000) / 1000)
     setParams((p) => ({ ...p, devices: { ...p.devices, [k]: { ...p.devices[k], [f]: v } } }))
+  }
+  // 모델 프리셋 — vdd·V_ctrl·L 을 노드에 맞게 일괄 설정(gaa2nm 은 W 그리드 스냅 포함)
+  const setModel = (m: 'ptm' | 'gaa2nm') => {
+    const v = m === 'gaa2nm' ? { vdd: 0.65, vctrl: 0.5, l: 14 } : { vdd: 1.0, vctrl: 0.6, l: 45 }
+    setParams((p) => ({
+      ...p, model: m, vdd: v.vdd, vctrl: v.vctrl,
+      devices: Object.fromEntries((Object.keys(p.devices) as VcoDeviceKey[]).map((k) => {
+        const dd = p.devices[k]
+        const w_um = m === 'gaa2nm' ? Math.max(0.2, Math.round(Math.round(dd.w_um / 0.2) * 0.2 * 1000) / 1000) : dd.w_um
+        return [k, { ...dd, l_nm: v.l, w_um }]
+      })) as VcoParams['devices'],
+    }))
+  }
   const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff', v: number) => {
     // 링 단수 N 은 발진 조건상 홀수만 허용(짝수 입력은 위로 올림), 최소 3
     if (f === 'n_stages') v = Math.max(3, v % 2 === 0 ? v + 1 : v)
@@ -410,8 +426,28 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '링 VCO · 소자 크기', 'ring VCO · sizing')}</div>
             {topoBadge}
           </div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>Model</span>
+            {([['ptm', 'PTM 45nm'], ['gaa2nm', 'GAA 2nm≈']] as const).map(([m, label]) => {
+              const on = (params.model ?? 'ptm') === m
+              return (
+                <button key={m} disabled={busy} onClick={() => setModel(m)}
+                  className="mono text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-50"
+                  style={{ color: on ? 'var(--si)' : 'var(--muted)', background: on ? 'color-mix(in srgb, var(--si) 12%, transparent)' : 'transparent', border: `1px solid ${on ? 'color-mix(in srgb, var(--si) 35%, var(--line))' : 'var(--line)'}` }}>
+                  {label}
+                </button>
+              )
+            })}
+            <span className="mono text-[10.5px]" style={{ color: 'var(--faint)' }}>VDD {params.vdd}V</span>
+          </div>
+          {gaa && (
+            <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5 mb-2" style={{ color: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--warn) 30%, var(--line))' }}>
+              {T(lang, '≈ 2nm급 근사 모델(BSIM4 스케일링) — W 는 나노시트 스택 단위(0.2µ)의 정수배로 스냅. 경향 분석용, 사인오프 불가.',
+                '≈ 2nm-class approximation (scaled BSIM4) — W snaps to the 0.2µ nanosheet-stack grid. Trend study only, not for sign-off.')}
+            </p>
+          )}
           <div className="grid gap-2 mono text-[11px] uppercase tracking-wider px-1 mb-1" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', color: 'var(--faint)' }}>
-            <span>{T(lang, '소자', 'Device')}</span><span>W (µm)</span><span>L (nm)</span><span>M</span>
+            <span>{T(lang, '소자', 'Device')}</span><span>{gaa ? T(lang, 'W (0.2µ×스택)', 'W (0.2µ×stacks)') : 'W (µm)'}</span><span>L (nm)</span><span>M</span>
           </div>
           {dkeys.map((k) => (
             <div key={k} className="grid gap-2 items-center rounded-xl p-2.5 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: `3px solid ${A}` }}>
@@ -420,7 +456,8 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
                 <div className="text-xs truncate" style={{ color: 'var(--muted)' }}>{VCO_DEVICE_META[k].role[lang]}</div>
               </div>
               {(['w_um', 'l_nm', 'm'] as const).map((f) => (
-                <input key={f} type="number" step={f === 'w_um' ? 0.5 : f === 'l_nm' ? 5 : 1} min={0} disabled={busy}
+                <input key={f} type="number" step={f === 'w_um' ? (gaa ? 0.2 : 0.5) : f === 'l_nm' ? 5 : 1} min={0} disabled={busy}
+                  title={gaa && f === 'w_um' ? T(lang, `2nm급: 0.2µ(스택 1개) 단위 스냅 — 현재 ${Math.round(params.devices[k].w_um / 0.2)}스택`, `snaps to 0.2µ (1 stack) — ${Math.round(params.devices[k].w_um / 0.2)} stacks`) : undefined}
                   value={params.devices[k][f]} onChange={(e) => setDev(k, f, parseFloat(e.target.value) || 0)} />
               ))}
             </div>
@@ -463,7 +500,9 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
           )}
           {view === 'opt' && opt && (
             <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg flex items-center justify-between gap-2" style={{ color: opt.success ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${opt.success ? 'var(--good)' : 'var(--warn)'} 12%, transparent)` }}>
-              <span>{opt.success ? '✓' : '≈'} {T(lang, '목표', 'target')} {opt.target_f_ghz} GHz → {opt.nominal.f_osc_ghz} GHz · {opt.nominal.power_uw} µW · {opt.n_sims} SPICE evals{opt.n_surrogate_skips ? ` · ${opt.n_surrogate_skips} ${T(lang, '스킵', 'skipped')}` : ''}</span>
+              <span>{opt.success ? '✓' : '≈'} {T(lang, '목표', 'target')} {opt.target_f_ghz} GHz → {opt.nominal.f_osc_ghz} GHz · {opt.nominal.power_uw} µW · {opt.n_sims} SPICE evals{opt.n_surrogate_skips ? ` · ${opt.n_surrogate_skips} ${T(lang, '스킵', 'skipped')}` : ''}
+                {opt.final_stacks && <span style={{ color: 'var(--si)' }}> · 2nm: {T(lang, '탐색된 것은 정수 스택 수', 'found integer stack counts')} — {(Object.keys(opt.final_stacks) as VcoDeviceKey[]).map((k) => `${k} ${opt.final_stacks![k]}`).join(' / ')} (×0.2µ)</span>}
+              </span>
               <button onClick={() => downloadNetlist('/api/vco/netlist', opt.final_params, `vco_xcpl_opt_N${opt.final_params.n_stages}.sp`).catch(() => {})}
                 className="mono text-[11px] px-2.5 py-1 rounded-full shrink-0" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
                 title={T(lang, '최적화된 소자 크기가 반영된 SPICE 덱(.sp) 다운로드', 'Download the SPICE deck (.sp) with the optimized device sizes')}>

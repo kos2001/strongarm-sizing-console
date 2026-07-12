@@ -68,7 +68,7 @@ export default function VcoAgentSizing({ params, targetF, onApply, ko, disabled 
     setBusy(true)
     try {
       const ctx = {
-        topology: 'xcpl', vdd: params.vdd, vctrl: params.vctrl, n_stages: params.n_stages,
+        topology: 'xcpl', model: params.model ?? 'ptm', vdd: params.vdd, vctrl: params.vctrl, n_stages: params.n_stages,
         cload_ff: params.cload_ff, devices: params.devices, target_f_ghz: targetF,
       }
       const message =
