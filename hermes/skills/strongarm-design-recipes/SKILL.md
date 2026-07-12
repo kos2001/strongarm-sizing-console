@@ -47,10 +47,14 @@ Method credit: probit noise-counting is the standard comparator technique
 
 ## Corner-failure playbook
 
-- **Low-VDD (≤0.7 V) + slow NMOS (SS/SF) is the binding corner** for this
-  latch (single-tail 530 ps @0.7 V TT fails SS/0.63 V). Mitigate with
-  tail/ncc ~1.5× and input gm; if the corner still fails, the honest answer
-  is a vdd floor — report it rather than over-widening.
+- **Low-VDD (≤0.7 V) + slow NMOS (SS/SF) is the binding corner** — and
+  **widths cannot save it** (measured: NMOS stack ×8 still dead; subthreshold
+  current is linear in W but exponential in overdrive). The real levers are
+  the operating point (`vcm_frac` up — 0.82 makes the corner survive with
+  default W) or a vdd floor. `strongarm_optimize` handles this automatically
+  (corner_aware default): FEO-style vcm feasibility lift → corner-co-evaluated
+  W search → measured 45/45 corners pass vs 9 fails corner-blind, at +1.4%
+  nominal power.
 - Corner skew is model-aware (±50 mV; ±25 mV on gaa2nm/asap7) — cross corners
   SF/FS often bind before SS/FF on this latch (NMOS-dominated).
 - After any topology/model change, re-run PVT (45 corners) before declaring pass.

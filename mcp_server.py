@@ -69,8 +69,12 @@ TOOLS = [
         "name": "strongarm_optimize",
         "description": "Autonomously size W/M via log-space Differential Evolution + a GP surrogate, "
                        "minimizing power subject to offset + decision-time + functional constraints. "
-                       "Returns the search trajectory, final sizing, and pass/fail verdicts.",
-        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
+                       "CORNER-AWARE by default: a FEO-style feasibility stage lifts vcm_frac until the "
+                       "worst corner (slow-N/-40C/0.9VDD) survives, then every candidate is co-evaluated "
+                       "there (widths alone cannot save that corner — measured x8 still dead). "
+                       "Returns trajectory, final sizing, verdicts, corner_note, final_corner.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+                        "corner_aware": {"type": "boolean"}, "corner_relax": {"type": "number"}}},
     },
     {
         "name": "strongarm_pareto",

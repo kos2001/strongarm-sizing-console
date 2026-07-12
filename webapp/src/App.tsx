@@ -848,6 +848,9 @@ export default function App() {
                   </div>
                   <p className="mono text-[11px] mt-3 leading-relaxed flex items-center justify-between gap-2" style={{ color: 'var(--faint)' }}>
                     <span>Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.
+                      {opt.final_corner && (
+                        <span style={{ color: opt.final_corner.functional ? 'var(--good)' : 'var(--bad)' }}> · 최악 코너(SS/−40°C/0.9V<sub>DD</sub>): {opt.final_corner.functional ? `생존 ${opt.final_corner.decision_time_ps}ps` : '비기능'}{opt.corner_note?.includes('vcm_frac') ? ` — ${opt.corner_note.split('(')[0].replace('corner feasibility: ', 'vcm ')}` : ''}</span>
+                      )}
                       {opt.final_stacks && (
                         <span style={{ color: 'var(--si)' }}> · 2nm: 탐색된 것은 정수 스택 수 — {(['input', 'tail', 'ncc', 'pcc', 'pre'] as const).map((k) => `${k} ${opt.final_stacks![k]}`).join(' / ')} (×0.2µ)</span>
                       )}

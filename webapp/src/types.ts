@@ -188,6 +188,9 @@ export interface OptimizeResult {
   final_total_w_um?: number
   // gaa2nm: 자동 사이징이 실제로 찾은 정수 스택 수(W = 스택 × 0.2µ)
   final_stacks?: Record<DeviceKey, number> | null
+  corner_aware?: boolean
+  corner_note?: string | null
+  final_corner?: { functional?: boolean; decision_time_ps?: number | null } | null
   error?: string
 }
 
