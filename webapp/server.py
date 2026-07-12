@@ -932,6 +932,69 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
             "final_stacks": _stacks(fin) if run_sim.w_unit(base) else None}
 
 
+
+def design_brief(params, targets=None):
+    """에이전트용 원콜 브리핑: 공칭 시뮬 + 오프셋 예측 + 스펙 마진 + 그리드
+    정보(스택/핀) + 즉답용 레버 힌트를 한 번에 — 에이전트가 상태 파악에
+    여러 툴콜을 쓰지 않도록 한다(왕복 1회 = 지연·비용 절감)."""
+    p = run_sim._full(params or {})
+    t = {"decision_time_ps": 400.0, "power_uw": 100.0, "offset_sigma_mv": 5.0, **(targets or {})}
+    nom = run_sim.run_sim(p, do_offset=False)["nominal"]
+    offp = _pred_offset_mv(p)
+    dec, pw = nom.get("decision_time_ps"), nom.get("power_uw")
+    margins = {
+        "functional": bool(nom.get("functional")),
+        "decision_time_ps": None if dec is None else round(1 - dec / t["decision_time_ps"], 4),
+        "power_uw": None if pw is None else round(1 - pw / t["power_uw"], 4),
+        "offset_sigma_mv": round(1 - offp / t["offset_sigma_mv"], 4),
+    }
+    unit = run_sim.w_unit(p)
+    hints = []
+    if not margins["functional"]:
+        hints.append("비기능: tail/ncc/pcc 폭 강화 또는 vdd 상향; 0.7V 이하 코너 실패면 topology='doubletail' 고려")
+    if margins["decision_time_ps"] is not None and margins["decision_time_ps"] < 0:
+        hints.append("판정시간 초과: input(gm)·tail 폭 증가가 가장 효과적, prei(S1/S2) 축소로 내부 기생 절감도 유효(실측 530→514ps)")
+    if margins["offset_sigma_mv"] < 0:
+        req_area = (math.sqrt(2) * p["avt_mv_um"] / (0.92 * t["offset_sigma_mv"])) ** 2
+        d = p["devices"]["input"]
+        hints.append(f"오프셋 초과: 입력쌍 면적 ≥ {round(req_area, 3)}µm² 필요 (현재 {round(d['w_um'] * d['l_nm'] / 1000.0 * d['m'], 3)}µm²)")
+    if margins["power_uw"] is not None and margins["power_uw"] < 0:
+        hints.append("전력 초과: tail·pcc 축소 우선(민감도상 판정시간 손해 최소 방향), 스펙 만족까지 optimize 권장")
+    return {
+        "model": p.get("model", "ptm"), "vdd": p["vdd"], "topology": p.get("topology", "strongarm"),
+        "w_grid_um": unit,
+        "stacks": _stacks(p) if unit else None,
+        "nominal": nom, "predicted_offset_sigma_mv": round(offp, 3),
+        "targets": t, "margins": margins, "hints": hints,
+        "devices": copy.deepcopy(p["devices"]),
+    }
+
+
+def vco_design_brief(params, targets=None):
+    """VCO 원콜 브리핑 — 공칭 발진 + 목표 f 마진 + 그리드/스택 + 레버 힌트."""
+    p = vco_sim._full(params or {})
+    f_t = float((targets or {}).get("f_ghz", 1.5))
+    m = vco_sim.measure_vco(p)
+    f = m.get("f_osc_ghz")
+    unit = run_sim.w_unit(p)
+    hints = []
+    if not m.get("oscillates"):
+        hints.append("미발진: xcplp(P1)가 과강하면 래치됨 — invp 대비 1/4 이하로; vctrl 이 너무 낮으면 starve 전류 부족")
+    elif f is not None:
+        if f < f_t * 0.9:
+            hints.append("주파수 부족: starven/starvep 폭 증가(전류↑) 또는 n_stages 축소(홀수 유지), cload 축소")
+        elif f > f_t * 1.1:
+            hints.append("주파수 과다: starve 폭 축소(전력도 절감) 또는 n_stages 증가")
+    return {
+        "model": p.get("model", "ptm"), "vdd": p["vdd"], "vctrl": p["vctrl"],
+        "n_stages": p["n_stages"], "w_grid_um": unit,
+        "stacks": _stacks(p) if unit else None,
+        "nominal": m, "target_f_ghz": f_t,
+        "f_margin": None if f is None else round(f / f_t - 1, 4),
+        "hints": hints, "devices": copy.deepcopy(p["devices"]),
+    }
+
+
 def vco_pvt(params):
     """VCO across 27 PVT corners: process SS/TT/FF (±50mV Vth via delvto) ×
     temp −40/27/125 × VDD 0.9/1.0/1.1×. Frequency + does-it-oscillate per corner."""
@@ -1197,6 +1260,12 @@ class Handler(BaseHTTPRequestHandler):
                 full.update({k: v for k, v in payload.get("params", {}).items() if k != "devices"})
                 full["devices"] = run_sim.merge_devices(payload.get("params", {}).get("devices"))
                 self._json(ber_curve(full))
+            elif self.path == "/api/brief":
+                payload = self._read_json()
+                self._json(design_brief(payload.get("params", {}), payload.get("targets")))
+            elif self.path == "/api/vco/brief":
+                payload = self._read_json()
+                self._json(vco_design_brief(payload.get("params", {}), payload.get("targets")))
             elif self.path == "/api/sensitivity":
                 payload = self._read_json()
                 full = copy.deepcopy(run_sim.DEFAULT_PARAMS)
