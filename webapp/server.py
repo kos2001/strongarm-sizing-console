@@ -477,6 +477,52 @@ def parametric_yield(base, targets, n=48, seed=11):
 NETLIST_MOS_RE = None  # lazy re
 
 
+AGENT_PROFILE_CFG = os.path.expanduser("~/.hermes/profiles/strong-arm/config.yaml")
+
+
+def _agent_endpoint():
+    """hermes strong-arm 프로파일의 api_server 주소·토큰(설정 파일에서 발견).
+
+    실패 시 (None, None) — 프록시 엔드포인트가 503 으로 안내한다.
+    """
+    import re
+    url = os.environ.get("STRONGARM_AGENT_URL")
+    tok = os.environ.get("STRONGARM_AGENT_TOKEN")
+    if url and tok:
+        return url, tok
+    try:
+        cfg = open(AGENT_PROFILE_CFG, encoding="utf-8").read()
+        port = re.search(r"api_server:.*?port:\s*(\d+)", cfg, re.S)
+        token = re.search(r"platforms:.*?api_server:.*?token:\s*([0-9a-f]{32,})", cfg, re.S)
+        if port and token:
+            return f"http://127.0.0.1:{port.group(1)}/v1/chat/completions", token.group(1)
+    except OSError:
+        pass
+    return None, None
+
+
+def agent_chat(message, session_id=None, timeout=600):
+    """hermes strong-arm 에이전트(OpenAI 호환)로 한 턴 — MCP 로 SPICE 실행 가능."""
+    import json as _json
+    import urllib.request
+    url, tok = _agent_endpoint()
+    if not url:
+        return {"error": "hermes strong-arm 프로파일을 찾지 못했습니다 — "
+                          "~/.hermes/profiles/strong-arm 게이트웨이가 필요합니다."}
+    sid = session_id or ("console-" + os.urandom(8).hex())
+    body = _json.dumps({"model": "hermes-agent",
+                        "messages": [{"role": "user", "content": message}]}).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json", "Authorization": f"Bearer {tok}",
+        "X-Hermes-Session-Id": sid})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = _json.loads(r.read().decode())
+        return {"answer": d["choices"][0]["message"]["content"], "sessionId": sid}
+    except Exception as e:  # 연결 실패/타임아웃 → UI 에 그대로 안내
+        return {"error": f"에이전트 호출 실패: {e}", "sessionId": sid}
+
+
 def parse_netlist_text(text):
     """SPICE 덱에서 MOS/전원/커패시터를 파싱해 소자 표 + (가능하면) 파라미터로.
 
@@ -900,7 +946,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path == "/api/netlist/parse":
+            if self.path == "/api/agent/chat":
+                payload = self._read_json()
+                self._json(agent_chat(str(payload.get("message", "")),
+                                      payload.get("sessionId")))
+            elif self.path == "/api/netlist/parse":
                 payload = self._read_json()
                 self._json(parse_netlist_text(str(payload.get("netlist", ""))))
             elif self.path == "/api/netlist":
