@@ -50,7 +50,30 @@ hermes mcp add strongarm --command python3 --args <repo>/mcp_server.py
 cp -r hermes/skills/* ~/.hermes/profiles/strong-arm/skills/semiconductor-eda/
 ```
 
-## 4) 웹 콘솔 연동 확인
+## 4) 오케스트레이터 아키텍처 (`/api/agent/ask`)
+
+콘솔의 🤖 패널은 모놀리식 프롬프트가 아니라 **서버측 오케스트레이터**를
+거친다 — 세 층으로 분리:
+
+```
+사용자 질문 → [오케스트레이터: 의도 라우터(정규식, LLM 비용 0)]
+                 ├─ diagnose  진단 전문   — design_brief 1회, 제안 금지
+                 ├─ size      사이징 전문 — brief → (다중위반: optimize 위임 |
+                 │                          단일위반: 레시피 초안 → run_sim 검증)
+                 ├─ signoff   사인오프 전문 — pvt/수율 → 실패 코너 표 + 레버
+                 └─ edit      회로 편집 전문 — netlist → 수정 → spice_run_netlist
+              → [hermes agent(strong-arm) + 스킬 2종 + MCP 48 tools]
+```
+
+- 역할별 규칙만 주입되므로 프롬프트가 짧고 단일 목적 — 도구 선택 오류와
+  왕복이 줄어든다(A/B 실측은 PR #35 본문).
+- W 그리드 규칙(gaa2nm 0.2µ/asap7 0.07µ)도 컨텍스트의 model 을 보고
+  오케스트레이터가 자동 주입.
+- `role` 을 명시하면 라우터를 우회할 수 있고, 응답의 `role` 필드로 어떤
+  전문가가 답했는지 UI 배지에 표시된다. 기존 `/api/agent/chat`(원시 프록시)
+  도 유지.
+
+## 5) 웹 콘솔 연동 확인
 
 콘솔(:8770) → 비교기/VCO 아무 페이지 → 우하단 🤖 → "입력쌍 W를 두 배로
 하고 시뮬해 줘" — 에이전트가 `strongarm_run_sim` 한 번으로 실측을 답하고
