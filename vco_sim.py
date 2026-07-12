@@ -73,6 +73,25 @@ def _dev(d, vt):
     return f"W={d['w_um']}u L={d['l_nm']}n M={d['m']} delvto={{{vt}}}"
 
 
+def _dev2(p, dd, kind):
+    """모델명을 포함한 소자 우변. asap7 은 BSIM-CMG(OSDI): NFIN 핀 양자화 +
+    delvtrand(+가 Vth ↓ — delvto 관례와 부호 반대, .param 에서 반전됨)."""
+    vt = "dvtn" if kind == "n" else "dvtp"
+    if p.get("model") == "asap7":
+        mdl = "nmos_lvt" if kind == "n" else "pmos_lvt"
+        return f"{mdl} l={dd['l_nm']}n nfin={run_sim.nfin_of(dd)} delvtrand={{{vt}}}"
+    return f"{'nmos' if kind == 'n' else 'pmos'} {_dev(dd, vt)}"
+
+
+def _mp(p):
+    """OSDI 소자(asap7)의 인스턴스 접두('N') — ngspice OSDI 소자 문자."""
+    return "N" if p.get("model") == "asap7" else ""
+
+
+def _osdi_line(p):
+    return f"pre_osdi {run_sim.ASAP7_OSDI}" if p.get("model") == "asap7" else "* no osdi"
+
+
 def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
     if p.get("topology", "starved") == "xcpl":
         return _gen_xcpl_netlist(p, vctrl, tstop_ns, tstep_ps, wavefile)
@@ -85,28 +104,29 @@ def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
     nskew = p.get("nskew", pskew)           # 교차 코너(SF/FS)용 독립 스큐 — 첫 글자=N, 둘째=P
     pskew_p = p.get("pskew_p", pskew)
     hdr = run_sim._model_header(p)          # PTM .include (or sky130 .lib)
-    invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
-    sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
+    invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
+    sp_p, sn_n = _dev2(p, d["starvep"], "p"), _dev2(p, d["starven"], "n")
+    mp = _mp(p)
     wave = f"wrdata {wavefile} v(o1) v(o2)" if wavefile else ""
 
     lines = [
         "MOSFET current-starved ring VCO (generated)",
         f".option temp={p.get('temp', 27)}",
-        f".param dvtn={nskew} dvtp={-pskew_p}",
+        f".param dvtn={-nskew if p.get('model') == 'asap7' else nskew} dvtp={-pskew_p}",
         hdr,
         f"Vdd vdd 0 {vdd}",
         f"Vc vctrl 0 {vc}",
         "* bias: Vctrl -> tail current, mirrored to a diode PMOS -> vbp",
-        f"Mpref vbp vbp vdd vdd pmos {sp_p}",
-        f"Mnref vbp vctrl 0 0 nmos {sn_n}",
+        f"{mp}Mpref vbp vbp vdd vdd {sp_p}",
+        f"{mp}Mnref vbp vctrl 0 0 {sn_n}",
     ]
     for i in range(1, N + 1):
         prev = N if i == 1 else i - 1      # ring: in_1 = o_N
         lines += [
-            f"Mbp{i} a{i} vbp vdd vdd pmos {sp_p}",
-            f"Mp{i}  o{i} o{prev} a{i} vdd pmos {invp}",
-            f"Mn{i}  o{i} o{prev} b{i} 0 nmos {invn}",
-            f"Mbn{i} b{i} vctrl 0 0 nmos {sn_n}",
+            f"{mp}Mbp{i} a{i} vbp vdd vdd {sp_p}",
+            f"{mp}Mp{i}  o{i} o{prev} a{i} vdd {invp}",
+            f"{mp}Mn{i}  o{i} o{prev} b{i} 0 {invn}",
+            f"{mp}Mbn{i} b{i} vctrl 0 0 {sn_n}",
             f"Co{i} o{i} 0 {cl}f",
         ]
     # kick-start: alternate node initial conditions
@@ -115,6 +135,7 @@ def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
         f".ic {ic}",
         ".control",
         "set noaskquit",
+        _osdi_line(p),
         f"tran {tstep_ps}p {tstop_ns}n uic",
         # period across 5 cycles (rise 3..8) of o1, measured after startup settles
         f"meas tran per TRIG v(o1) VAL='{vdd/2.0}' RISE=3 TARG v(o1) VAL='{vdd/2.0}' RISE=8",
@@ -155,45 +176,47 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     nskew = p.get("nskew", pskew)
     pskew_p = p.get("pskew_p", pskew)
     hdr = run_sim._model_header(p)
-    invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
-    sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
-    xp, rp = _dev(d["xcplp"], "dvtp"), _dev(d["rstp"], "dvtp")
+    invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
+    sp_p, sn_n = _dev2(p, d["starvep"], "p"), _dev2(p, d["starven"], "n")
+    xp, rp = _dev2(p, d["xcplp"], "p"), _dev2(p, d["rstp"], "p")
+    mp = _mp(p)
     wave = f"wrdata {wavefile} v(o1) v(ob1)" if wavefile else ""
 
     lines = [
         "cross-coupled pseudo-differential ring VCO with reset (generated)",
         f".option temp={p.get('temp', 27)}",
-        f".param dvtn={nskew} dvtp={-pskew_p}",
+        f".param dvtn={-nskew if p.get('model') == 'asap7' else nskew} dvtp={-pskew_p}",
         hdr,
         f"Vdd vdd 0 {vdd}",
         f"Vc vctrl 0 {vc}",
         "* bias: Vctrl -> tail current, mirrored to a diode PMOS -> vbp",
-        f"Mpref vbp vbp vdd vdd pmos {sp_p}",
-        f"Mnref vbp vctrl 0 0 nmos {sn_n}",
+        f"{mp}Mpref vbp vbp vdd vdd {sp_p}",
+        f"{mp}Mnref vbp vctrl 0 0 {sn_n}",
         f"* reset: rstb low clamps o1 to vdd, released at {trst}ns",
         f"Vrst rstb 0 PULSE(0 {vdd} {trst}n 0.05n 0.05n {tstop_ns*2}n {tstop_ns*4}n)",
-        f"Mrst o1 rstb vdd vdd pmos {rp}",
+        f"{mp}Mrst o1 rstb vdd vdd {rp}",
     ]
     for i in range(1, N + 1):
         prev = N if i == 1 else i - 1      # ring: in_1 = o_N (both rails)
         lines += [
             f"* stage {i}: starved inverters (N0/P0) x2 + cross-coupled P1 pair",
-            f"Mbp{i}  ap{i} vbp vdd vdd pmos {sp_p}",
-            f"Mp{i}   o{i} o{prev} ap{i} vdd pmos {invp}",
-            f"Mn{i}   o{i} o{prev} bp{i} 0 nmos {invn}",
-            f"Mbn{i}  bp{i} vctrl 0 0 nmos {sn_n}",
-            f"Mbpb{i} an{i} vbp vdd vdd pmos {sp_p}",
-            f"Mpb{i}  ob{i} ob{prev} an{i} vdd pmos {invp}",
-            f"Mnb{i}  ob{i} ob{prev} bn{i} 0 nmos {invn}",
-            f"Mbnb{i} bn{i} vctrl 0 0 nmos {sn_n}",
-            f"Mx{i}   o{i} ob{i} vdd vdd pmos {xp}",
-            f"Mxb{i}  ob{i} o{i} vdd vdd pmos {xp}",
+            f"{mp}Mbp{i}  ap{i} vbp vdd vdd {sp_p}",
+            f"{mp}Mp{i}   o{i} o{prev} ap{i} vdd {invp}",
+            f"{mp}Mn{i}   o{i} o{prev} bp{i} 0 {invn}",
+            f"{mp}Mbn{i}  bp{i} vctrl 0 0 {sn_n}",
+            f"{mp}Mbpb{i} an{i} vbp vdd vdd {sp_p}",
+            f"{mp}Mpb{i}  ob{i} ob{prev} an{i} vdd {invp}",
+            f"{mp}Mnb{i}  ob{i} ob{prev} bn{i} 0 {invn}",
+            f"{mp}Mbnb{i} bn{i} vctrl 0 0 {sn_n}",
+            f"{mp}Mx{i}   o{i} ob{i} vdd vdd {xp}",
+            f"{mp}Mxb{i}  ob{i} o{i} vdd vdd {xp}",
             f"Co{i}  o{i} 0 {cl}f",
             f"Cob{i} ob{i} 0 {cl}f",
         ]
     lines += [
         ".control",
         "set noaskquit",
+        _osdi_line(p),
         f"tran {tstep_ps}p {tstop_ns}n",
         # rising edges only exist after the reset release, so RISE=3..8 measures
         # the settled oscillation just like the starved topology

@@ -117,28 +117,28 @@ def _total_w(p):
 
 
 def _snap_w(p):
-    # gaa2nm 은 W 가 시트 그리드(W_SHEET_UM) 위에만 존재 — 옵티마이저 후보의
+    # W 그리드 모델(gaa2nm: 시트 0.2µ, asap7: 핀 0.07µ) — 옵티마이저 후보의
     # 표시값이 넷리스트 양자화(run_sim.quantize_devices) 결과와 일치하도록 스냅.
-    if p.get("model") == "gaa2nm":
-        s = run_sim.W_SHEET_UM
+    s = run_sim.w_unit(p)
+    if s:
         for d in p["devices"].values():
             d["w_um"] = max(s, round(round(d["w_um"] / s) * s, 3))
     return p
 
 
 def _stacks(p):
-    # gaa2nm: 소자별 나노시트 스택 수(W / W_SHEET_UM) — 2nm 에서 자동 사이징이
-    # 실제로 찾는 것은 연속 W 가 아니라 이 정수다.
-    s = run_sim.W_SHEET_UM
+    # 그리드 모델의 소자별 정수 단위 수(gaa2nm: 스택 W/0.2, asap7: 핀 W/0.07)
+    # — 자동 사이징이 실제로 찾는 것은 연속 W 가 아니라 이 정수다.
+    s = run_sim.w_unit(p) or 1.0
     return {k: int(round(d["w_um"] / s)) for k, d in p["devices"].items()}
 
 
 def _xkey(base, x):
-    # 후보 캐시 키. gaa2nm 은 스택 수(정수) 공간으로 키를 잡는다 — 같은 그리드
-    # 점으로 스냅되는 연속 후보들이 ngspice 를 다시 돌리지 않으므로, log-공간
-    # DE 는 사실상 정수(스택 수) 탐색의 연속 완화가 된다.
-    if base.get("model") == "gaa2nm":
-        s = run_sim.W_SHEET_UM
+    # 후보 캐시 키. W 그리드 모델(gaa2nm/asap7)은 정수(스택/핀 수) 공간으로
+    # 키를 잡는다 — 같은 그리드 점으로 스냅되는 연속 후보들이 ngspice 를 다시
+    # 돌지 않으므로, log-공간 DE/CD 는 사실상 정수 탐색이 된다.
+    s = run_sim.w_unit(base)
+    if s:
         return tuple(max(1, round((10 ** v) / s)) for v in x)
     return tuple(round(v, 3) for v in x)
 
@@ -244,14 +244,14 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
 
     traj = []
 
-    if base.get("model") == "gaa2nm":
-        # ---- 2nm: 정수 스택 좌표 하강(coordinate descent) -----------------
+    if run_sim.w_unit(base):
+        # ---- 그리드 모델: 정수 스택/핀 좌표 하강(coordinate descent) ------
         # W 가 0.2µ 그리드 위에만 있으므로 탐색 공간은 소자당 정수 스택 수다.
         # DE(연속 완화) 대신 정수 공간을 직접 걷는다: 소자별로 거친 배수 이동
         # (×0.5…×2)을 병렬 평가해 최선을 채택, 전 소자 수렴 후 ±1 미세 단계.
         # 캐시 키가 스택 튜플이라 재방문 점은 SPICE 를 다시 돌지 않는다.
-        s0 = run_sim.W_SHEET_UM
-        NMAX = int(round(10 ** HI / s0))     # W 상한(40µm) → 최대 스택 수
+        s0 = run_sim.w_unit(base)
+        NMAX = int(round(10 ** HI / s0))     # W 상한(40µm) → 최대 스택/핀 수
         budget = pop * gens + pop            # DE 와 같은 SPICE 예산
         cur = [min(NMAX, max(1, round(base["devices"][dv]["w_um"] / s0))) for dv in DEV_KEYS]
 
@@ -356,7 +356,7 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
             "success": success, "targets": targets, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
             "final_power_uw": r["nominal"].get("power_uw"), "final_total_w_um": _total_w(best),
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
-            "final_stacks": _stacks(best) if base.get("model") == "gaa2nm" else None}
+            "final_stacks": _stacks(best) if run_sim.w_unit(base) else None}
 
 
 def optimize_pareto(base, targets, pop=16, gens=6, seed=7):
@@ -651,6 +651,9 @@ def parse_netlist_text(text):
     """
     import re
     mos_re = re.compile(r"^(M\S*)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(nmos|pmos)\s+W=([\d.]+)u\s+L=([\d.]+)n?\s+M=(\d+)", re.I)
+    # asap7(BSIM-CMG OSDI): NM1 d g s b nmos_lvt l=21n nfin=16 — 이름의 N 접두를
+    # 벗겨 M* 역할 매핑을 재사용, W 는 핀 수 × 0.07µ 로 환산(m=1)
+    osdi_re = re.compile(r"^N(M\S*)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(nmos|pmos)_\w+\s+l=([\d.]+)n\s+nfin=(\d+)", re.I)
     v_re = re.compile(r"^V(\S*)\s+(\S+)\s+(\S+)\s+([\d.]+)\s*$", re.I)
     c_re = re.compile(r"^C(\S*)\s+(\S+)\s+(\S+)\s+([\d.]+)f", re.I)
     devices, sources, caps = [], {}, []
@@ -664,6 +667,13 @@ def parse_netlist_text(text):
             devices.append({"name": name, "type": kind.lower(), "w_um": float(w),
                             "l_nm": float(l), "m": int(mult), "nodes": {"d": d, "g": g, "s": s, "b": b}})
             continue
+        mo = osdi_re.match(line)
+        if mo:
+            name, d, g, s, b, kind, l, nfin = mo.groups()
+            devices.append({"name": name, "type": kind.lower(),
+                            "w_um": round(int(nfin) * run_sim.W_FIN_UM, 3),
+                            "l_nm": float(l), "m": 1, "nodes": {"d": d, "g": g, "s": s, "b": b}})
+            continue
         mv = v_re.match(line)
         if mv:
             sources[mv.group(1).lower() or mv.group(2).lower()] = float(mv.group(4))
@@ -674,7 +684,8 @@ def parse_netlist_text(text):
     names = {d["name"] for d in devices}
     # 모델 백엔드 감지 — 이 콘솔이 내보내는 .include/.lib 헤더 기준(왕복 보존)
     model = ("gaa2nm" if "gaa2nm_approx" in text
-             else ("sky130" if "sky130" in text.lower() else None))
+             else ("asap7" if ("asap7" in text or "bsimcmg" in text) else
+                   ("sky130" if "sky130" in text.lower() else None)))
     out = {"devices": devices, "n_mos": len(devices), "caps": caps, "sources": sources}
     if any(n.startswith("Mx") for n in names) and any(n.startswith("Mbp") for n in names):
         # ── VCO(xcpl) ──
@@ -690,7 +701,7 @@ def parse_netlist_text(text):
                     dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
                     break
         params = {"devices": dev_params}
-        if model == "gaa2nm": params["model"] = model
+        if model in ("gaa2nm", "asap7"): params["model"] = model
         if "dd" in sources: params["vdd"] = sources["dd"]
         if "c" in sources: params["vctrl"] = sources["c"]
         if stages: params["n_stages"] = max(stages)
@@ -814,9 +825,9 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
 
     traj = []
 
-    if base.get("model") == "gaa2nm":
-        # ---- 2nm: 정수 스택 좌표 하강 — comparator 쪽과 같은 패턴 ----------
-        s0 = run_sim.W_SHEET_UM
+    if run_sim.w_unit(base):
+        # ---- 그리드 모델: 정수 좌표 하강 — comparator 쪽과 같은 패턴 -------
+        s0 = run_sim.w_unit(base)
         NMAX = int(round(10 ** HI / s0))
         budget = pop * gens + pop
         cur = [min(NMAX, max(1, round(base["devices"][k]["w_um"] / s0))) for k in keys]
@@ -913,7 +924,7 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
     return {"trajectory": traj, "final_params": fin, "nominal": m, "tuning": tuning,
             "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
-            "final_stacks": _stacks(fin) if base.get("model") == "gaa2nm" else None}
+            "final_stacks": _stacks(fin) if run_sim.w_unit(base) else None}
 
 
 def vco_pvt(params):
@@ -921,7 +932,7 @@ def vco_pvt(params):
     temp −40/27/125 × VDD 0.9/1.0/1.1×. Frequency + does-it-oscillate per corner."""
     p = vco_sim._full(params)
     base_vdd = float(p["vdd"])
-    _sk = 0.025 if params.get("model") == "gaa2nm" else 0.05
+    _sk = 0.05 * run_sim.skew_scale(params)
     specs = []
     for proc, ns, ps in (("SS", _sk, _sk), ("TT", 0.0, 0.0), ("FF", -_sk, -_sk), ("SF", _sk, -_sk), ("FS", -_sk, _sk)):
         for t in (-40, 27, 125):
@@ -1374,7 +1385,7 @@ class Handler(BaseHTTPRequestHandler):
                 cmap = {"SS": "ss", "TT": "tt", "FF": "ff", "SF": "sf", "FS": "fs"}
                 # 5개 공정 코너 — 정렬(SS/TT/FF) + 교차(SF=slow N/fast P, FS=fast N/slow P)
                 # gaa2nm(|Vth|=0.20V)은 ±25mV, 45nm 급은 ±50mV 스큐
-                _sk = 0.025 if prm.get("model") == "gaa2nm" else 0.05
+                _sk = 0.05 * run_sim.skew_scale(prm)
                 specs = []
                 for pl, ns, ps in (("SS", _sk, _sk), ("TT", 0.0, 0.0), ("FF", -_sk, -_sk),
                                    ("SF", _sk, -_sk), ("FS", -_sk, _sk)):

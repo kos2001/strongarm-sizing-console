@@ -74,7 +74,9 @@ export default function AgentSizing({ params, targets, onApply, ko, disabled }: 
       }
       const gaaRule = (params.model === 'gaa2nm')
         ? '이 설계는 2nm급(gaa2nm) 모델이다: W(w_um)는 나노시트 스택 등가폭 0.2µm 의 정수배로만 제안하라(예 1.2, 6.4 — 시트 수로 사이징하는 셈). '
-        : ''
+        : (params.model === 'asap7')
+          ? '이 설계는 ASAP7 7nm FinFET(BSIM-CMG) 모델이다: W(w_um)는 핀 등가폭 0.07µm 의 정수배로만 제안하라(넷리스트에서 NFIN 으로 접힌다). '
+          : ''
       const message =
         `현재 comparator 설계 상태(JSON):\n${JSON.stringify(ctx)}\n\n` +
         `규칙: 아래 사용자의 요청을 처리하라. 시뮬레이션이 필요하면 오직 strongarm MCP 도구(strongarm_run_sim/strongarm_optimize)만 사용하고, params 인자에 위 설계 상태(및 변경분)를 그대로 넣어 한 번에 호출하라. terminal·파일 등 다른 도구는 절대 사용하지 말고, 도구 호출은 최대 2회, 탐색·검증 반복 없이 결과를 바로 보고하라. 회로 구조 자체를 바꾸는 요청(소자 추가/삭제/결선 변경)이면: ① strongarm_netlist 도구로 현재 덱(.sp)을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 도구로 실행해 측정값을 확인하고 ④ 수정된 덱 전체를 답변에 \`\`\`spice 코드블록으로 포함하라(이때는 도구 3회까지 허용). ` +

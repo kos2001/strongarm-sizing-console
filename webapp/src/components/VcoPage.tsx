@@ -48,20 +48,24 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const [targetF, setTargetF] = useState(1.5)
   const busy = load !== ''
 
-  // gaa2nm: W 는 나노시트 스택 등가폭 0.2µ 의 정수배로만 존재 — 입력을 그리드에 스냅
-  const gaa = params.model === 'gaa2nm'
+  // W 그리드 모델: gaa2nm = 나노시트 스택 0.2µ, asap7 = 핀 0.07µ — 입력을 그리드에 스냅
+  const unit = params.model === 'gaa2nm' ? 0.2 : params.model === 'asap7' ? 0.07 : null
+  const unitName = params.model === 'asap7' ? '핀' : '스택'
   const setDev = (k: VcoDeviceKey, f: 'w_um' | 'l_nm' | 'm', v: number) => {
-    if (gaa && f === 'w_um') v = Math.max(0.2, Math.round(Math.round(v / 0.2) * 0.2 * 1000) / 1000)
+    if (unit && f === 'w_um') v = Math.max(unit, Math.round(Math.round(v / unit) * unit * 1000) / 1000)
     setParams((p) => ({ ...p, devices: { ...p.devices, [k]: { ...p.devices[k], [f]: v } } }))
   }
-  // 모델 프리셋 — vdd·V_ctrl·L 을 노드에 맞게 일괄 설정(gaa2nm 은 W 그리드 스냅 포함)
-  const setModel = (m: 'ptm' | 'gaa2nm') => {
-    const v = m === 'gaa2nm' ? { vdd: 0.65, vctrl: 0.5, l: 14 } : { vdd: 1.0, vctrl: 0.6, l: 45 }
+  // 모델 프리셋 — vdd·V_ctrl·L 을 노드에 맞게 일괄 설정(그리드 모델은 W 스냅/사이징 포함)
+  const setModel = (m: 'ptm' | 'gaa2nm' | 'asap7') => {
+    const v = m === 'gaa2nm' ? { vdd: 0.65, vctrl: 0.5, l: 14 } : m === 'asap7' ? { vdd: 0.7, vctrl: 0.45, l: 21 } : { vdd: 1.0, vctrl: 0.6, l: 45 }
+    // asap7: 핀 수 기준 현실적 사이징(코어 4/2핀, starve 4/2핀, 커플러 1핀 — 2.96GHz 검증)
+    const wmap7: Record<VcoDeviceKey, number> = { invp: 0.28, invn: 0.14, starvep: 0.28, starven: 0.14, xcplp: 0.07, rstp: 0.28 }
     setParams((p) => ({
       ...p, model: m, vdd: v.vdd, vctrl: v.vctrl,
       devices: Object.fromEntries((Object.keys(p.devices) as VcoDeviceKey[]).map((k) => {
         const dd = p.devices[k]
-        const w_um = m === 'gaa2nm' ? Math.max(0.2, Math.round(Math.round(dd.w_um / 0.2) * 0.2 * 1000) / 1000) : dd.w_um
+        const w_um = m === 'gaa2nm' ? Math.max(0.2, Math.round(Math.round(dd.w_um / 0.2) * 0.2 * 1000) / 1000)
+          : m === 'asap7' ? wmap7[k] : dd.w_um
         return [k, { ...dd, l_nm: v.l, w_um }]
       })) as VcoParams['devices'],
     }))
@@ -428,7 +432,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
           </div>
           <div className="flex items-center gap-2 mb-2">
             <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>Model</span>
-            {([['ptm', 'PTM 45nm'], ['gaa2nm', 'GAA 2nm≈']] as const).map(([m, label]) => {
+            {([['ptm', 'PTM 45nm'], ['gaa2nm', 'GAA 2nm≈'], ['asap7', 'ASAP7 7nm']] as const).map(([m, label]) => {
               const on = (params.model ?? 'ptm') === m
               return (
                 <button key={m} disabled={busy} onClick={() => setModel(m)}
@@ -440,14 +444,20 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             })}
             <span className="mono text-[10.5px]" style={{ color: 'var(--faint)' }}>VDD {params.vdd}V</span>
           </div>
-          {gaa && (
+          {params.model === 'gaa2nm' && (
             <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5 mb-2" style={{ color: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--warn) 30%, var(--line))' }}>
               {T(lang, '≈ 2nm급 근사 모델(BSIM4 스케일링) — W 는 나노시트 스택 단위(0.2µ)의 정수배로 스냅. 경향 분석용, 사인오프 불가.',
                 '≈ 2nm-class approximation (scaled BSIM4) — W snaps to the 0.2µ nanosheet-stack grid. Trend study only, not for sign-off.')}
             </p>
           )}
+          {params.model === 'asap7' && (
+            <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5 mb-2" style={{ color: 'var(--si)', background: 'color-mix(in srgb, var(--si) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--si) 30%, var(--line))' }}>
+              {T(lang, 'ASAP7 7nm FinFET — 진짜 BSIM-CMG 107 을 ngspice OSDI 로 실행(ASU 예측 PDK, LVT). W 는 핀 수 양자화(1핀 ≈ 0.07µ).',
+                'ASAP7 7nm FinFET — real BSIM-CMG 107 via ngspice OSDI (ASU predictive PDK, LVT). W quantizes to fins (1 fin ≈ 0.07µ).')}
+            </p>
+          )}
           <div className="grid gap-2 mono text-[11px] uppercase tracking-wider px-1 mb-1" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', color: 'var(--faint)' }}>
-            <span>{T(lang, '소자', 'Device')}</span><span>{gaa ? T(lang, 'W (0.2µ×스택)', 'W (0.2µ×stacks)') : 'W (µm)'}</span><span>L (nm)</span><span>M</span>
+            <span>{T(lang, '소자', 'Device')}</span><span>{unit ? `W (${unit}µ×${lang === 'ko' ? unitName : (params.model === 'asap7' ? 'fins' : 'stacks')})` : 'W (µm)'}</span><span>L (nm)</span><span>M</span>
           </div>
           {dkeys.map((k) => (
             <div key={k} className="grid gap-2 items-center rounded-xl p-2.5 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: `3px solid ${A}` }}>
@@ -456,8 +466,8 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
                 <div className="text-xs truncate" style={{ color: 'var(--muted)' }}>{VCO_DEVICE_META[k].role[lang]}</div>
               </div>
               {(['w_um', 'l_nm', 'm'] as const).map((f) => (
-                <input key={f} type="number" step={f === 'w_um' ? (gaa ? 0.2 : 0.5) : f === 'l_nm' ? 5 : 1} min={0} disabled={busy}
-                  title={gaa && f === 'w_um' ? T(lang, `2nm급: 0.2µ(스택 1개) 단위 스냅 — 현재 ${Math.round(params.devices[k].w_um / 0.2)}스택`, `snaps to 0.2µ (1 stack) — ${Math.round(params.devices[k].w_um / 0.2)} stacks`) : undefined}
+                <input key={f} type="number" step={f === 'w_um' ? (unit ?? 0.5) : f === 'l_nm' ? 5 : 1} min={0} disabled={busy}
+                  title={unit && f === 'w_um' ? T(lang, `${unit}µ(${unitName} 1개) 단위 스냅 — 현재 ${Math.round(params.devices[k].w_um / unit)}${unitName} × M${params.devices[k].m}`, `snaps to ${unit}µ — ${Math.round(params.devices[k].w_um / unit)} units × M${params.devices[k].m}`) : undefined}
                   value={params.devices[k][f]} onChange={(e) => setDev(k, f, parseFloat(e.target.value) || 0)} />
               ))}
             </div>

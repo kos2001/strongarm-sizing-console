@@ -56,6 +56,19 @@ GAA2NM_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "models", "ptm_45nm_bulk.txt")
 
+# ---- ASAP7 7nm FinFET (진짜 BSIM-CMG 107, ngspice OSDI 로 실행) ----
+# openvaf-r 로 컴파일한 bsimcmg107.osdi + ASU ASAP7 예측 PDK 모델 카드(TT/SS/FF,
+# scripts/adapt_asap7.py 로 ngspice 형식 변환). 소자는 핀 수(NFIN)로만 사이징.
+ASAP7_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "asap7")
+ASAP7_OSDI = os.path.join(ASAP7_DIR, "bsimcmg107.osdi")
+W_FIN_UM = 0.07     # Weff per fin ≈ 2×HFIN(32n) + TFIN(6.5n) ≈ 70nm
+
+
+def nfin_of(dd):
+    """asap7: 소자의 총 폭(w_um × m)을 핀 수로 양자화 — FinFET 에서 W 는
+    연속값이 아니라 핀 개수다(핀 1개 ≈ Weff 0.07µm)."""
+    return max(1, round(dd["w_um"] * dd["m"] / W_FIN_UM))
+
 # gaa2nm 에서 W 는 연속값이 아니다 — 나노시트 스택 1개의 등가폭(3시트 ×
 # 둘레 ≈ 0.2 µm)의 정수배로만 존재한다(스택 수 = W/0.2). 넷리스트 생성 시
 # W 를 이 그리드에 스냅한다.
@@ -63,21 +76,32 @@ W_SHEET_UM = 0.2
 
 
 def skew_scale(p):
-    """공정 코너/시그마 Vth 스큐 스케일. gaa2nm 은 |Vth0|=0.20V 라 45nm급
-    ±50mV 코너가 25% 스큐로 과대 — 절반(±25mV)으로 줄인다."""
-    return 0.5 if p.get("model") == "gaa2nm" else 1.0
+    """공정 코너/시그마 Vth 스큐 스케일. gaa2nm(|Vth0| 0.20V)·asap7(LVT
+    |Vth|~0.17V)은 45nm급 ±50mV 코너가 과대 — 절반(±25mV)으로 줄인다."""
+    return 0.5 if p.get("model") in ("gaa2nm", "asap7") else 1.0
+
+
+def w_unit(p):
+    """모델별 W 그리드 단위(µm): gaa2nm 은 나노시트 스택 0.2, asap7 은 핀 0.07.
+    연속-W 모델(ptm/sky130)은 None."""
+    if p.get("model") == "gaa2nm":
+        return W_SHEET_UM
+    if p.get("model") == "asap7":
+        return W_FIN_UM
+    return None
 
 
 def quantize_devices(p):
-    """gaa2nm: W 를 시트 그리드(W_SHEET_UM 정수배, 최소 1스택)에 스냅.
-    W 를 시트폭 고정 + M=finger 로 접지 않는 이유: 카드가 geoMod=1(비공유
-    접합 기하 자동계산)이라 finger 수에 비례해 접합 둘레 캡이 부풀어, 같은
-    총폭인데 지연이 2배로 나오는 아티팩트가 있다(실 레이아웃은 확산 공유).
-    다른 모델은 그대로 통과."""
-    if p.get("model") != "gaa2nm":
+    """W 그리드 모델(gaa2nm/asap7): W 를 단위 그리드(w_unit 정수배, 최소 1)에
+    스냅. W 를 단위폭 고정 + M=finger 로 접지 않는 이유(gaa2nm): 카드가
+    geoMod=1(비공유 접합 기하 자동계산)이라 finger 수에 비례해 접합 둘레 캡이
+    부풀어, 같은 총폭인데 지연이 2배로 나오는 아티팩트가 있다(실 레이아웃은
+    확산 공유). asap7 은 넷리스트에서 NFIN=총폭/0.07 로 접힌다(핀은 실제
+    병렬 구조라 물리적으로 정확). 연속-W 모델은 그대로 통과."""
+    u = w_unit(p)
+    if u is None:
         return p["devices"]
-    return {k: {**d, "w_um": max(W_SHEET_UM,
-                                 round(round(d["w_um"] / W_SHEET_UM) * W_SHEET_UM, 3))}
+    return {k: {**d, "w_um": max(u, round(round(d["w_um"] / u) * u, 3))}
             for k, d in p["devices"].items()}
 
 # default seed = P1_SAR_ADC first-cut sizing, adapted to PTM 45nm bulk
@@ -133,8 +157,10 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
     # 표기: 첫 글자=NMOS, 둘째=PMOS. nskew>0 = slow N, pskew_p>0 = slow P.
     nskew = p.get("nskew", pskew)
     pskew_p = p.get("pskew_p", pskew)
-    # model backend: generic PTM 45nm (.model) or REAL SkyWater SKY130 (.lib subckts)
+    # model backend: generic PTM 45nm (.model), REAL SkyWater SKY130 (.lib subckts),
+    # or REAL ASAP7 7nm FinFET (BSIM-CMG 107 via ngspice OSDI)
     sky = p.get("model") == "sky130"
+    asap = p.get("model") == "asap7"
     if sky:
         corner = p.get("corner", "tt")
         # one-corner trimmed lib: ~1.4s/sim vs ~19s for the full 51-corner .lib
@@ -146,6 +172,18 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
             l_um = max(dd["l_nm"] / 1000.0, 0.15)                # SKY130 min L
             sub = "sky130_fd_pr__nfet_01v8" if kind == "n" else "sky130_fd_pr__pfet_01v8"
             return f"X{label} {nodes} {sub} w={dd['w_um']} l={round(l_um, 3)} nf=1 mult={dd['m']}"
+    elif asap:
+        corner = p.get("corner", "TT").upper()
+        model_header = f'.include "{os.path.join(ASAP7_DIR, f"7nm_{corner}.sp")}"'
+        # BSIM-CMG DELVTRAND 는 + 가 Vth ↓(빠름) — delvto 관례와 부호가 반대라 반전
+        param_line = f".param dvtn={-nskew} dvtp={-pskew_p}"
+
+        def dline(label, nodes, dk, kind):
+            dd = d[dk]
+            mdl = "nmos_lvt" if kind == "n" else "pmos_lvt"
+            vt = "dvtn" if kind == "n" else "dvtp"
+            return (f"N{label} {nodes} {mdl} l={dd['l_nm']}n "
+                    f"nfin={nfin_of(dd)} delvtrand={{{vt}}}")
     else:
         model_header = (f'.include "{GAA2NM_PATH}"' if p.get("model") == "gaa2nm"
                         else f'.include "{MODEL_PATH}"')
@@ -238,6 +276,7 @@ Babs  outabs  0 V=abs(V(outp)-V(outn))
 
 .control
 set noaskquit
+{f"pre_osdi {ASAP7_OSDI}" if asap else ""}
 tran {tstep}p {tstop}n
 meas tran tdec TRIG v(clk) VAL='{vdd/2.0}' RISE=1 TARG v(outabs) VAL='{0.7*vdd}' CROSS=1
 meas tran fdiff FIND v(outdiff) AT={meas_at}n
@@ -345,6 +384,9 @@ def _model_header(p):
         return f'.lib "{sky130_corner_lib(corner)}" {corner}'
     if p.get("model") == "gaa2nm":
         return f'.include "{GAA2NM_PATH}"'   # 2nm급 근사(BSIM4) — 경향 분석용
+    if p.get("model") == "asap7":
+        corner = p.get("corner", "TT").upper()
+        return f'.include "{os.path.join(ASAP7_DIR, f"7nm_{corner}.sp")}"'
     return f'.include "{MODEL_PATH}"'
 
 
@@ -352,12 +394,15 @@ def _input_id(p, vg):
     """|Id| (A) of one input device biased at (Vgs=vg, Vds=vdd/2, Vs=0) — op point."""
     d = p["devices"]["input"]
     vdd = p["vdd"]
+    osdi = f"pre_osdi {ASAP7_OSDI}\n" if p.get("model") == "asap7" else ""
     if p.get("model") == "sky130":
         dev = f"XM d g 0 0 sky130_fd_pr__nfet_01v8 w={d['w_um']} l={round(max(d['l_nm'] / 1000.0, 0.15), 3)} nf=1 mult={d['m']}"
+    elif p.get("model") == "asap7":
+        dev = f"NM d g 0 0 nmos_lvt l={d['l_nm']}n nfin={nfin_of(d)}"
     else:
         dev = f"M d g 0 0 nmos W={d['w_um']}u L={d['l_nm']}n M={d['m']}"
     out = _run(f".option temp={p.get('temp', 27)}\n{_model_header(p)}\n"
-               f"Vd d 0 {vdd / 2.0}\nVg g 0 {vg}\n{dev}\n.control\nop\nprint i(Vd)\n.endc\n.end\n")
+               f"Vd d 0 {vdd / 2.0}\nVg g 0 {vg}\n{dev}\n.control\n{osdi}op\nprint i(Vd)\n.endc\n.end\n")
     m = re.search(r"i\(vd\)\s*=\s*([-\d.eE+]+)", out, re.IGNORECASE)
     return abs(float(m.group(1))) if m else None
 

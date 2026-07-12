@@ -22,3 +22,4 @@ webapp/.vite/
 # OS / editor
 .DS_Store
 .playwright-mcp/
+third_party/
