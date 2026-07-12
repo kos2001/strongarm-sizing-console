@@ -43,23 +43,43 @@ GAA = {
     "sheet_w": 0.030,   # 스택(3-시트) 드로잉 폭
     "gr": 0.10, "gap": 0.15,
     "min_w_met": 0.018, "min_w_poly": 0.012, "min_s": 0.020,
+    "unit": 0.2,        # W 그리드(µm) — 줄 수 = W/unit
+}
+
+# ---- ASAP7 7nm FinFET 핀 그리드 룰 (공개 PDK 수치) ----
+# fin pitch 27nm, CPP 54nm, gate L 21nm, M1 pitch 36nm — 소자는 핀 줄
+# (rows = W/0.07µ = NFIN) × finger 격자 위에만 존재한다.
+FIN = {
+    "cpp": 0.054,
+    "poly_w": 0.021,
+    "met_w": 0.018,
+    "sheet_p": 0.027,   # 핀 피치
+    "sheet_w": 0.007,   # 핀 드로잉 폭
+    "gr": 0.10, "gap": 0.15,
+    "min_w_met": 0.016, "min_w_poly": 0.018, "min_s": 0.018,
+    "unit": 0.07,       # 핀 1개 등가 W
 }
 
 
-def _device_block(x0, name, dev, kind, gaa=False):
+def _ruleset(params):
+    m = params.get("model")
+    return GAA if m == "gaa2nm" else FIN if m == "asap7" else None
+
+
+def _device_block(x0, name, dev, kind, rules=None):
     """One multi-finger MOS block starting at x0; returns (layer->rects, width)."""
     nf = max(int(dev["m"]), 1)
     rects = {k: [] for k in LAYERS}
-    if gaa:
-        # 나노시트 스택 그리드: 세로 = 스택 줄(rows = W/0.2µ), 가로 = finger(M)
-        rows = max(1, round(float(dev["w_um"]) / 0.2))
-        cpp, pw, mw = GAA["cpp"], GAA["poly_w"], GAA["met_w"]
-        sp, sw = GAA["sheet_p"], GAA["sheet_w"]
+    if rules:
+        # 그리드 소자: 세로 = 줄(나노시트 스택 rows = W/0.2µ | 핀 NFIN = W/0.07µ)
+        rows = max(1, round(float(dev["w_um"]) / rules["unit"]))
+        cpp, pw, mw = rules["cpp"], rules["poly_w"], rules["met_w"]
+        sp, sw = rules["sheet_p"], rules["sheet_w"]
         hh = round((rows - 1) * sp + sw, 4)        # 스택 줄들이 차지하는 높이
         dw = round(nf * cpp + cpp, 4)
         if kind == "p":
             rects["nwell"].append([round(x0 - 0.05, 4), -0.05, round(dw + 0.10, 4), round(hh + 0.10, 4)])
-        for r in range(rows):                      # 시트 스택 줄 — 양자화가 보인다
+        for r in range(rows):                      # 시트 스택/핀 줄 — 양자화가 보인다
             rects["diff"].append([x0, round(r * sp, 4), dw, sw])
         for i in range(nf):                        # 게이트 fingers (CPP 그리드)
             px = round(x0 + cpp * (i + 0.5) - pw / 2, 4)
@@ -81,16 +101,16 @@ def _device_block(x0, name, dev, kind, gaa=False):
     return rects, dw
 
 
-def _build_layout(blocks, cell_name, gds_path, gds_default, gaa=False):
+def _build_layout(blocks, cell_name, gds_path, gds_default, rules=None):
     """Place an ordered list of (name, device, kind) as a row of multi-finger MOS
     blocks + PMOS nwell + substrate guard ring, write GDS, run rule DRC. Shared by
     the comparator and the ring-VCO layout generators."""
-    gr, gap = (GAA["gr"], GAA["gap"]) if gaa else (GR, GAP)
+    gr, gap = (rules["gr"], rules["gap"]) if rules else (GR, GAP)
     layer_rects = {k: [] for k in LAYERS}
     x = gr + gap
     labels = []
     for name, dev, kind in blocks:
-        rb, w = _device_block(x, name, dev, kind, gaa=gaa)
+        rb, w = _device_block(x, name, dev, kind, rules=rules)
         for lyr, rs in rb.items():
             layer_rects[lyr].extend(rs)
         labels.append({"name": name, "x": round(x, 3), "w": w, "kind": kind})
@@ -130,31 +150,29 @@ def _build_layout(blocks, cell_name, gds_path, gds_default, gaa=False):
         "bbox": {"w": cell_w, "h": ring_h, "y0": y0},
         "area_um2": area,
         "gds_path": gds_written,
-        "drc": _drc(layer_rects, gaa=gaa),
-        "ruleset": "gaa2nm(IRDS-approx)" if gaa else "sky130-class",
+        "drc": _drc(layer_rects, rules=rules),
+        "ruleset": ("gaa2nm(IRDS-approx)" if rules is GAA else "asap7-fin(approx)" if rules is FIN else "sky130-class"),
     }
 
 
 def generate_layout(params, gds_path=None):
     devices = params.get("devices", {})
-    gaa = params.get("model") == "gaa2nm"
     order = ["tail", "input", "ncc", "pcc", "pre", "prei"]
     kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p", "prei": "p"}
     blocks = [(k, devices[k], kind[k]) for k in order if k in devices]
-    return _build_layout(blocks, "STRONGARM_COMPARATOR", gds_path, "strongarm.gds", gaa=gaa)
+    return _build_layout(blocks, "STRONGARM_COMPARATOR", gds_path, "strongarm.gds", rules=_ruleset(params))
 
 
 def generate_vco_layout(params, gds_path=None):
     """Ring VCO layout: bias mirror (Mpref/Mnref) + N current-starved stages
     (Mbp/Mp/Mn/Mbn each) as a row of multi-finger MOS blocks + guard ring + DRC."""
     d = params.get("devices", {})
-    gaa = params.get("model") == "gaa2nm"
     n = int(params.get("n_stages", 5))
     blocks = [("biasP", d["starvep"], "p"), ("biasN", d["starven"], "n")]
     for i in range(1, n + 1):
         blocks += [(f"Mbp{i}", d["starvep"], "p"), (f"Mp{i}", d["invp"], "p"),
                    (f"Mn{i}", d["invn"], "n"), (f"Mbn{i}", d["starven"], "n")]
-    return _build_layout(blocks, "RING_VCO", gds_path, "ring_vco.gds", gaa=gaa)
+    return _build_layout(blocks, "RING_VCO", gds_path, "ring_vco.gds", rules=_ruleset(params))
 
 
 def extract_vco_parasitics(params):
@@ -162,13 +180,13 @@ def extract_vco_parasitics(params):
     the drains of its stage's Mp/Mn plus the next stage's gates. Real drawn
     diffusion+met1 geometry × SKY130-class cap densities — PoC extraction."""
     d = params.get("devices", {})
-    gaa = params.get("model") == "gaa2nm"
-    cap_p = _device_cap_ff(d["invp"], "p", gaa)
-    cap_n = _device_cap_ff(d["invn"], "n", gaa)
+    rules = _ruleset(params)
+    cap_p = _device_cap_ff(d["invp"], "p", rules)
+    cap_n = _device_cap_ff(d["invn"], "n", rules)
     c_node = 0.5 * (cap_p + cap_n)   # drain share at the output node
     return {"c_node_ff": round(c_node, 3),
             "per_device_ff": {"invp": round(cap_p, 3), "invn": round(cap_n, 3)},
-            "method": ("drawn nanosheet-grid geometry × 2nm-class cap densities (approx)" if gaa
+            "method": ("drawn grid geometry × advanced-node cap densities (approx)" if rules
                        else "drawn diffusion+met1 area/perimeter × SKY130-class cap densities")}
 
 
@@ -181,11 +199,11 @@ CAP = {"diff_area": 0.90, "diff_perim": 0.20, "met_area": 0.03, "met_perim": 0.0
 CAP_GAA = {"diff_area": 1.5, "diff_perim": 0.05, "met_area": 0.15, "met_perim": 0.05}
 
 
-def _device_cap_ff(dev, kind, gaa=False):
+def _device_cap_ff(dev, kind, rules=None):
     """Junction + met1 capacitance (fF) of one device block, from its drawn
     diffusion and met1 geometry (same block builder as the layout)."""
-    rb, _dw = _device_block(0.0, "x", dev, kind, gaa=gaa)
-    cd = CAP_GAA if gaa else CAP
+    rb, _dw = _device_block(0.0, "x", dev, kind, rules=rules)
+    cd = CAP_GAA if rules else CAP
     c = 0.0
     for (rx, ry, rw, rh) in rb["diff"]:
         c += cd["diff_area"] * rw * rh + cd["diff_perim"] * 2 * (rw + rh)
@@ -200,22 +218,22 @@ def extract_parasitics(params):
     pair + latch-NMOS sources. Each symmetric node gets half the paired-device
     geometry. Real geometry × areal/fringe cap — a PoC extraction, not sign-off."""
     dv = {**{k: v for k, v in params.get("devices", {}).items()}}
-    gaa = params.get("model") == "gaa2nm"
+    rules = _ruleset(params)
     kind = {"tail": "n", "input": "n", "ncc": "n", "pcc": "p", "pre": "p", "prei": "p"}
-    cap = {k: _device_cap_ff(dv[k], kind[k], gaa) for k in dv if k in kind}
+    cap = {k: _device_cap_ff(dv[k], kind[k], rules) for k in dv if k in kind}
     c_out = 0.5 * (cap.get("pcc", 0) + cap.get("ncc", 0) + cap.get("pre", 0))
     c_int = 0.5 * (cap.get("input", 0) + cap.get("ncc", 0) + cap.get("prei", 0))
     return {"c_out_ff": round(c_out, 3), "c_int_ff": round(c_int, 3),
             "per_device_ff": {k: round(v, 3) for k, v in cap.items()},
-            "method": ("drawn nanosheet-grid geometry × 2nm-class cap densities (approx)" if gaa
+            "method": ("drawn grid geometry × advanced-node cap densities (approx)" if rules
                        else "drawn diffusion+met1 area/perimeter × SKY130-class cap densities")}
 
 
-def _drc(layer_rects, gaa=False):
+def _drc(layer_rects, rules=None):
     """Light rule DRC: met1/poly minimum width + met1 spacing (µm).
-    gaa2nm 은 2nm급 근사 룰(M1 18nm/게이트 12nm/간격 20nm)로 검사한다."""
-    if gaa:
-        min_w, poly_min, min_s = GAA["min_w_met"], GAA["min_w_poly"], GAA["min_s"]
+    그리드 모델(gaa2nm/asap7)은 해당 노드급 근사 룰로 검사한다."""
+    if rules:
+        min_w, poly_min, min_s = rules["min_w_met"], rules["min_w_poly"], rules["min_s"]
     else:
         min_w, poly_min, min_s = 0.14, 0.15, 0.14
     viol = []
