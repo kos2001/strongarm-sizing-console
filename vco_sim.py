@@ -397,14 +397,20 @@ def phase_noise(params, offsets_hz=None, measured=True, flicker_corner_hz=1e5):
 
 
 def _ring_gm(p):
-    """Finite-difference gm (S) of the core inverter NMOS at mid-transition."""
+    """Finite-difference gm (S) of the core inverter NMOS at mid-transition.
+    모델 인지: ptm/gaa2nm 은 .model nmos, asap7 은 BSIM-CMG OSDI 소자."""
     d = p["devices"]["invn"]
     vdd = p["vdd"]
+    osdi = f"pre_osdi {run_sim.ASAP7_OSDI}\n" if p.get("model") == "asap7" else ""
+    if p.get("model") == "asap7":
+        dev = f'NM1 d g 0 0 nmos_lvt l={d["l_nm"]}n nfin={run_sim.nfin_of(d)}'
+    else:
+        dev = f'M1 d g 0 0 nmos W={d["w_um"]}u L={d["l_nm"]}n M={d["m"]}'
 
     def idn(vg):
-        out = run_sim._run(f'.include "{run_sim.MODEL_PATH}"\nVd d 0 {vdd/2.0}\nVg g 0 {vg}\n'
-                           f'M1 d g 0 0 nmos W={d["w_um"]}u L={d["l_nm"]}n M={d["m"]}\n'
-                           '.control\nop\nprint i(Vd)\n.endc\n.end\n')
+        out = run_sim._run(f'{run_sim._model_header(p)}\nVd d 0 {vdd/2.0}\nVg g 0 {vg}\n'
+                           f'{dev}\n'
+                           f'.control\n{osdi}op\nprint i(Vd)\n.endc\n.end\n')
         m = re.search(r"i\(vd\)\s*=\s*([-\d.eE+]+)", out, re.IGNORECASE)
         return abs(float(m.group(1))) if m else None
 
@@ -437,13 +443,52 @@ def _gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wavefile):
     return "\n".join(lines) + "\n"
 
 
+def _gen_noisy_xcpl(p, na, tstop_ns, ntstep_ps, seed, wavefile):
+    """xcpl(교차결합+리셋) 링에 스테이지·레일별 입력환산 trnoise 를 주입한
+    넷리스트 — 기본 토폴로지의 지터 실측용. 리셋 스타트라 .ic 불필요."""
+    d = run_sim.quantize_devices(p)
+    vdd, N = p["vdd"], int(p["n_stages"])
+    trst = p.get("trst_ns", 2.0)
+    invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
+    sp_p, sn_n = _dev2(p, d["starvep"], "p"), _dev2(p, d["starven"], "n")
+    xp, rp = _dev2(p, d["xcplp"], "p"), _dev2(p, d["rstp"], "p")
+    mp = _mp(p)
+    lines = ["xcpl ring VCO + per-stage/rail input-referred trnoise",
+             f".option temp={p.get('temp', 27)}", ".param dvtn=0 dvtp=0",
+             run_sim._model_header(p), f"Vdd vdd 0 {vdd}", f"Vc vctrl 0 {p['vctrl']}",
+             f"{mp}Mpref vbp vbp vdd vdd {sp_p}", f"{mp}Mnref vbp vctrl 0 0 {sn_n}",
+             f"Vrst rstb 0 PULSE(0 {vdd} {trst}n 0.05n 0.05n {tstop_ns*2}n {tstop_ns*4}n)",
+             f"{mp}Mrst o1 rstb vdd vdd {rp}"]
+    for i in range(1, N + 1):
+        prev = N if i == 1 else i - 1
+        lines += [
+            f"Vnp{i} og{i} o{prev} 0 trnoise({na} {ntstep_ps}p 0 0)",
+            f"Vnb{i} obg{i} ob{prev} 0 trnoise({na} {ntstep_ps}p 0 0)",
+            f"{mp}Mbp{i}  ap{i} vbp vdd vdd {sp_p}",
+            f"{mp}Mp{i}   o{i} og{i} ap{i} vdd {invp}",
+            f"{mp}Mn{i}   o{i} og{i} bp{i} 0 {invn}",
+            f"{mp}Mbn{i}  bp{i} vctrl 0 0 {sn_n}",
+            f"{mp}Mbpb{i} an{i} vbp vdd vdd {sp_p}",
+            f"{mp}Mpb{i}  ob{i} obg{i} an{i} vdd {invp}",
+            f"{mp}Mnb{i}  ob{i} obg{i} bn{i} 0 {invn}",
+            f"{mp}Mbnb{i} bn{i} vctrl 0 0 {sn_n}",
+            f"{mp}Mx{i}   o{i} ob{i} vdd vdd {xp}",
+            f"{mp}Mxb{i}  ob{i} o{i} vdd vdd {xp}",
+            f"Co{i}  o{i} 0 {p['cload_ff']}f",
+            f"Cob{i} ob{i} 0 {p['cload_ff']}f"]
+    lines += [".control", "set noaskquit", _osdi_line(p), f"setseed {seed}",
+              f"tran {ntstep_ps}p {tstop_ns}n", f"wrdata {wavefile} v(o1)", ".endc", ".end"]
+    return "\n".join(lines) + "\n"
+
+
 def _measure_jitter_once(p, na, tstop_ns, ntstep_ps, seed):
     """One noisy transient → (f0, period-jitter σ_T) or None."""
     vdd = p["vdd"]
     fd, wf = tempfile.mkstemp(suffix=".txt")
     os.close(fd)
     try:
-        run_sim._run(_gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wf))
+        gen = _gen_noisy_xcpl if p.get("topology", "starved") == "xcpl" else _gen_noisy_ring
+        run_sim._run(gen(p, na, tstop_ns, ntstep_ps, seed, wf))
         ts, vs = [], []
         with open(wf) as fh:
             for line in fh:
@@ -490,11 +535,8 @@ def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seeds=(1, 2, 3, 4
     trnoise) and measure the period jitter directly. Averaged over several noise
     seeds (run in parallel) to tame the stochastic spread. A real cross-check of
     the analytic estimate — the circuit converts the injected noise through its
-    actual switching. Starved topology only (the trnoise injection netlist
-    models the single-ended starved ring)."""
+    actual switching. starved 와 xcpl(기본) 토폴로지 모두 지원."""
     p = _full(params)
-    if p.get("topology", "starved") != "starved":
-        return {"error": "measured jitter supports the starved topology only"}
     gm = _ring_gm(p)
     if not gm:
         return {"error": "gm extraction failed"}
