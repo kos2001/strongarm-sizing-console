@@ -578,7 +578,13 @@ export default function App() {
                   key={m}
                   disabled={busy}
                   onClick={() => updateParams({ ...params, model: m, vdd: v,
-                    devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => [k, { ...params.devices[k], l_nm: k === 'input' ? lmap.input : lmap.other }])) as Record<DeviceKey, Device> })}
+                    devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => {
+                      const dd = params.devices[k]
+                      const l_nm = k === 'input' ? lmap.input : lmap.other
+                      // gaa2nm: W 는 나노시트 스택 등가폭 0.2µ 의 정수배로만 존재 — 그리드에 스냅
+                      if (m === 'gaa2nm') return [k, { ...dd, l_nm, w_um: Math.max(0.2, Math.round(Math.round(dd.w_um / 0.2) * 0.2 * 1000) / 1000) }]
+                      return [k, { ...dd, l_nm }]
+                    })) as Record<DeviceKey, Device> })}
                   className="mono text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-50"
                   style={{ color: on ? 'var(--si)' : 'var(--muted)', background: on ? 'color-mix(in srgb, var(--si) 12%, transparent)' : 'transparent', border: `1px solid ${on ? 'color-mix(in srgb, var(--si) 35%, var(--line))' : 'var(--line)'}` }}
                 >
@@ -590,7 +596,7 @@ export default function App() {
 
           {params.model === 'gaa2nm' && (
             <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5" style={{ color: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--warn) 30%, var(--line))' }}>
-              ≈ 2nm급 근사 모델(BSIM4, IRDS 목표치 스케일링) — GAA 정전기·양자화 미반영. 경향 분석용이며 사인오프 불가. 실제 2nm PDK 는 파운드리 NDA 전용.
+              ≈ 2nm급 근사 모델(BSIM4, IRDS 목표치 스케일링) — W 는 나노시트 스택 단위(0.2µ = 3시트 스택 1개)의 정수배로 스냅됩니다. 경향 분석용이며 사인오프 불가. 실제 2nm PDK 는 파운드리 NDA 전용.
             </p>
           )}
           <DeviceEditor params={params} onChange={updateParams} disabled={busy} lang={lang} />

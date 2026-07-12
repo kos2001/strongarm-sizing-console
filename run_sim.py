@@ -56,6 +56,24 @@ GAA2NM_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "models", "ptm_45nm_bulk.txt")
 
+# gaa2nm 에서 W 는 연속값이 아니다 — 나노시트 스택 1개의 등가폭(3시트 ×
+# 둘레 ≈ 0.2 µm)의 정수배로만 존재한다(스택 수 = W/0.2). 넷리스트 생성 시
+# W 를 이 그리드에 스냅한다.
+W_SHEET_UM = 0.2
+
+
+def quantize_devices(p):
+    """gaa2nm: W 를 시트 그리드(W_SHEET_UM 정수배, 최소 1스택)에 스냅.
+    W 를 시트폭 고정 + M=finger 로 접지 않는 이유: 카드가 geoMod=1(비공유
+    접합 기하 자동계산)이라 finger 수에 비례해 접합 둘레 캡이 부풀어, 같은
+    총폭인데 지연이 2배로 나오는 아티팩트가 있다(실 레이아웃은 확산 공유).
+    다른 모델은 그대로 통과."""
+    if p.get("model") != "gaa2nm":
+        return p["devices"]
+    return {k: {**d, "w_um": max(W_SHEET_UM,
+                                 round(round(d["w_um"] / W_SHEET_UM) * W_SHEET_UM, 3))}
+            for k, d in p["devices"].items()}
+
 # default seed = P1_SAR_ADC first-cut sizing, adapted to PTM 45nm bulk
 # (VDD 0.7 V nominal, minimum L = 45 nm for this node)
 DEFAULT_PARAMS = {
@@ -81,7 +99,7 @@ def _dev(d, vt="dvtn"):
 
 
 def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
-    d = p["devices"]
+    d = quantize_devices(p)
     vdd = p["vdd"]
     vcm = p["vcm_frac"] * vdd
     cl = p["cload_ff"]

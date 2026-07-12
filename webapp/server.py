@@ -116,6 +116,16 @@ def _total_w(p):
     return round(sum(d["w_um"] * d["m"] for d in p["devices"].values()), 1)
 
 
+def _snap_w(p):
+    # gaa2nm 은 W 가 시트 그리드(W_SHEET_UM) 위에만 존재 — 옵티마이저 후보의
+    # 표시값이 넷리스트 양자화(run_sim.quantize_devices) 결과와 일치하도록 스냅.
+    if p.get("model") == "gaa2nm":
+        s = run_sim.W_SHEET_UM
+        for d in p["devices"].values():
+            d["w_um"] = max(s, round(round(d["w_um"] / s) * s, 3))
+    return p
+
+
 def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
     """Global sizing via log-space **Differential Evolution**.
 
@@ -161,7 +171,7 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
         p = copy.deepcopy(base)
         for i, dv in enumerate(DEV_KEYS):
             p["devices"][dv]["w_um"] = round(10 ** x[i], 2)
-        return p
+        return _snap_w(p)
 
     cache = {}
     n_sims = [0]
@@ -275,7 +285,7 @@ def optimize_pareto(base, targets, pop=16, gens=6, seed=7):
         p = copy.deepcopy(base)
         for i, dv in enumerate(DEV_KEYS):
             p["devices"][dv]["w_um"] = round(10 ** x[i], 2)
-        return p
+        return _snap_w(p)
 
     def ev(x):
         p = make(x)

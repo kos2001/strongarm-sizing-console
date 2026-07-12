@@ -17,7 +17,10 @@ const FIELDS: { k: 'w_um' | 'l_nm' | 'm'; label: string; step: number }[] = [
 ]
 
 export default function DeviceEditor({ params, onChange, disabled, lang }: Props) {
+  // gaa2nm: W 는 나노시트 스택 등가폭 0.2µ 의 정수배로만 존재 — 입력을 그리드에 스냅
+  const gaa = params.model === 'gaa2nm'
   const setDev = (dk: DeviceKey, field: 'w_um' | 'l_nm' | 'm', v: number) => {
+    if (gaa && field === 'w_um') v = Math.max(0.2, Math.round(Math.round(v / 0.2) * 0.2 * 1000) / 1000)
     onChange({
       ...params,
       devices: { ...params.devices, [dk]: { ...params.devices[dk], [field]: v } },
@@ -31,7 +34,7 @@ export default function DeviceEditor({ params, onChange, disabled, lang }: Props
         style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', color: 'var(--faint)' }}
       >
         <span>{t(lang, UI.device)}</span>
-        <span>W (µm)</span>
+        <span>{gaa ? (lang === 'ko' ? 'W (0.2µ×스택)' : 'W (0.2µ×stacks)') : 'W (µm)'}</span>
         <span>L (nm)</span>
         <span>M</span>
       </div>
@@ -60,9 +63,10 @@ export default function DeviceEditor({ params, onChange, disabled, lang }: Props
               <input
                 key={f.k}
                 type="number"
-                step={f.step}
+                step={gaa && f.k === 'w_um' ? 0.2 : f.step}
                 min={0}
                 disabled={disabled}
+                title={gaa && f.k === 'w_um' ? (lang === 'ko' ? `2nm급: 0.2µ(나노시트 스택 1개) 단위로 스냅 — 현재 ${Math.round(params.devices[dk].w_um / 0.2)}스택` : `2nm-class: snaps to 0.2µ (1 nanosheet stack) — currently ${Math.round(params.devices[dk].w_um / 0.2)} stacks`) : undefined}
                 value={params.devices[dk][f.k]}
                 onChange={(e) => setDev(dk, f.k, parseFloat(e.target.value) || 0)}
                 aria-label={`${meta.name} ${f.label}`}

@@ -76,7 +76,7 @@ def _dev(d, vt):
 def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
     if p.get("topology", "starved") == "xcpl":
         return _gen_xcpl_netlist(p, vctrl, tstop_ns, tstep_ps, wavefile)
-    d = p["devices"]
+    d = run_sim.quantize_devices(p)   # gaa2nm: W → 시트 단위(0.5µ) × finger
     vdd = p["vdd"]
     vc = p["vctrl"] if vctrl is None else vctrl
     N = int(p["n_stages"])
@@ -145,7 +145,7 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     the same vbp/vctrl starve rails as the "starved" topology. Size P1 weak
     relative to the starved inverter drive: an oversized P1 latches the stage
     and stops the oscillation (it shows up as oscillates=False)."""
-    d = p["devices"]
+    d = run_sim.quantize_devices(p)   # gaa2nm: W → 시트 단위(0.5µ) × finger
     vdd = p["vdd"]
     vc = p["vctrl"] if vctrl is None else vctrl
     N = int(p["n_stages"])
@@ -392,7 +392,7 @@ def _ring_gm(p):
 def _gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wavefile):
     """Ring VCO netlist with a per-stage input-referred trnoise voltage source
     (amplitude `na`) in series with each inverter gate — for measured jitter."""
-    d = p["devices"]
+    d = run_sim.quantize_devices(p)   # gaa2nm: W → 시트 단위(0.5µ) × finger
     vdd, N = p["vdd"], int(p["n_stages"])
     invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
     sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
