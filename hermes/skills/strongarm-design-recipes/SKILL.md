@@ -65,6 +65,15 @@ Method credit: probit noise-counting is the standard comparator technique
   V_ctrl (kVCO ≈ 13 GHz/V) — very wide, say so when proposing.
 - Auto-size hits 1.0 GHz within ±0.2 % on gaa2nm in ~55 sims (integer CD).
 
+## VCO noise: analytic vs measured jitter
+
+`vco_phase_noise` now includes the **measured** cross-check on the default
+xcpl topology too (per-stage/rail trnoise injection, multi-seed): measured
+period jitter runs ~2× the analytic √(2N)·√(kTC)/I estimate (default design:
+121 fs vs 63 fs, L(1MHz) −97 vs −102.5 dBc/Hz) and the accumulation slope
+≈0.5 confirms the thermal 1/f² region. Quote measured numbers for jitter
+claims; the analytic value is a fast lower-bound sanity check.
+
 ## W-grid discipline (quantized backends)
 
 - gaa2nm: W = k × 0.2 µm (nanosheet stacks). asap7: W = k × 0.07 µm (fins;

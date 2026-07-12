@@ -102,8 +102,7 @@ def test_vco_phase_noise_flicker_region():
 
 def test_vco_phase_noise_measured_agrees():
     """The multi-seed SPICE trnoise jitter should corroborate the analytic 1/f^2."""
-    # measured(트랜지언트 trnoise) 경로는 starved 링 전용 — 명시 요청
-    r = vco_sim.phase_noise({"topology": "starved", "n_stages": 5})
+    r = vco_sim.phase_noise({})   # 기본 xcpl — 실측 지원(starved 도 동일 경로)
     m = r.get("measured")
     assert m is not None and m["n_seeds"] >= 2 and m["cycles"] >= 60
     assert "jitter_spread_fs" in m
