@@ -126,6 +126,23 @@ def _snap_w(p):
     return p
 
 
+def _stacks(p):
+    # gaa2nm: 소자별 나노시트 스택 수(W / W_SHEET_UM) — 2nm 에서 자동 사이징이
+    # 실제로 찾는 것은 연속 W 가 아니라 이 정수다.
+    s = run_sim.W_SHEET_UM
+    return {k: int(round(d["w_um"] / s)) for k, d in p["devices"].items()}
+
+
+def _xkey(base, x):
+    # 후보 캐시 키. gaa2nm 은 스택 수(정수) 공간으로 키를 잡는다 — 같은 그리드
+    # 점으로 스냅되는 연속 후보들이 ngspice 를 다시 돌리지 않으므로, log-공간
+    # DE 는 사실상 정수(스택 수) 탐색의 연속 완화가 된다.
+    if base.get("model") == "gaa2nm":
+        s = run_sim.W_SHEET_UM
+        return tuple(max(1, round((10 ** v) / s)) for v in x)
+    return tuple(round(v, 3) for v in x)
+
+
 def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
     """Global sizing via log-space **Differential Evolution**.
 
@@ -196,7 +213,7 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
 
     def _merge(out):
         # single-thread bookkeeping after a (possibly parallel) evaluation
-        cache[tuple(round(v, 3) for v in out["x"])] = out
+        cache[_xkey(base, out["x"])] = out
         n_sims[0] += 1
         X_train.append(out["x"])
         Y_train.append(math.log10(max(out["cost"], 1e-3)))
@@ -206,15 +223,23 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
         """Evaluate a batch of candidates in parallel; cache hits are free.
         Returns results in the same order as xs."""
         results = [None] * len(xs)
-        todo = []
+        todo, seen = [], {}
         for i, x in enumerate(xs):
-            hit = cache.get(tuple(round(v, 3) for v in x))
+            key = _xkey(base, x)
+            hit = cache.get(key)
             if hit is not None:
                 results[i] = hit
+            elif key in seen:
+                results[i] = ("dup", seen[key])   # 같은 그리드 점 — 배치 내 중복
             else:
+                seen[key] = i
                 todo.append(i)
         for i, out in zip(todo, _pmap(_eval_raw, [xs[i] for i in todo])):
             results[i] = _merge(out)
+        # 배치 내 중복(같은 그리드 점) 참조 해소
+        for i, r in enumerate(results):
+            if isinstance(r, tuple) and r[0] == "dup":
+                results[i] = results[r[1]]
         return results
 
     base_x = [max(LO, min(HI, math.log10(base["devices"][dv]["w_um"]))) for dv in DEV_KEYS]
@@ -269,7 +294,9 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
     success = v.get("offset_sigma_mv") is True and v.get("decision_time_ps") is True
     return {"trajectory": traj, "final_params": best, "final_result": r, "verdicts": v,
             "success": success, "targets": targets, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
-            "final_power_uw": r["nominal"].get("power_uw"), "final_total_w_um": _total_w(best)}
+            "final_power_uw": r["nominal"].get("power_uw"), "final_total_w_um": _total_w(best),
+            # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
+            "final_stacks": _stacks(best) if base.get("model") == "gaa2nm" else None}
 
 
 def optimize_pareto(base, targets, pop=16, gens=6, seed=7):
@@ -679,7 +706,7 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
         p = copy.deepcopy(base)
         for i, k in enumerate(keys):
             p["devices"][k]["w_um"] = round(10 ** x[i], 2)
-        return p
+        return _snap_w(p)   # gaa2nm: 시트 그리드 스냅 — 표시값 = 시뮬값
 
     cache, n_sims = {}, [0]
 
@@ -697,19 +724,26 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
 
     def evaluate_many(xs):
         res = [None] * len(xs)
-        todo = []
+        todo, seen = [], {}
         for i, x in enumerate(xs):
-            hit = cache.get(tuple(round(v, 3) for v in x))
+            key = _xkey(base, x)                 # gaa2nm: 스택 수(정수) 공간 키
+            hit = cache.get(key)
             if hit is not None:
                 res[i] = hit
+            elif key in seen:
+                res[i] = ("dup", seen[key])      # 같은 그리드 점 — 배치 내 중복
             else:
+                seen[key] = i
                 todo.append(i)
         for i, out in zip(todo, _pmap(_eval_raw, [xs[i] for i in todo])):
-            cache[tuple(round(v, 3) for v in out["x"])] = out
+            cache[_xkey(base, out["x"])] = out
             n_sims[0] += 1
             X_train.append(out["x"])
             Y_train.append(math.log10(max(out["cost"], 1e-3)))
             res[i] = out
+        for i, r in enumerate(res):
+            if isinstance(r, tuple) and r[0] == "dup":
+                res[i] = res[r[1]]
         return res
 
     base_x = [max(LO, min(HI, math.log10(base["devices"][k]["w_um"]))) for k in keys]
@@ -755,7 +789,9 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
                  "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
                  "oscillates": m["oscillates"], "params": copy.deepcopy(fin["devices"])})
     return {"trajectory": traj, "final_params": fin, "nominal": m, "tuning": tuning,
-            "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0]}
+            "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
+            # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
+            "final_stacks": _stacks(fin) if base.get("model") == "gaa2nm" else None}
 
 
 def vco_pvt(params):
@@ -796,7 +832,7 @@ def optimize_vco_pareto(base, pop=16, gens=6, seed=9):
         p = copy.deepcopy(base)
         for i, k in enumerate(keys):
             p["devices"][k]["w_um"] = round(10 ** x[i], 2)
-        return p
+        return _snap_w(p)   # gaa2nm: 시트 그리드 스냅 — 표시값 = 시뮬값
 
     def ev(x):
         p = make(x)

@@ -187,6 +187,8 @@ export interface OptimizeResult {
   targets: Record<string, number>
   final_power_uw?: number | null
   final_total_w_um?: number
+  // gaa2nm: 자동 사이징이 실제로 찾은 정수 스택 수(W = 스택 × 0.2µ)
+  final_stacks?: Record<DeviceKey, number> | null
   error?: string
 }
 
@@ -200,6 +202,7 @@ export interface VcoParams {
   cload_ff: number
   topology?: VcoTopology
   trst_ns?: number
+  model?: 'ptm' | 'gaa2nm'   // VCO 는 .model nmos/pmos 카드 경로만 (sky130 미지원)
   devices: Record<VcoDeviceKey, Device>
 }
 export interface VcoNominal {
@@ -230,6 +233,8 @@ export interface VcoOptimizeResult {
   target_f_ghz: number
   n_sims: number
   n_surrogate_skips?: number
+  // gaa2nm: 자동 사이징이 실제로 찾은 정수 스택 수(W = 스택 × 0.2µ)
+  final_stacks?: Record<VcoDeviceKey, number> | null
   error?: string
 }
 export interface VcoWaveform { vdd: number; t_ns: number[]; o1: number[]; o2: number[]; period_ns: number | null; f_osc_ghz: number | null; error?: string }
