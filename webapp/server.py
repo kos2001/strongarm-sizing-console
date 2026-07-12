@@ -754,14 +754,14 @@ def vco_pvt(params):
     p = vco_sim._full(params)
     base_vdd = float(p["vdd"])
     specs = []
-    for proc, ps in (("SS", 0.05), ("TT", 0.0), ("FF", -0.05)):
+    for proc, ns, ps in (("SS", 0.05, 0.05), ("TT", 0.0, 0.0), ("FF", -0.05, -0.05), ("SF", 0.05, -0.05), ("FS", -0.05, 0.05)):
         for t in (-40, 27, 125):
             for vf in (0.9, 1.0, 1.1):
-                specs.append((proc, t, vf, round(base_vdd * vf, 3), ps))
+                specs.append((proc, t, vf, round(base_vdd * vf, 3), ns, ps))
 
     def _corner(s):
-        proc, t, vf, vdd, ps = s
-        m = vco_sim.measure_vco({**params, "vdd": vdd, "temp": t, "pskew": ps})
+        proc, t, vf, vdd, ns, ps = s
+        m = vco_sim.measure_vco({**params, "vdd": vdd, "temp": t, "nskew": ns, "pskew_p": ps})
         return {"process": proc, "temp": t, "v_frac": vf, "vdd": vdd,
                 "f_osc_ghz": m["f_osc_ghz"], "oscillates": m["oscillates"], "power_uw": m["power_uw"]}
 

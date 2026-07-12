@@ -155,16 +155,16 @@ def parameter_screening(params, targets=None, delta=0.15):
 
 
 def wco_operating(params, targets=None):
-    """Worst-case operation over the 27 process/temperature/VDD corners."""
+    """Worst-case operation over the 45 process/temperature/VDD corners (5 corners incl. SF/FS)."""
     p, t = _full(params), _targets(targets)
     base_vdd = float(p["vdd"])
-    specs = [(lbl, skew, temp, vf)
-             for lbl, skew in (("SS", 0.05), ("TT", 0.0), ("FF", -0.05))
+    specs = [(lbl, ns, ps, temp, vf)
+             for lbl, ns, ps in (("SS", 0.05, 0.05), ("TT", 0.0, 0.0), ("FF", -0.05, -0.05), ("SF", 0.05, -0.05), ("FS", -0.05, 0.05))
              for temp in (-40, 27, 125) for vf in (0.9, 1.0, 1.1)]
 
     def one(s):
-        lbl, skew, temp, vf = s
-        m = vco_sim.measure_vco({**p, "pskew": skew, "temp": temp, "vdd": round(base_vdd * vf, 3)})
+        lbl, ns, ps, temp, vf = s
+        m = vco_sim.measure_vco({**p, "nskew": ns, "pskew_p": ps, "temp": temp, "vdd": round(base_vdd * vf, 3)})
         return {"process": lbl, "temp": temp, "v_frac": vf, "vdd": round(base_vdd * vf, 3),
                 "f_osc_ghz": m.get("f_osc_ghz"), "power_uw": m.get("power_uw"),
                 "oscillates": bool(m.get("oscillates")),

@@ -82,6 +82,8 @@ def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
     N = int(p["n_stages"])
     cl = p["cload_ff"]
     pskew = p.get("pskew", 0.0)             # process corner: +slow (SS), -fast (FF)
+    nskew = p.get("nskew", pskew)           # 교차 코너(SF/FS)용 독립 스큐 — 첫 글자=N, 둘째=P
+    pskew_p = p.get("pskew_p", pskew)
     hdr = run_sim._model_header(p)          # PTM .include (or sky130 .lib)
     invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
     sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
@@ -90,7 +92,7 @@ def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
     lines = [
         "MOSFET current-starved ring VCO (generated)",
         f".option temp={p.get('temp', 27)}",
-        f".param dvtn={pskew} dvtp={-pskew}",
+        f".param dvtn={nskew} dvtp={-pskew_p}",
         hdr,
         f"Vdd vdd 0 {vdd}",
         f"Vc vctrl 0 {vc}",
@@ -150,6 +152,8 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     cl = p["cload_ff"]
     trst = p.get("trst_ns", 2.0)
     pskew = p.get("pskew", 0.0)
+    nskew = p.get("nskew", pskew)
+    pskew_p = p.get("pskew_p", pskew)
     hdr = run_sim._model_header(p)
     invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
     sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
@@ -159,7 +163,7 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     lines = [
         "cross-coupled pseudo-differential ring VCO with reset (generated)",
         f".option temp={p.get('temp', 27)}",
-        f".param dvtn={pskew} dvtp={-pskew}",
+        f".param dvtn={nskew} dvtp={-pskew_p}",
         hdr,
         f"Vdd vdd 0 {vdd}",
         f"Vc vctrl 0 {vc}",
