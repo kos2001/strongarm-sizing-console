@@ -79,7 +79,7 @@ export default function AgentSizing({ params, targets, onApply, ko, disabled }: 
           : ''
       const message =
         `현재 comparator 설계 상태(JSON):\n${JSON.stringify(ctx)}\n\n` +
-        `규칙: 아래 사용자의 요청을 처리하라. 시뮬레이션이 필요하면 오직 strongarm MCP 도구(strongarm_run_sim/strongarm_optimize)만 사용하고, params 인자에 위 설계 상태(및 변경분)를 그대로 넣어 한 번에 호출하라. terminal·파일 등 다른 도구는 절대 사용하지 말고, 도구 호출은 최대 2회, 탐색·검증 반복 없이 결과를 바로 보고하라. 회로 구조 자체를 바꾸는 요청(소자 추가/삭제/결선 변경)이면: ① strongarm_netlist 도구로 현재 덱(.sp)을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 도구로 실행해 측정값을 확인하고 ④ 수정된 덱 전체를 답변에 \`\`\`spice 코드블록으로 포함하라(이때는 도구 3회까지 허용). ` +
+        `규칙: 아래 사용자의 요청을 처리하라. 상태 파악·마진 확인은 strongarm_design_brief 한 번으로 끝내라(공칭+오프셋+마진+힌트 일괄). 시뮬레이션이 필요하면 오직 strongarm MCP 도구(strongarm_design_brief/strongarm_run_sim/strongarm_optimize)만 사용하고, params 인자에 위 설계 상태(및 변경분)를 그대로 넣어 한 번에 호출하라. terminal·파일 등 다른 도구는 절대 사용하지 말고, 도구 호출은 최대 2회. 사이징을 제안하려면 반드시 제안 사이징을 strongarm_run_sim 으로 1회 실측해 스펙 통과를 확인한 뒤에만 제시하라(미검증 제안 금지 — 직관 사이징은 자주 틀린다). 두 개 이상 스펙이 동시에 어긋나면 직접 고치지 말고 strongarm_optimize 에 맡겨 그 결과를 제안하라. 회로 구조 자체를 바꾸는 요청(소자 추가/삭제/결선 변경)이면: ① strongarm_netlist 도구로 현재 덱(.sp)을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 도구로 실행해 측정값을 확인하고 ④ 수정된 덱 전체를 답변에 \`\`\`spice 코드블록으로 포함하라(이때는 도구 3회까지 허용). ` +
         gaaRule +
         `소자 크기(w_um/l_nm/m)·스펙(decision_time_ps/power_uw/offset_sigma_mv)·vdd·cload_ff·topology 변경을 제안/적용할 때는 답변 마지막에 \`\`\`json {"devices":{...변경 소자만...},"targets":{...},"vdd":...,"topology":"..."} \`\`\` 블록을 포함하라(변경 없으면 생략). 간결한 한국어로 답하라.\n\n` +
         `사용자 요청: ${q}`

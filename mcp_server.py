@@ -40,6 +40,21 @@ _TARGETS_SCHEMA = {
 
 TOOLS = [
     {
+        "name": "strongarm_design_brief",
+        "description": "ONE-CALL design briefing for the comparator: nominal ngspice metrics, "
+                       "predicted offset, spec margins, W-grid/stack info (gaa2nm/asap7), and "
+                       "actionable lever hints. Call this FIRST — it replaces separate "
+                       "run_sim + sensitivity round-trips for situational awareness.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
+    },
+    {
+        "name": "vco_design_brief",
+        "description": "ONE-CALL design briefing for the ring VCO: nominal oscillation, target-f "
+                       "margin, W-grid/stack info, and lever hints (starve widths, N, xcpl strength).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"},
+                        "targets": {"type": "object", "properties": {"f_ghz": {"type": "number"}}}}},
+    },
+    {
         "name": "strongarm_run_sim",
         "description": "Simulate a StrongARM latch comparator in ngspice for a given sizing: "
                        "decision_time_ps, power_uw, functional, and Monte-Carlo offset_sigma_mv.",
@@ -309,6 +324,8 @@ TOOLS = [
     },
 ]
 _TOOL_ENDPOINT = {
+    "strongarm_design_brief": "/api/brief",
+    "vco_design_brief": "/api/vco/brief",
     "strongarm_optimize": "/api/optimize",
     "strongarm_pareto": "/api/pareto",
     "strongarm_pvt": "/api/pvt",
