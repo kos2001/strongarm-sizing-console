@@ -5,24 +5,26 @@ XCPL = {"topology": "xcpl"}
 
 
 def test_nominal_verdict_margins():
-    v = vw.nominal_verdict({})
+    # 기본 토폴로지는 xcpl(~2.3GHz) — 밴드 중심을 명시
+    v = vw.nominal_verdict({}, {"f_ghz": 2.3})
     assert set(v["margins"]) == {"oscillates", "f_band", "power_uw"}
     assert v["margins"]["oscillates"] == 1.0
-    assert v["pass"] is True                     # starved default sits in the band
+    assert v["pass"] is True                     # xcpl default, band centered at 2.3GHz
     v2 = vw.nominal_verdict(XCPL)
     assert v2["margins"]["f_band"] < 0           # xcpl default is below 1.5±15%
     assert v2["pass"] is False
 
 
 def test_dev_keys_by_topology():
-    assert vw.dev_keys({}) == ["invp", "invn", "starvep", "starven"]
+    assert vw.dev_keys({}) == ["invp", "invn", "starvep", "starven", "xcplp", "rstp"]   # 기본 = xcpl
+    assert vw.dev_keys({"topology": "starved"}) == ["invp", "invn", "starvep", "starven"]
     assert vw.dev_keys(XCPL) == ["invp", "invn", "starvep", "starven", "xcplp", "rstp"]
 
 
 def test_parameter_screening_ranks_starve_for_frequency():
     r = vw.parameter_screening({}, delta=0.12)
     fr = r["rankings"]["f_osc_ghz"]
-    assert len(fr) == 4 and all(x["sensitivity"] >= 0 for x in fr)
+    assert len(fr) == 6 and all(x["sensitivity"] >= 0 for x in fr)   # xcpl: +xcplp/rstp
     # the current-starve widths set the tail current, hence the frequency:
     # at least one of them must rank in the top two movers
     assert {fr[0]["key"], fr[1]["key"]} & {"starvep", "starven"}
@@ -43,7 +45,7 @@ def test_mismatch_netlist_has_per_device_draws():
     nl = vw._netlist_with_mismatch(p, random.Random(1))
     assert "delvto={dvtn}" not in nl and "delvto={dvtp}" not in nl
     draws = re.findall(r"delvto=(-?[\d.e-]+)", nl)
-    assert len(draws) >= 4 * 2 * 5               # >= per-stage devices, both rails
+    assert len(draws) >= 10 * 3 + 3              # xcpl N=3: 스테이지당 10소자 + 바이어스/리셋
     assert len({d for d in draws}) > 1           # independent, not one shared value
 
 
@@ -65,7 +67,7 @@ def test_dno_refine_centers_xcpl_frequency():
 
 def test_wco_and_worst_corners():
     wcc = vw.worst_case_corners({})
-    assert wcc["total_corners"] == 27
+    assert wcc["total_corners"] == 45
     assert len(wcc["worst_5"]) == 5
     assert wcc["worst"]["f_min_ghz"] is not None
     # worst-ranked corner has no more margin than the 5th
