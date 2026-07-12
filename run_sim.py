@@ -51,6 +51,8 @@ def _find_ngspice():
 NGSPICE = _find_ngspice()
 
 # ---- real BSIM4 device model: PTM 45nm bulk (models nmos/pmos, level=54) ----
+GAA2NM_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "models", "gaa2nm_approx.txt")
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "models", "ptm_45nm_bulk.txt")
 
@@ -121,7 +123,8 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
             sub = "sky130_fd_pr__nfet_01v8" if kind == "n" else "sky130_fd_pr__pfet_01v8"
             return f"X{label} {nodes} {sub} w={dd['w_um']} l={round(l_um, 3)} nf=1 mult={dd['m']}"
     else:
-        model_header = f'.include "{MODEL_PATH}"'
+        model_header = (f'.include "{GAA2NM_PATH}"' if p.get("model") == "gaa2nm"
+                        else f'.include "{MODEL_PATH}"')
         param_line = f".param dvtn={nskew} dvtp={-pskew_p}"
 
         def dline(label, nodes, dk, kind):
@@ -316,6 +319,8 @@ def _model_header(p):
     if p.get("model") == "sky130":
         corner = p.get("corner", "tt")
         return f'.lib "{sky130_corner_lib(corner)}" {corner}'
+    if p.get("model") == "gaa2nm":
+        return f'.include "{GAA2NM_PATH}"'   # 2nm급 근사(BSIM4) — 경향 분석용
     return f'.include "{MODEL_PATH}"'
 
 

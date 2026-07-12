@@ -753,8 +753,9 @@ def vco_pvt(params):
     temp −40/27/125 × VDD 0.9/1.0/1.1×. Frequency + does-it-oscillate per corner."""
     p = vco_sim._full(params)
     base_vdd = float(p["vdd"])
+    _sk = 0.025 if params.get("model") == "gaa2nm" else 0.05
     specs = []
-    for proc, ns, ps in (("SS", 0.05, 0.05), ("TT", 0.0, 0.0), ("FF", -0.05, -0.05), ("SF", 0.05, -0.05), ("FS", -0.05, 0.05)):
+    for proc, ns, ps in (("SS", _sk, _sk), ("TT", 0.0, 0.0), ("FF", -_sk, -_sk), ("SF", _sk, -_sk), ("FS", -_sk, _sk)):
         for t in (-40, 27, 125):
             for vf in (0.9, 1.0, 1.1):
                 specs.append((proc, t, vf, round(base_vdd * vf, 3), ns, ps))
@@ -1206,9 +1207,11 @@ class Handler(BaseHTTPRequestHandler):
                 sky = prm.get("model") == "sky130"
                 cmap = {"SS": "ss", "TT": "tt", "FF": "ff", "SF": "sf", "FS": "fs"}
                 # 5개 공정 코너 — 정렬(SS/TT/FF) + 교차(SF=slow N/fast P, FS=fast N/slow P)
+                # gaa2nm(|Vth|=0.20V)은 ±25mV, 45nm 급은 ±50mV 스큐
+                _sk = 0.025 if prm.get("model") == "gaa2nm" else 0.05
                 specs = []
-                for pl, ns, ps in (("SS", 0.05, 0.05), ("TT", 0.0, 0.0), ("FF", -0.05, -0.05),
-                                   ("SF", 0.05, -0.05), ("FS", -0.05, 0.05)):
+                for pl, ns, ps in (("SS", _sk, _sk), ("TT", 0.0, 0.0), ("FF", -_sk, -_sk),
+                                   ("SF", _sk, -_sk), ("FS", -_sk, _sk)):
                     for t in (-40, 27, 125):
                         for vf in (0.9, 1.0, 1.1):
                             vdd = round(base_vdd * vf, 3)
