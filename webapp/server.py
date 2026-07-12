@@ -531,8 +531,23 @@ def parse_netlist_text(text):
         if node_caps: params["cload_ff"] = node_caps[0]["ff"]
         out.update({"kind": "vco", "params": params})
         return out
+    if {"Mt1", "Mt2"} <= names:
+        # ── comparator (double-tail) ──
+        role = {"M1": "input", "M2": "input", "Mt1": "tail", "M3": "pre", "M4": "pre",
+                "M5": "pcc", "M6": "pcc", "M7": "ncc", "M8": "ncc"}
+        dev_params = {}
+        for d in devices:
+            key = role.get(d["name"])
+            if key and key not in dev_params:
+                dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
+        params = {"devices": dev_params, "topology": "doubletail"}
+        if "dd" in sources: params["vdd"] = sources["dd"]
+        out_caps = [c for c in caps if c["node"] in ("outp", "outn")]
+        if out_caps: params["cload_ff"] = out_caps[0]["ff"]
+        out.update({"kind": "comparator", "params": params})
+        return out
     if "Mt" in names and {"M1", "M3", "M5"} <= names:
-        # ── comparator ──
+        # ── comparator (single-tail strongarm) ──
         role = {"M1": "input", "M2": "input", "Mt": "tail", "M3": "ncc", "M4": "ncc",
                 "M5": "pcc", "M6": "pcc", "M7": "pre", "M8": "pre", "M9": "pre", "M10": "pre"}
         dev_params = {}
@@ -540,7 +555,7 @@ def parse_netlist_text(text):
             key = role.get(d["name"])
             if key and key not in dev_params:
                 dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
-        params = {"devices": dev_params}
+        params = {"devices": dev_params, "topology": "strongarm"}
         if "dd" in sources: params["vdd"] = sources["dd"]
         out_caps = [c for c in caps if c["node"] in ("outp", "outn")]
         if out_caps: params["cload_ff"] = out_caps[0]["ff"]
