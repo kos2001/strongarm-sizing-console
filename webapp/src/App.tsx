@@ -569,13 +569,16 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>Model</span>
-            {([['ptm', 'PTM 45nm', 1.0], ['sky130', 'SKY130 (real)', 1.8]] as const).map(([m, label, v]) => {
+            {([['ptm', 'PTM 45nm', 1.0], ['sky130', 'SKY130 (real)', 1.8], ['gaa2nm', 'GAA 2nm≈', 0.65]] as const).map(([m, label, v]) => {
               const on = (params.model ?? 'ptm') === m
+              // 모델별 채널 길이: gaa2nm 은 Lg 14nm 급(입력쌍 20nm), 나머지는 45nm 노드 기본
+              const lmap = m === 'gaa2nm' ? { input: 20, other: 14 } : { input: 80, other: 45 }
               return (
                 <button
                   key={m}
                   disabled={busy}
-                  onClick={() => updateParams({ ...params, model: m, vdd: v })}
+                  onClick={() => updateParams({ ...params, model: m, vdd: v,
+                    devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => [k, { ...params.devices[k], l_nm: k === 'input' ? lmap.input : lmap.other }])) as Record<DeviceKey, Device> })}
                   className="mono text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-50"
                   style={{ color: on ? 'var(--si)' : 'var(--muted)', background: on ? 'color-mix(in srgb, var(--si) 12%, transparent)' : 'transparent', border: `1px solid ${on ? 'color-mix(in srgb, var(--si) 35%, var(--line))' : 'var(--line)'}` }}
                 >
@@ -585,6 +588,11 @@ export default function App() {
             })}
           </div>
 
+          {params.model === 'gaa2nm' && (
+            <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5" style={{ color: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--warn) 30%, var(--line))' }}>
+              ≈ 2nm급 근사 모델(BSIM4, IRDS 목표치 스케일링) — GAA 정전기·양자화 미반영. 경향 분석용이며 사인오프 불가. 실제 2nm PDK 는 파운드리 NDA 전용.
+            </p>
+          )}
           <DeviceEditor params={params} onChange={updateParams} disabled={busy} lang={lang} />
 
           <div className="grid grid-cols-3 gap-3">

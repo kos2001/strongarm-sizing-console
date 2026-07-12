@@ -12,7 +12,7 @@ export interface Params {
   cload_ff: number
   avt_mv_um: number
   n_mc: number
-  model?: 'ptm' | 'sky130'
+  model?: 'ptm' | 'sky130' | 'gaa2nm'
   devices: Record<DeviceKey, Device>
 }
 
