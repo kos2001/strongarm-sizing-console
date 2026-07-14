@@ -60,8 +60,9 @@ export default function VcoSchematic({ devices, nStages }: { devices: Record<Vco
       wire([[bus, 122], [bus - 18, 122]]); dot(bus, 122); txt(bus - 21, 125, inLabel, C.net, 8.5, 'end')
       return X
     }
-    // 딜레이 셀 심볼(비반전 표기 — 참조 그림): bubble 없음. 전기적 반전은 유닛 회로(Mp/Mn)에 있다.
-    const inv = (x: number, y: number) => { add('polygon', { points: `${x},${y - 9} ${x},${y + 9} ${x + 17},${y}`, fill: 'none', stroke: C.sym, 'stroke-width': 1.3 }); return { in: [x, y], out: [x + 17, y] } }
+    // 레일 인버터 심볼 — 참조 그림(vco_cap.png)대로 반전 bubble 포함(▷○).
+    // '반전 신호가 없다'는 것은 커플러(래치) 쪽 — 커플러만 bubble 없이 그린다.
+    const inv = (x: number, y: number) => { add('polygon', { points: `${x},${y - 9} ${x},${y + 9} ${x + 17},${y}`, fill: 'none', stroke: C.sym, 'stroke-width': 1.3 }); add('circle', { cx: x + 20, cy: y, r: 2.6, fill: 'none', stroke: C.sym, 'stroke-width': 1.3 }); return { in: [x, y], out: [x + 23, y] } }
     // pseudo-differential 수평 2-레일 링(참고 그림 Fig.1 형태).
     // 위/아래 레일에 각각 N개 인버터, 매 단 출력 사이를 등을 맞댄 인버터 쌍
     // (back-to-back latch)으로 결합, 레일별 피드백은 상/하로 랩어라운드.
