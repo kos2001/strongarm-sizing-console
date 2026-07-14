@@ -946,17 +946,21 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41, search_stages=True):
     # ── 단수 N 탐색(홀수 3~9) — 튜닝 파라미터에 단수 포함(사용자 요청) ──
     # N 은 주파수의 계단 레버(f ≈ 1/(2N·t_d)): 후보별 공칭 1회 평가로 목표
     # 최근접 N 을 고르고, W 탐색은 그 N 에서 진행한다.
+    stage_scan = None
     if search_stages:
         cand_n = []
+        scan = []
         for n_try in (3, 5, 7, 9):
             m_try = vco_sim.measure_vco({**copy.deepcopy(base), "n_stages": n_try})
             n_sims[0] += 1
             f_try = m_try.get("f_osc_ghz")
+            scan.append({"n": n_try, "f_ghz": f_try, "oscillates": bool(m_try.get("oscillates"))})
             if m_try.get("oscillates") and f_try:
                 cand_n.append((abs(f_try - f_t) / f_t, n_try, f_try))
         if cand_n:
             cand_n.sort()
             best_n = cand_n[0][1]
+            stage_scan = {"points": scan, "chosen_n": best_n, "target_f_ghz": f_t}
             traj.append({"action": "stage search: "
                                     + " · ".join(f"N={n}→{f}GHz" for _, n, f in sorted(cand_n, key=lambda x: x[1]))
                                     + f" — N={best_n} 선택(목표 {f_t}GHz 최근접)",
@@ -1061,6 +1065,7 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41, search_stages=True):
                  "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
                  "oscillates": m["oscillates"], "params": copy.deepcopy(fin["devices"])})
     return {"trajectory": traj, "final_params": fin, "nominal": m, "tuning": tuning,
+            "stage_scan": stage_scan,
             "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
             "final_stacks": _stacks(fin) if run_sim.w_unit(base) else None}
@@ -1339,6 +1344,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # index.html 은 절대 캐시 금지(회로 변경 후 '옛 화면' 재발 방지) —
+        # 해시된 assets/* 는 immutable 캐시 허용
+        if target.endswith("index.html"):
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
+        elif "/assets/" in target.replace(os.sep, "/"):
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         self.end_headers()
         self.wfile.write(body)
 
