@@ -21,11 +21,11 @@ const VCO_DEFAULTS: VcoParams = {
   devices: {
     invp: { w_um: 2.0, l_nm: 45, m: 2 }, invn: { w_um: 1.0, l_nm: 45, m: 2 },
     starvep: { w_um: 2.0, l_nm: 45, m: 2 }, starven: { w_um: 1.0, l_nm: 45, m: 1 },
-    xcplp: { w_um: 0.4, l_nm: 45, m: 1 }, rstp: { w_um: 2.0, l_nm: 45, m: 2 },
+    xcplp: { w_um: 1.0, l_nm: 45, m: 2 }, rstp: { w_um: 6.0, l_nm: 45, m: 6 },
   },
 }
-const DKEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven']
-const XKEYS: VcoDeviceKey[] = [...DKEYS, 'xcplp', 'rstp']
+// xcpl 유닛(2N+4P)에는 스타빙이 없다 — 인버터 + 래치/리셋 PMOS 만 사이징
+const XKEYS: VcoDeviceKey[] = ['invp', 'invn', 'xcplp', 'rstp']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
 type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'
 
