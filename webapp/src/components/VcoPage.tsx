@@ -29,6 +29,12 @@ const XKEYS: VcoDeviceKey[] = ['invp', 'invn', 'xcplp']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
 type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'
 
+const normalizeVcoStages = (raw: number | undefined | null) => {
+  let n = Math.max(3, Math.round(Number(raw) || 3))
+  if (n % 2 === 0) n += 1
+  return Math.min(n, 9)
+}
+
 export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: View }) {
   const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
   const [res, setRes] = useState<VcoResult | null>(null)
@@ -71,8 +77,8 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     }))
   }
   const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff', v: number) => {
-    // 링 단수 N 은 발진 조건상 홀수만 허용(짝수 입력은 위로 올림), 최소 3
-    if (f === 'n_stages') v = Math.max(3, v % 2 === 0 ? v + 1 : v)
+    // 링 단수 N 은 발진 조건상 홀수만 허용(짝수 입력은 위로 올림), 3~9 범위로 schematic/netlist와 동일하게 정규화
+    if (f === 'n_stages') v = normalizeVcoStages(v)
     setParams((p) => ({ ...p, [f]: v }))
   }
   // 토폴로지는 교차결합+리셋(xcpl) 단일 — 전류제한(starved) 회로는 제거됨
@@ -95,13 +101,13 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     const mm = await vcoWickedMismatch(params); setWk((w) => ({ ...w, mm }))
     const ys = await vcoWickedYieldsweep(params, targets); setWk((w) => ({ ...w, ys }))
   })
-  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, n_stages: r.final_params.n_stages ?? p.n_stages, devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning); setTimeout(() => document.getElementById('vco-tuning-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150) } })
+  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, n_stages: normalizeVcoStages(r.final_params.n_stages ?? p.n_stages), devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning); setTimeout(() => document.getElementById('vco-tuning-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150) } })
   const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
   const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
   const runPush = () => guard('push', async () => { const r = await vcoPushing(params); if (!r.error) setPush(r) })
   const runPareto = () => guard('pareto', async () => { const r = await vcoPareto(params); if (!r.error) setPareto(r) })
   const runLayout = () => guard('layout', async () => { const r = await vcoLayout(params); if (!r.error) setLay(r) })
-  const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, devices: { ...p.devices, ...r.final_params.devices } })) } })
+  const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, n_stages: normalizeVcoStages(r.final_params.n_stages ?? p.n_stages), devices: { ...p.devices, ...r.final_params.devices } })) } })
   const runPn = () => guard('pn', async () => { const r = await vcoPhaseNoise(params); if (!r.error) setPn(r) })
 
   const nom = res?.nominal
@@ -129,7 +135,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
                 ...prev,
                 ...(pr.vdd != null ? { vdd: pr.vdd } : {}),
                 ...(pr.vctrl != null ? { vctrl: pr.vctrl } : {}),
-                ...(pr.n_stages != null ? { n_stages: pr.n_stages } : {}),
+                ...(pr.n_stages != null ? { n_stages: normalizeVcoStages(pr.n_stages) } : {}),
                 ...(pr.cload_ff != null ? { cload_ff: pr.cload_ff } : {}),
                 devices: Object.fromEntries((Object.keys(prev.devices) as VcoDeviceKey[]).map((k) => [k, { ...prev.devices[k], ...(pr.devices?.[k] ?? {}) }])) as VcoParams['devices'],
               }))
@@ -158,7 +164,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             </div>
           ) : <p className="text-sm mt-3" style={{ color: 'var(--muted)' }}>{T(lang, '↻ 파형을 눌러 실제 발진 트랜지언트를 캡처하세요.', 'Press ↻ waveform to capture the real oscillation transient.')}</p>}
         </div>
-        <NetlistImport kind="vco" ko={lang === 'ko'} onApply={(pp) => setParams((prev) => ({ ...prev, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.vctrl != null ? { vctrl: pp.vctrl } : {}), ...(pp.n_stages != null ? { n_stages: pp.n_stages } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'gaa2nm' } : {}), devices: { ...prev.devices, ...pp.devices } }))} />
+        <NetlistImport kind="vco" ko={lang === 'ko'} onApply={(pp) => setParams((prev) => ({ ...prev, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.vctrl != null ? { vctrl: pp.vctrl } : {}), ...(pp.n_stages != null ? { n_stages: normalizeVcoStages(pp.n_stages) } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'gaa2nm' } : {}), devices: { ...prev.devices, ...pp.devices } }))} />
       </div>
     )
   }
@@ -498,6 +504,16 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
       </section>
 
       <section className="flex flex-col gap-4">
+        <div className="p-5" style={box}>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '실시간 회로도', 'live schematic')}</div>
+            <span className="mono text-[10.5px] tnum" style={{ color: A }}>N={normalizeVcoStages(params.n_stages)}</span>
+          </div>
+          <div className="overflow-x-auto"><VcoSchematic devices={params.devices} nStages={params.n_stages} /></div>
+          <p className="mono text-[10.5px] mt-2" style={lab}>
+            {T(lang, '단수 N을 바꾸면 위 링 stage 개수와 피드백 배선이 즉시 같이 갱신됩니다.', 'Changing stage count N immediately redraws the ring stages and feedback wiring above.')}
+          </p>
+        </div>
         <div className="p-5" style={box}>
           <div className="mono text-[11px] uppercase tracking-[0.16em] mb-4" style={lab}>{T(lang, '발진 측정', 'oscillation metrics')}</div>
           {res?.error ? <p className="mono text-sm" style={{ color: 'var(--bad)' }}>error: {res.error}</p> : (
