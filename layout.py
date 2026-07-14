@@ -164,14 +164,15 @@ def generate_layout(params, gds_path=None):
 
 
 def generate_vco_layout(params, gds_path=None):
-    """Ring VCO layout: bias mirror (Mpref/Mnref) + N current-starved stages
-    (Mbp/Mp/Mn/Mbn each) as a row of multi-finger MOS blocks + guard ring + DRC."""
+    """Ring VCO layout — 2N+4P 유닛: 리셋 PMOS + N단(각 Mp/Mn·Mpb/Mnb 인버터
+    2쌍 + 래치 Mx/Mxb) 멀티핑거 MOS 행 + 가드링 + DRC. 스타빙·바이어스 없음."""
     d = params.get("devices", {})
     n = int(params.get("n_stages", 5))
-    blocks = [("biasP", d["starvep"], "p"), ("biasN", d["starven"], "n")]
+    blocks = [("Mrst", d["rstp"], "p")]
     for i in range(1, n + 1):
-        blocks += [(f"Mbp{i}", d["starvep"], "p"), (f"Mp{i}", d["invp"], "p"),
-                   (f"Mn{i}", d["invn"], "n"), (f"Mbn{i}", d["starven"], "n")]
+        blocks += [(f"Mp{i}", d["invp"], "p"), (f"Mn{i}", d["invn"], "n"),
+                   (f"Mpb{i}", d["invp"], "p"), (f"Mnb{i}", d["invn"], "n"),
+                   (f"Mx{i}", d["xcplp"], "p"), (f"Mxb{i}", d["xcplp"], "p")]
     return _build_layout(blocks, "RING_VCO", gds_path, "ring_vco.gds", rules=_ruleset(params))
 
 
@@ -183,7 +184,8 @@ def extract_vco_parasitics(params):
     rules = _ruleset(params)
     cap_p = _device_cap_ff(d["invp"], "p", rules)
     cap_n = _device_cap_ff(d["invn"], "n", rules)
-    c_node = 0.5 * (cap_p + cap_n)   # drain share at the output node
+    cap_x = _device_cap_ff(d["xcplp"], "p", rules)
+    c_node = 0.5 * (cap_p + cap_n + cap_x)   # drain share at o_i (inverter + latch)
     return {"c_node_ff": round(c_node, 3),
             "per_device_ff": {"invp": round(cap_p, 3), "invn": round(cap_n, 3)},
             "method": ("drawn grid geometry × advanced-node cap densities (approx)" if rules
