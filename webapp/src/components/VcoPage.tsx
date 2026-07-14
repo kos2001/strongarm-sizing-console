@@ -52,6 +52,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const [pn, setPn] = useState<VcoPhaseNoise | null>(null)
   const [load, setLoad] = useState('')
   const [targetF, setTargetF] = useState(1.5)
+  const [showLiveSchematic, setShowLiveSchematic] = useState(false)
   const busy = load !== ''
 
   // W 그리드 모델: gaa2nm = 나노시트 스택 0.2µ, asap7 = 핀 0.07µ — 입력을 그리드에 스냅
@@ -504,15 +505,27 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
       </section>
 
       <section className="flex flex-col gap-4">
-        <div className="p-5" style={box}>
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '실시간 회로도', 'live schematic')}</div>
-            <span className="mono text-[10.5px] tnum" style={{ color: A }}>N={normalizeVcoStages(params.n_stages)}</span>
+        <div className="p-4" style={box}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '회로도 동기화', 'schematic sync')}</div>
+              <p className="mono text-[10.5px] mt-1" style={lab}>
+                {T(lang, 'N 변경은 회로 탭의 schematic에 즉시 반영됩니다.', 'N changes are reflected immediately in the Circuit schematic.')}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="mono text-[10.5px] tnum" style={{ color: A }}>N={normalizeVcoStages(params.n_stages)}</span>
+              <button onClick={() => setShowLiveSchematic((v) => !v)} className="mono text-[10.5px] px-2.5 py-1 rounded-full"
+                style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 35%, var(--line))' }}>
+                {showLiveSchematic ? T(lang, '접기', 'hide') : T(lang, '미리보기', 'preview')}
+              </button>
+            </div>
           </div>
-          <div className="overflow-x-auto"><VcoSchematic devices={params.devices} nStages={params.n_stages} /></div>
-          <p className="mono text-[10.5px] mt-2" style={lab}>
-            {T(lang, '단수 N을 바꾸면 위 링 stage 개수와 피드백 배선이 즉시 같이 갱신됩니다.', 'Changing stage count N immediately redraws the ring stages and feedback wiring above.')}
-          </p>
+          {showLiveSchematic && (
+            <div className="overflow-x-auto mt-3" style={{ maxHeight: 260 }}>
+              <VcoSchematic devices={params.devices} nStages={params.n_stages} />
+            </div>
+          )}
         </div>
         <div className="p-5" style={box}>
           <div className="mono text-[11px] uppercase tracking-[0.16em] mb-4" style={lab}>{T(lang, '발진 측정', 'oscillation metrics')}</div>
