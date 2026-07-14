@@ -75,7 +75,7 @@ def test_vco_layout_and_parasitics():
     p = vco_sim._full({})
     L = layout.generate_vco_layout(p)
     assert L["area_um2"] > 0 and L["drc"]["clean"] is True
-    assert len(L["labels"]) == 2 + 4 * p["n_stages"]      # bias pair + 4 per stage
+    assert len(L["labels"]) == 1 + 6 * p["n_stages"]      # 리셋 + 스테이지당 6소자(2N+4P)
     pc = layout.extract_vco_parasitics(p)
     assert pc["c_node_ff"] > 0
     # parasitics lower the frequency

@@ -27,7 +27,7 @@ function downloadDeck(text: string, filename: string) {
   URL.revokeObjectURL(url)
 }
 
-const KEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven', 'xcplp', 'rstp']
+const KEYS: VcoDeviceKey[] = ['invp', 'invn', 'xcplp', 'rstp']   // 2N+4P 유닛 — 스타빙 없음
 
 function extractProposal(answer: string): Proposal | null {
   const m = answer.match(/```json\s*([\s\S]*?)```/)

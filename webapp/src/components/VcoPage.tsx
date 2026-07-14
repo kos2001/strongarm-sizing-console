@@ -388,7 +388,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg inline-block" style={{ color: lay.drc.clean ? 'var(--good)' : 'var(--bad)', background: `color-mix(in srgb, ${lay.drc.clean ? 'var(--good)' : 'var(--bad)'} 12%, transparent)` }}>
               {T(lang, '셀 면적', 'cell area')} {lay.area_um2} µm² · {lay.drc.clean ? T(lang, 'DRC 통과', 'DRC CLEAN') : `${lay.drc.n_violations} DRC`}
             </div>
-            <p className="mono text-[11px] mt-2" style={lab}>{T(lang, '바이어스 미러 + N단(각 Mbp/Mp/Mn/Mbn) 멀티핑거 MOS + 가드링. PoC 레이아웃(사인오프 DRC 아님).', 'bias mirror + N stages (Mbp/Mp/Mn/Mbn each) as multi-finger MOS + guard ring. PoC layout, not sign-off DRC.')}</p>
+            <p className="mono text-[11px] mt-2" style={lab}>{T(lang, '리셋 PMOS + N단(각 인버터 2쌍 Mp/Mn·Mpb/Mnb + 래치 Mx/Mxb) 멀티핑거 MOS + 가드링. PoC 레이아웃(사인오프 DRC 아님).', 'reset PMOS + N stages (2 inverter pairs + latch Mx/Mxb each) as multi-finger MOS + guard ring. PoC layout, not sign-off DRC.')}</p>
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '현재 소자 크기로 링 VCO의 트랜지스터 레벨 GDSII 레이아웃을 합성하고 규칙 DRC를 돌립니다.', 'Synthesize the transistor-level GDSII layout of the ring VCO from the current sizing and run rule DRC.')}</p>}
       </div>
