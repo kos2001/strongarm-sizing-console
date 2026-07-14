@@ -863,7 +863,7 @@ def parse_netlist_text(text):
     return out
 
 
-def optimize_vco(base, targets, pop=12, gens=7, seed=41):
+def optimize_vco(base, targets, pop=12, gens=7, seed=41, search_stages=True):
     """Size the ring VCO's four device groups (log-space Differential Evolution)
     to hit a target oscillation frequency at the nominal V_ctrl while minimizing
     power — the same simulate->evaluate->optimize loop used for the comparator.
@@ -942,6 +942,27 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
         return res
 
     traj = []
+
+    # ── 단수 N 탐색(홀수 3~9) — 튜닝 파라미터에 단수 포함(사용자 요청) ──
+    # N 은 주파수의 계단 레버(f ≈ 1/(2N·t_d)): 후보별 공칭 1회 평가로 목표
+    # 최근접 N 을 고르고, W 탐색은 그 N 에서 진행한다.
+    if search_stages:
+        cand_n = []
+        for n_try in (3, 5, 7, 9):
+            m_try = vco_sim.measure_vco({**copy.deepcopy(base), "n_stages": n_try})
+            n_sims[0] += 1
+            f_try = m_try.get("f_osc_ghz")
+            if m_try.get("oscillates") and f_try:
+                cand_n.append((abs(f_try - f_t) / f_t, n_try, f_try))
+        if cand_n:
+            cand_n.sort()
+            best_n = cand_n[0][1]
+            traj.append({"action": "stage search: "
+                                    + " · ".join(f"N={n}→{f}GHz" for _, n, f in sorted(cand_n, key=lambda x: x[1]))
+                                    + f" — N={best_n} 선택(목표 {f_t}GHz 최근접)",
+                         "f_osc_ghz": cand_n[0][2], "power_uw": None, "oscillates": True,
+                         "params": copy.deepcopy(base["devices"])})
+            base = {**copy.deepcopy(base), "n_stages": best_n}
 
     if run_sim.w_unit(base):
         # ---- 그리드 모델: 정수 좌표 하강 — comparator 쪽과 같은 패턴 -------
@@ -1526,7 +1547,8 @@ class Handler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 base = vco_sim._full(payload.get("params", {}))
                 self._json(optimize_vco(base, payload.get("targets") or {"f_ghz": 1.5},
-                                        pop=int(payload.get("pop", 12)), gens=int(payload.get("gens", 7))))
+                                        pop=int(payload.get("pop", 12)), gens=int(payload.get("gens", 7)),
+                                        search_stages=bool(payload.get("search_stages", True))))
             elif self.path == "/api/vco/waveform":
                 payload = self._read_json()
                 self._json(vco_sim.capture_vco_waveform(payload.get("params", {})))

@@ -69,7 +69,8 @@ Method credit: probit noise-counting is the standard comparator technique
   start-up is the simulator .ic kick-start (thermal noise in silicon).
   Keep the latch strong enough for rail complementarity but not latching:
   measured `xcplp` 1µ×2 → ptm 1.0 V ≈ 5.48 GHz, swing 0.96 V, anti-phase.
-- Frequency levers (order): inverter widths > n_stages (odd) > cload. The
+- Frequency levers (order): **n_stages (odd — `vco_optimize` searches 3..9
+  automatically via `search_stages`)** > inverter widths > cload. The
   starved topology (explicit `topology:"starved"`) still has real V_ctrl
   tuning if a VCO knob is required.
 - Auto-size hits 1.0 GHz within ±0.2 % on gaa2nm in ~55 sims (integer CD).
