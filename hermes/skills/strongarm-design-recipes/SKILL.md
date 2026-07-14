@@ -61,12 +61,16 @@ Method credit: probit noise-counting is the standard comparator technique
 
 ## VCO recipes
 
-- xcpl ring, N odd ≥3. Keep `xcplp` ≈ ¼ of `invp` drive — oversized couplers
-  latch the ring (`oscillates: false`).
-- Frequency levers: starve widths (current) > n_stages > cload. Measured
-  ranges: ptm 1.0 V ≈ 2.3 GHz; gaa2nm 0.65 V: no oscillation below
-  V_ctrl ≈ 0.42, then 0.74→0.95 GHz; asap7 0.7 V: 0.84→5.41 GHz across
-  V_ctrl (kVCO ≈ 13 GHz/V) — very wide, say so when proposing.
+- xcpl **unit = 2 NMOS + 4 PMOS (2 latched)** — plain inverter pairs direct
+  to the rails + cross-coupled PMOS latch + reset. **No current starving, no
+  V_ctrl knob**: frequency is set by inverter widths / n_stages / cload only
+  (tuning sweep is flat by design — don't call that a bug).
+- Keep the latch strong enough for rail complementarity but not latching:
+  measured recentering `xcplp` 1µ×2, `rstp` 6µ×6 (reset must beat the
+  full-strength Mn1) → ptm 1.0 V ≈ 4.84 GHz, swing 0.80 V, anti-phase rails.
+- Frequency levers (order): inverter widths > n_stages (odd) > cload. The
+  starved topology (explicit `topology:"starved"`) still has real V_ctrl
+  tuning if a VCO knob is required.
 - Auto-size hits 1.0 GHz within ±0.2 % on gaa2nm in ~55 sims (integer CD).
 
 ## VCO noise: analytic vs measured jitter

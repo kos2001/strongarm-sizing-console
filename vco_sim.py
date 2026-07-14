@@ -52,8 +52,8 @@ VCO_DEFAULTS = {
         "invn":    {"w_um": 1.0, "l_nm": 45, "m": 2},   # core NMOS (N0)
         "starvep": {"w_um": 2.0, "l_nm": 45, "m": 2},   # PMOS current-starve
         "starven": {"w_um": 1.0, "l_nm": 45, "m": 1},   # NMOS current-starve
-        "xcplp":   {"w_um": 0.4, "l_nm": 45, "m": 1},   # P1 cross-coupled PMOS (xcpl)
-        "rstp":    {"w_um": 2.0, "l_nm": 45, "m": 2},   # reset PMOS (xcpl)
+        "xcplp":   {"w_um": 1.0, "l_nm": 45, "m": 2},   # 래치 PMOS — 스타빙 없는 유닛에서 상보성 유지 등가(실측 재센터링)
+        "rstp":    {"w_um": 6.0, "l_nm": 45, "m": 6},   # reset PMOS — 풀스트렝스 Mn1 을 이겨 o1=vdd 클램프(실측 재센터링)
     },
 }
 DEV_KEYS = ["invp", "invn", "starvep", "starven"]   # optimizer dims (starved topology)
@@ -168,7 +168,6 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     and stops the oscillation (it shows up as oscillates=False)."""
     d = run_sim.quantize_devices(p)   # gaa2nm: W → 시트 단위(0.5µ) × finger
     vdd = p["vdd"]
-    vc = p["vctrl"] if vctrl is None else vctrl
     N = int(p["n_stages"])
     cl = p["cload_ff"]
     trst = p.get("trst_ns", 2.0)
@@ -177,37 +176,33 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     pskew_p = p.get("pskew_p", pskew)
     hdr = run_sim._model_header(p)
     invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
-    sp_p, sn_n = _dev2(p, d["starvep"], "p"), _dev2(p, d["starven"], "n")
     xp, rp = _dev2(p, d["xcplp"], "p"), _dev2(p, d["rstp"], "p")
     mp = _mp(p)
     wave = f"wrdata {wavefile} v(o1) v(ob1)" if wavefile else ""
 
+    # 유닛 셀 = NMOS 2 + PMOS 4: 인버터 2개(Mp/Mn, Mpb/Mnb — 레일에 직결)
+    # + 래치된 PMOS 2개(Mx/Mxb 교차결합). 전류 스타빙·바이어스 미러는 없다.
+    # 양 레일 모두 비반전(straight) 체인 — 반전은 인버터 자신뿐, 링 결선에
+    # 반전 신호 없음. V_ctrl 튜닝 노브는 이 유닛에 존재하지 않는다(주파수는
+    # vdd·부하·사이징으로 결정 — 튜닝 곡선은 평탄).
     lines = [
         "cross-coupled pseudo-differential ring VCO with reset (generated)",
         f".option temp={p.get('temp', 27)}",
         f".param dvtn={-nskew if p.get('model') == 'asap7' else nskew} dvtp={-pskew_p}",
         hdr,
         f"Vdd vdd 0 {vdd}",
-        f"Vc vctrl 0 {vc}",
-        "* bias: Vctrl -> tail current, mirrored to a diode PMOS -> vbp",
-        f"{mp}Mpref vbp vbp vdd vdd {sp_p}",
-        f"{mp}Mnref vbp vctrl 0 0 {sn_n}",
         f"* reset: rstb low clamps o1 to vdd, released at {trst}ns",
         f"Vrst rstb 0 PULSE(0 {vdd} {trst}n 0.05n 0.05n {tstop_ns*2}n {tstop_ns*4}n)",
         f"{mp}Mrst o1 rstb vdd vdd {rp}",
     ]
     for i in range(1, N + 1):
-        prev = N if i == 1 else i - 1      # ring: in_1 = o_N (both rails)
+        prev = N if i == 1 else i - 1      # ring: in_1 = o_N (both rails, straight)
         lines += [
-            f"* stage {i}: starved inverters (N0/P0) x2 + cross-coupled P1 pair",
-            f"{mp}Mbp{i}  ap{i} vbp vdd vdd {sp_p}",
-            f"{mp}Mp{i}   o{i} o{prev} ap{i} vdd {invp}",
-            f"{mp}Mn{i}   o{i} o{prev} bp{i} 0 {invn}",
-            f"{mp}Mbn{i}  bp{i} vctrl 0 0 {sn_n}",
-            f"{mp}Mbpb{i} an{i} vbp vdd vdd {sp_p}",
-            f"{mp}Mpb{i}  ob{i} ob{prev} an{i} vdd {invp}",
-            f"{mp}Mnb{i}  ob{i} ob{prev} bn{i} 0 {invn}",
-            f"{mp}Mbnb{i} bn{i} vctrl 0 0 {sn_n}",
+            f"* stage {i}: unit = 2 inverters (2N+2P, rails direct) + latched PMOS pair",
+            f"{mp}Mp{i}   o{i} o{prev} vdd vdd {invp}",
+            f"{mp}Mn{i}   o{i} o{prev} 0 0 {invn}",
+            f"{mp}Mpb{i}  ob{i} ob{prev} vdd vdd {invp}",
+            f"{mp}Mnb{i}  ob{i} ob{prev} 0 0 {invn}",
             f"{mp}Mx{i}   o{i} ob{i} vdd vdd {xp}",
             f"{mp}Mxb{i}  ob{i} o{i} vdd vdd {xp}",
             f"Co{i}  o{i} 0 {cl}f",
@@ -450,13 +445,11 @@ def _gen_noisy_xcpl(p, na, tstop_ns, ntstep_ps, seed, wavefile):
     vdd, N = p["vdd"], int(p["n_stages"])
     trst = p.get("trst_ns", 2.0)
     invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
-    sp_p, sn_n = _dev2(p, d["starvep"], "p"), _dev2(p, d["starven"], "n")
     xp, rp = _dev2(p, d["xcplp"], "p"), _dev2(p, d["rstp"], "p")
     mp = _mp(p)
     lines = ["xcpl ring VCO + per-stage/rail input-referred trnoise",
              f".option temp={p.get('temp', 27)}", ".param dvtn=0 dvtp=0",
-             run_sim._model_header(p), f"Vdd vdd 0 {vdd}", f"Vc vctrl 0 {p['vctrl']}",
-             f"{mp}Mpref vbp vbp vdd vdd {sp_p}", f"{mp}Mnref vbp vctrl 0 0 {sn_n}",
+             run_sim._model_header(p), f"Vdd vdd 0 {vdd}",
              f"Vrst rstb 0 PULSE(0 {vdd} {trst}n 0.05n 0.05n {tstop_ns*2}n {tstop_ns*4}n)",
              f"{mp}Mrst o1 rstb vdd vdd {rp}"]
     for i in range(1, N + 1):
@@ -464,14 +457,10 @@ def _gen_noisy_xcpl(p, na, tstop_ns, ntstep_ps, seed, wavefile):
         lines += [
             f"Vnp{i} og{i} o{prev} 0 trnoise({na} {ntstep_ps}p 0 0)",
             f"Vnb{i} obg{i} ob{prev} 0 trnoise({na} {ntstep_ps}p 0 0)",
-            f"{mp}Mbp{i}  ap{i} vbp vdd vdd {sp_p}",
-            f"{mp}Mp{i}   o{i} og{i} ap{i} vdd {invp}",
-            f"{mp}Mn{i}   o{i} og{i} bp{i} 0 {invn}",
-            f"{mp}Mbn{i}  bp{i} vctrl 0 0 {sn_n}",
-            f"{mp}Mbpb{i} an{i} vbp vdd vdd {sp_p}",
-            f"{mp}Mpb{i}  ob{i} obg{i} an{i} vdd {invp}",
-            f"{mp}Mnb{i}  ob{i} obg{i} bn{i} 0 {invn}",
-            f"{mp}Mbnb{i} bn{i} vctrl 0 0 {sn_n}",
+            f"{mp}Mp{i}   o{i} og{i} vdd vdd {invp}",
+            f"{mp}Mn{i}   o{i} og{i} 0 0 {invn}",
+            f"{mp}Mpb{i}  ob{i} obg{i} vdd vdd {invp}",
+            f"{mp}Mnb{i}  ob{i} obg{i} 0 0 {invn}",
             f"{mp}Mx{i}   o{i} ob{i} vdd vdd {xp}",
             f"{mp}Mxb{i}  ob{i} o{i} vdd vdd {xp}",
             f"Co{i}  o{i} 0 {p['cload_ff']}f",

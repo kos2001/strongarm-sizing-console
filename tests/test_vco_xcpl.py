@@ -33,10 +33,11 @@ def test_xcpl_oscillates():
     assert m["power_uw"] is not None and m["power_uw"] > 0
 
 
-def test_xcpl_frequency_rises_with_vctrl():
+def test_xcpl_frequency_insensitive_to_vctrl():
+    """2N+4P 유닛에는 V_ctrl 노브가 없다 — 주파수는 vctrl 무감이어야 한다."""
     lo = vco_sim.measure_vco(XCPL, vctrl=0.55)["f_osc_ghz"]
     hi = vco_sim.measure_vco(XCPL, vctrl=0.9)["f_osc_ghz"]
-    assert lo is not None and hi is not None and hi > lo
+    assert lo is not None and hi is not None and abs(hi - lo) < 0.05 * hi
 
 
 def test_xcpl_reset_holds_then_releases():

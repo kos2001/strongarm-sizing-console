@@ -62,9 +62,10 @@ def dev_keys(params):
     """Sizing variables: the starve/inverter widths always; the cross-coupled
     and reset PMOS only when the xcpl topology is active."""
     p = _full(params)
-    keys = list(vco_sim.DEV_KEYS)
     if p.get("topology", "starved") == "xcpl":
-        keys += ["xcplp", "rstp"]
+        # xcpl 유닛(2N+4P)에는 스타빙이 없다 — 인버터 + 래치/리셋 PMOS 만
+        return ["invp", "invn", "xcplp", "rstp"]
+    keys = list(vco_sim.DEV_KEYS)
     return keys
 
 
@@ -359,13 +360,16 @@ def dno_refine(params, targets=None, iterations=4):
                     p = _scale_width(p, k, 1.2)
                 action = "feasibility: strengthen inverters"
         elif m["f_osc_ghz"] < lo:
-            for k in ("starvep", "starven"):
+            # f 레버: starved 는 스타빙 폭(전류원), 2N+4P xcpl 은 인버터 폭
+            keys = ("invp", "invn") if p.get("topology") == "xcpl" else ("starvep", "starven")
+            for k in keys:
                 p = _scale_width(p, k, 1.18)
-            action = "DNO: widen starve devices to raise f"
+            action = f"DNO: widen {'inverters' if keys[0] == 'invp' else 'starve devices'} to raise f"
         elif m["f_osc_ghz"] > hi:
-            for k in ("starvep", "starven"):
+            keys = ("invp", "invn") if p.get("topology") == "xcpl" else ("starvep", "starven")
+            for k in keys:
                 p = _scale_width(p, k, 0.88)
-            action = "DNO: narrow starve devices to lower f"
+            action = f"DNO: narrow {'inverters' if keys[0] == 'invp' else 'starve devices'} to lower f"
         elif m.get("power_uw") is not None and m["power_uw"] > t["power_uw"]:
             r = parameter_screening(p, t, delta=0.10)["rankings"]
             fsens = {x["key"]: x["sensitivity"] for x in r["f_osc_ghz"]}

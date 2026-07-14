@@ -49,19 +49,15 @@ export default function VcoSchematic({ devices, nStages }: { devices: Record<Vco
     wire([[24, VDD], [W - 24, VDD]]); wire([[24, GND], [W - 24, GND]])
     txt(24, VDD - 6, 'vdd!', C.global, 10); txt(24, GND + 14, 'gnd!', C.global, 10)
 
-    // one starved inverter stack (Mbp/Mp/Mn/Mbn) -> output-node x position.
-    // Input tap: 게이트 버스 상단(레일 사이 채널을 cross-coupled 쌍을 위해 비워둠).
+    // 유닛 인버터(Mp/Mn — 레일 직결, 스타빙 없음) -> output-node x position.
+    // 유닛 셀 = NMOS 2 + PMOS 4 (인버터 2쌍 + 래치 PMOS 2) — 전류원 없음.
     const stack = (cxc: number, suffix: string, inLabel: string) => {
-      const mbp = mos(cxc, 70, true, `Mbp${suffix}`, sz('starvep'))
       const mp = mos(cxc, 122, true, `Mp${suffix}`, sz('invp'))
       const mn = mos(cxc, 190, false, `Mn${suffix}`, sz('invn'))
-      const mbn = mos(cxc, 242, false, `Mbn${suffix}`, sz('starven'))
       const X = cxc + 7, bus = cxc - 36
-      wire([[X, mbp.d[1]], [X, VDD]]); wire([[X, mbp.s[1]], [X, mp.d[1]]]); wire([[X, mp.s[1]], [X, mn.d[1]]]); wire([[X, mn.s[1]], [X, mbn.d[1]]]); wire([[X, mbn.s[1]], [X, GND]])
+      wire([[X, mp.d[1]], [X, VDD]]); wire([[X, mp.s[1]], [X, mn.d[1]]]); wire([[X, mn.s[1]], [X, GND]])
       wire([[mp.g[0], mp.g[1]], [bus, 122], [bus, 190], [mn.g[0], mn.g[1]]])
       wire([[bus, 122], [bus - 18, 122]]); dot(bus, 122); txt(bus - 21, 125, inLabel, C.net, 8.5, 'end')
-      wire([[mbp.g[0], mbp.g[1]], [cxc - 40, 70]]); txt(cxc - 44, 73, 'vbp', C.net, 8.5, 'end')
-      wire([[mbn.g[0], mbn.g[1]], [cxc - 40, 242]]); txt(cxc - 44, 245, 'V_ctrl', C.prop, 8.5, 'end')
       return X
     }
     const inv = (x: number, y: number) => { add('polygon', { points: `${x},${y - 9} ${x},${y + 9} ${x + 17},${y}`, fill: 'none', stroke: C.sym, 'stroke-width': 1.3 }); add('circle', { cx: x + 20, cy: y, r: 2.6, fill: 'none', stroke: C.sym, 'stroke-width': 1.3 }); return { in: [x, y], out: [x + 23, y] } }
@@ -86,13 +82,11 @@ export default function VcoSchematic({ devices, nStages }: { devices: Record<Vco
         // 상하 연결 바(커플러 입출력 공유 노드)
         wire([[x - g2 - w, mid - h - 4], [x + g2 + w, mid - h - 4]])
         wire([[x - g2 - w, mid + h + 4], [x + g2 + w, mid + h + 4]])
-        // 왼쪽: 아래로 향하는 인버터(위 레일 → 아래 레일)
-        add('polygon', { points: `${x - g2 - w},${mid - h} ${x - g2 + w},${mid - h} ${x - g2},${mid + h}`, fill: 'none', stroke: C.sym, 'stroke-width': 1.2 })
-        add('circle', { cx: x - g2, cy: mid + h + 2, r: 1.9, fill: 'none', stroke: C.sym, 'stroke-width': 1.2 })
+        // 반전 신호 없음 — 커플러는 PMOS 래치(비반전 결합): bubble 없는
+        // 맞물린 삼각형 쌍으로 표기
+        add('polygon', { points: `${x - g2 - w},${mid - h} ${x - g2 + w},${mid - h} ${x - g2},${mid + h + 2}`, fill: 'none', stroke: C.sym, 'stroke-width': 1.2 })
         wire([[x - g2, mid - h - 4], [x - g2, mid - h]])
-        // 오른쪽: 위로 향하는 인버터(아래 레일 → 위 레일)
-        add('polygon', { points: `${x + g2 - w},${mid + h} ${x + g2 + w},${mid + h} ${x + g2},${mid - h}`, fill: 'none', stroke: C.sym, 'stroke-width': 1.2 })
-        add('circle', { cx: x + g2, cy: mid - h - 2, r: 1.9, fill: 'none', stroke: C.sym, 'stroke-width': 1.2 })
+        add('polygon', { points: `${x + g2 - w},${mid + h} ${x + g2 + w},${mid + h} ${x + g2},${mid - h - 2}`, fill: 'none', stroke: C.sym, 'stroke-width': 1.2 })
         wire([[x + g2, mid + h + 4], [x + g2, mid + h]])
       }
       for (let i = 0; i < N; i++) coupler(bx + i * RING_P + 23)
@@ -105,7 +99,7 @@ export default function VcoSchematic({ devices, nStages }: { devices: Record<Vco
     }
 
     {
-      txt(300, 22, 'cross-coupled pseudo-differential delay cell', C.dim, 9, 'middle')
+      txt(300, 22, 'unit cell: 2 NMOS + 4 PMOS (2 latched) — no current starving', C.dim, 9, 'middle')
       const XA = stack(100, '', 'o[i-1]')     // rail A -> node o
       const XB = stack(490, 'b', 'ob[i-1]')   // rail B -> node ob
       const outY = 156

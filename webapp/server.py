@@ -817,7 +817,7 @@ def parse_netlist_text(text):
              else ("asap7" if ("asap7" in text or "bsimcmg" in text) else
                    ("sky130" if "sky130" in text.lower() else None)))
     out = {"devices": devices, "n_mos": len(devices), "caps": caps, "sources": sources}
-    if any(n.startswith("Mx") for n in names) and any(n.startswith("Mbp") for n in names):
+    if any(n.startswith("Mx") for n in names) and any(n.startswith("Mp") for n in names):
         # ── VCO(xcpl) ──
         import re as _re
         stages = [int(mm.group(1)) for n in names for mm in [_re.match(r"Mp(\d+)$", n)] if mm]
@@ -873,7 +873,7 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
     rng = random.Random(seed)
     f_t = float(targets.get("f_ghz", 1.5))
     LO, HI = math.log10(0.5), math.log10(40.0)
-    keys = vco_sim.DEV_KEYS
+    keys = vco_wicked.dev_keys(base)   # 토폴로지 인지(xcpl: 스타빙 없음)
 
     # GP surrogate on log10(cost) to pre-screen clearly-worse candidates (fewer SPICE runs)
     X_train, Y_train, gp, n_skip = [], [], {"m": None}, [0]
@@ -1140,7 +1140,7 @@ def optimize_vco_pareto(base, pop=16, gens=6, seed=9):
     import random
     rng = random.Random(seed)
     LO, HI = math.log10(0.5), math.log10(40.0)
-    keys = vco_sim.DEV_KEYS
+    keys = vco_wicked.dev_keys(base)   # 토폴로지 인지(xcpl: 스타빙 없음)
 
     def make(x):
         p = copy.deepcopy(base)

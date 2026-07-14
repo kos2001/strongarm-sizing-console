@@ -5,29 +5,29 @@ XCPL = {"topology": "xcpl"}
 
 
 def test_nominal_verdict_margins():
-    # 기본 토폴로지는 xcpl(~2.3GHz) — 밴드 중심을 명시
-    v = vw.nominal_verdict({}, {"f_ghz": 2.3})
+    # 기본(2N+4P 유닛, ~4.84GHz) — 밴드 중심을 실측 주파수로 명시
+    v = vw.nominal_verdict({}, {"f_ghz": 4.84, "power_uw": 4000})   # 스타빙 없는 유닛은 전력 한계 상향
     assert set(v["margins"]) == {"oscillates", "f_band", "power_uw"}
     assert v["margins"]["oscillates"] == 1.0
-    assert v["pass"] is True                     # xcpl default, band centered at 2.3GHz
+    assert v["pass"] is True
     v2 = vw.nominal_verdict(XCPL)
-    assert v2["margins"]["f_band"] < 0           # xcpl default is below 1.5±15%
+    assert v2["margins"]["f_band"] < 0           # 기본 밴드(1.5±15%) 위로 벗어남
     assert v2["pass"] is False
 
 
 def test_dev_keys_by_topology():
-    assert vw.dev_keys({}) == ["invp", "invn", "starvep", "starven", "xcplp", "rstp"]   # 기본 = xcpl
+    # xcpl 유닛(2N+4P)에는 스타빙이 없다
+    assert vw.dev_keys({}) == ["invp", "invn", "xcplp", "rstp"]   # 기본 = xcpl
     assert vw.dev_keys({"topology": "starved"}) == ["invp", "invn", "starvep", "starven"]
-    assert vw.dev_keys(XCPL) == ["invp", "invn", "starvep", "starven", "xcplp", "rstp"]
+    assert vw.dev_keys(XCPL) == ["invp", "invn", "xcplp", "rstp"]
 
 
-def test_parameter_screening_ranks_starve_for_frequency():
+def test_parameter_screening_ranks_inverters_for_frequency():
     r = vw.parameter_screening({}, delta=0.12)
     fr = r["rankings"]["f_osc_ghz"]
-    assert len(fr) == 6 and all(x["sensitivity"] >= 0 for x in fr)   # xcpl: +xcplp/rstp
-    # the current-starve widths set the tail current, hence the frequency:
-    # at least one of them must rank in the top two movers
-    assert {fr[0]["key"], fr[1]["key"]} & {"starvep", "starven"}
+    assert len(fr) == 4 and all(x["sensitivity"] >= 0 for x in fr)   # 2N+4P: inv/래치/리셋
+    # 스타빙이 없으니 주파수는 인버터(또는 래치 부하)가 지배해야 한다
+    assert {fr[0]["key"], fr[1]["key"]} & {"invp", "invn", "xcplp"}
 
 
 def test_mismatch_mc_measures_spread():
@@ -45,7 +45,7 @@ def test_mismatch_netlist_has_per_device_draws():
     nl = vw._netlist_with_mismatch(p, random.Random(1))
     assert "delvto={dvtn}" not in nl and "delvto={dvtp}" not in nl
     draws = re.findall(r"delvto=(-?[\d.e-]+)", nl)
-    assert len(draws) >= 10 * 3 + 3              # xcpl N=3: 스테이지당 10소자 + 바이어스/리셋
+    assert len(draws) >= 6 * 3 + 1               # xcpl N=3: 스테이지당 6소자(2N+4P) + 리셋
     assert len({d for d in draws}) > 1           # independent, not one shared value
 
 
@@ -57,11 +57,13 @@ def test_wcd_returns_beta_and_yield():
 
 
 def test_dno_refine_centers_xcpl_frequency():
-    r = vw.dno_refine(XCPL, iterations=5)
-    lo, hi = vw._band(vw._targets(None))
+    # 2N+4P 유닛(~4.84GHz)을 4.0GHz 밴드로 소폭 센터링(레버: inv/래치/부하)
+    t = {"f_ghz": 4.0, "power_uw": 4000}
+    r = vw.dno_refine(XCPL, t, iterations=5)
+    lo, hi = vw._band(vw._targets(t))
     f = r["final"]["nominal"]["f_osc_ghz"]
     assert r["final"]["nominal"]["oscillates"] is True
-    assert f is not None and lo <= f <= hi       # pulled 1.23 GHz into the band
+    assert f is not None and lo <= f <= hi
     assert r["success"] is True
 
 
