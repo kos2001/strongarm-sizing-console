@@ -64,7 +64,7 @@ def dev_keys(params):
     p = _full(params)
     if p.get("topology", "starved") == "xcpl":
         # xcpl 유닛(2N+4P)에는 스타빙이 없다 — 인버터 + 래치/리셋 PMOS 만
-        return ["invp", "invn", "xcplp", "rstp"]
+        return ["invp", "invn", "xcplp"]
     keys = list(vco_sim.DEV_KEYS)
     return keys
 

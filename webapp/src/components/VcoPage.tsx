@@ -21,11 +21,11 @@ const VCO_DEFAULTS: VcoParams = {
   devices: {
     invp: { w_um: 2.0, l_nm: 45, m: 2 }, invn: { w_um: 1.0, l_nm: 45, m: 2 },
     starvep: { w_um: 2.0, l_nm: 45, m: 2 }, starven: { w_um: 1.0, l_nm: 45, m: 1 },
-    xcplp: { w_um: 1.0, l_nm: 45, m: 2 }, rstp: { w_um: 6.0, l_nm: 45, m: 6 },
+    xcplp: { w_um: 1.0, l_nm: 45, m: 2 },
   },
 }
 // xcpl 유닛(2N+4P)에는 스타빙이 없다 — 인버터 + 래치/리셋 PMOS 만 사이징
-const XKEYS: VcoDeviceKey[] = ['invp', 'invn', 'xcplp', 'rstp']
+const XKEYS: VcoDeviceKey[] = ['invp', 'invn', 'xcplp']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
 type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'
 
@@ -59,7 +59,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const setModel = (m: 'ptm' | 'gaa2nm' | 'asap7') => {
     const v = m === 'gaa2nm' ? { vdd: 0.65, vctrl: 0.5, l: 14 } : m === 'asap7' ? { vdd: 0.7, vctrl: 0.45, l: 21 } : { vdd: 1.0, vctrl: 0.6, l: 45 }
     // asap7: 핀 수 기준 현실적 사이징(코어 4/2핀, starve 4/2핀, 커플러 1핀 — 2.96GHz 검증)
-    const wmap7: Record<VcoDeviceKey, number> = { invp: 0.28, invn: 0.14, starvep: 0.28, starven: 0.14, xcplp: 0.07, rstp: 0.28 }
+    const wmap7: Record<VcoDeviceKey, number> = { invp: 0.28, invn: 0.14, starvep: 0.28, starven: 0.14, xcplp: 0.07 }
     setParams((p) => ({
       ...p, model: m, vdd: v.vdd, vctrl: v.vctrl,
       devices: Object.fromEntries((Object.keys(p.devices) as VcoDeviceKey[]).map((k) => {
@@ -388,7 +388,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg inline-block" style={{ color: lay.drc.clean ? 'var(--good)' : 'var(--bad)', background: `color-mix(in srgb, ${lay.drc.clean ? 'var(--good)' : 'var(--bad)'} 12%, transparent)` }}>
               {T(lang, '셀 면적', 'cell area')} {lay.area_um2} µm² · {lay.drc.clean ? T(lang, 'DRC 통과', 'DRC CLEAN') : `${lay.drc.n_violations} DRC`}
             </div>
-            <p className="mono text-[11px] mt-2" style={lab}>{T(lang, '리셋 PMOS + N단(각 인버터 2쌍 Mp/Mn·Mpb/Mnb + 래치 Mx/Mxb) 멀티핑거 MOS + 가드링. PoC 레이아웃(사인오프 DRC 아님).', 'reset PMOS + N stages (2 inverter pairs + latch Mx/Mxb each) as multi-finger MOS + guard ring. PoC layout, not sign-off DRC.')}</p>
+            <p className="mono text-[11px] mt-2" style={lab}>{T(lang, 'N단(각 인버터 2쌍 Mp/Mn·Mpb/Mnb + 래치 Mx/Mxb — 유닛 소자만) 멀티핑거 MOS + 가드링. PoC 레이아웃(사인오프 DRC 아님).', 'N stages (2 inverter pairs + latch Mx/Mxb each — unit devices only) as multi-finger MOS + guard ring. PoC layout, not sign-off DRC.')}</p>
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '현재 소자 크기로 링 VCO의 트랜지스터 레벨 GDSII 레이아웃을 합성하고 규칙 DRC를 돌립니다.', 'Synthesize the transistor-level GDSII layout of the ring VCO from the current sizing and run rule DRC.')}</p>}
       </div>
@@ -472,8 +472,9 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
               ))}
             </div>
           ))}
-          <div className="grid grid-cols-3 gap-2 mt-2">
-            {([['vctrl', 'V_ctrl (V)', 0.05], ['n_stages', T(lang, '단수 N', 'stages N'), 2], ['cload_ff', 'C_L (fF)', 0.5]] as const).map(([f, label, step]) => (
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            {/* V_ctrl 입력 없음 — 2N+4P 유닛에는 튜닝 노브가 없다(주파수: 인버터 폭·N·C_L) */}
+            {([['n_stages', T(lang, '단수 N', 'stages N'), 2], ['cload_ff', 'C_L (fF)', 0.5]] as const).map(([f, label, step]) => (
               <label key={f} className="mono text-[10px]" style={lab}>{label}
                 <input type="number" step={step as number} min={f === 'n_stages' ? 3 : 0} disabled={busy}
                   value={params[f as 'vctrl' | 'n_stages' | 'cload_ff']} onChange={(e) => setTop(f as 'vctrl' | 'n_stages' | 'cload_ff', parseFloat(e.target.value) || 0)} style={{ width: '100%', marginTop: 3 }} />

@@ -164,11 +164,11 @@ def generate_layout(params, gds_path=None):
 
 
 def generate_vco_layout(params, gds_path=None):
-    """Ring VCO layout — 2N+4P 유닛: 리셋 PMOS + N단(각 Mp/Mn·Mpb/Mnb 인버터
-    2쌍 + 래치 Mx/Mxb) 멀티핑거 MOS 행 + 가드링 + DRC. 스타빙·바이어스 없음."""
+    """Ring VCO layout — 2N+4P 유닛만: N단(각 Mp/Mn·Mpb/Mnb 인버터 2쌍 +
+    래치 Mx/Mxb) 멀티핑거 MOS 행 + 가드링 + DRC. 그 외 소자 없음."""
     d = params.get("devices", {})
     n = int(params.get("n_stages", 5))
-    blocks = [("Mrst", d["rstp"], "p")]
+    blocks = []
     for i in range(1, n + 1):
         blocks += [(f"Mp{i}", d["invp"], "p"), (f"Mn{i}", d["invn"], "n"),
                    (f"Mpb{i}", d["invp"], "p"), (f"Mnb{i}", d["invn"], "n"),

@@ -34,10 +34,9 @@ CTX_COMP = {"topology": "strongarm", "model": "ptm", "vdd": 0.7, "cload_ff": 15,
                         "ncc": {"w_um": 4, "l_nm": 45, "m": 2}, "pcc": {"w_um": 9, "l_nm": 45, "m": 4},
                         "pre": {"w_um": 4, "l_nm": 45, "m": 2}, "prei": {"w_um": 4, "l_nm": 45, "m": 2}},
             "spec_targets": {"decision_time_ps": 400, "power_uw": 100, "offset_sigma_mv": 5}}
-CTX_VCO = {"topology": "xcpl", "model": "ptm", "vdd": 1.0, "vctrl": 0.6, "n_stages": 3, "cload_ff": 3.0,
+CTX_VCO = {"topology": "xcpl", "model": "ptm", "vdd": 1.0, "n_stages": 3, "cload_ff": 3.0,
            "devices": {"invp": {"w_um": 2, "l_nm": 45, "m": 2}, "invn": {"w_um": 1, "l_nm": 45, "m": 2},
-                       "starvep": {"w_um": 2, "l_nm": 45, "m": 2}, "starven": {"w_um": 1, "l_nm": 45, "m": 1},
-                       "xcplp": {"w_um": 0.4, "l_nm": 45, "m": 1}, "rstp": {"w_um": 2, "l_nm": 45, "m": 2}}}
+                       "xcplp": {"w_um": 1.0, "l_nm": 45, "m": 2}}}
 
 
 def _post(path, body, timeout=900):

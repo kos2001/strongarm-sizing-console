@@ -11,11 +11,13 @@ def test_xcpl_netlist_structure():
     # cross-coupled PMOS pair per stage: drain=own node, gate=complement
     assert "Mx1" in nl and "Mxb1" in nl
     assert f"Mx3" in nl                          # default n_stages=3, both rails coupled
-    # reset PMOS clamps o1 high while rstb is low, released by a PULSE source
-    assert "Mrst o1 rstb vdd vdd pmos" in nl
-    assert "Vrst rstb 0 PULSE(0" in nl
-    # reset-driven start-up: no artificial initial-condition kick-start
-    assert ".ic" not in nl and " uic" not in nl
+    # 유닛 소자만: 리셋/스타빙/바이어스 트랜지스터 없음
+    assert "Mrst" not in nl and "Mbp" not in nl and "vbp" not in nl
+    # 시동은 .ic 킥스타트(상보 초기조건) + uic
+    assert ".ic" in nl and " uic" in nl
+    # 스테이지당 정확히 6소자(2N+4P)
+    import re
+    assert len([l for l in nl.splitlines() if re.match(r"^M\w*1 ", l)]) == 6
 
 
 def test_starved_netlist_unchanged():
@@ -40,14 +42,11 @@ def test_xcpl_frequency_insensitive_to_vctrl():
     assert lo is not None and hi is not None and abs(hi - lo) < 0.05 * hi
 
 
-def test_xcpl_reset_holds_then_releases():
-    """o1 is clamped to VDD during reset (t < trst_ns), then oscillates."""
-    p = {**XCPL, "trst_ns": 2.0}
-    w = vco_sim.capture_vco_waveform(p, tstop_ns=12.0)
+def test_xcpl_kickstart_oscillates():
+    """유닛 소자만(리셋 없음) — .ic 킥스타트 후 정착 발진해야 한다."""
+    w = vco_sim.capture_vco_waveform(XCPL, tstop_ns=12.0)
     assert "error" not in w
     vdd = w["vdd"]
-    held = [v for t, v in zip(w["t_ns"], w["o1"]) if 0.5 <= t <= 1.8]
-    assert held and min(held) > 0.85 * vdd
     after = [v for t, v in zip(w["t_ns"], w["o1"]) if t >= 4.0]
     assert min(after) < 0.3 * vdd and max(after) > 0.7 * vdd
 

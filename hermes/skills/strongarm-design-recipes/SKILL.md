@@ -65,9 +65,10 @@ Method credit: probit noise-counting is the standard comparator technique
   to the rails + cross-coupled PMOS latch + reset. **No current starving, no
   V_ctrl knob**: frequency is set by inverter widths / n_stages / cload only
   (tuning sweep is flat by design — don't call that a bug).
-- Keep the latch strong enough for rail complementarity but not latching:
-  measured recentering `xcplp` 1µ×2, `rstp` 6µ×6 (reset must beat the
-  full-strength Mn1) → ptm 1.0 V ≈ 4.84 GHz, swing 0.80 V, anti-phase rails.
+- The circuit contains ONLY unit devices — no reset transistor either;
+  start-up is the simulator .ic kick-start (thermal noise in silicon).
+  Keep the latch strong enough for rail complementarity but not latching:
+  measured `xcplp` 1µ×2 → ptm 1.0 V ≈ 5.48 GHz, swing 0.96 V, anti-phase.
 - Frequency levers (order): inverter widths > n_stages (odd) > cload. The
   starved topology (explicit `topology:"starved"`) still has real V_ctrl
   tuning if a VCO knob is required.
