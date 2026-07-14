@@ -509,6 +509,45 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
               {!res && <p className="col-span-2 text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '소자 크기를 정하고 VCO를 실행하면 발진 주파수·전력·튜닝 곡선이 나옵니다.', 'Set the device sizes and run the VCO to see oscillation frequency, power, and the tuning curve.')}</p>}
             </div>
           )}
+          {view === 'opt' && opt?.stage_scan && (
+            <div className="rounded-2xl p-4 mt-3" style={{ background: 'var(--surface)', border: '1px solid color-mix(in srgb, var(--ag) 30%, var(--line))' }}>
+              <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={lab}>{T(lang, '단수 N 탐색 — 후보별 공칭 f vs 목표', 'stage-count search — nominal f per N vs target')}</div>
+              {(() => {
+                const sc = opt.stage_scan!
+                const fs = sc.points.map((p) => p.f_ghz ?? 0)
+                const fmax = Math.max(...fs, sc.target_f_ghz) * 1.15
+                const W = 360, H = 120, x0 = 34, y0 = 96
+                const bw = 44, gap = 32
+                const y = (f: number) => y0 - (f / fmax) * 78
+                return (
+                  <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: 420, display: 'block' }}>
+                    {/* 목표선 */}
+                    <line x1={x0 - 6} x2={W - 8} y1={y(sc.target_f_ghz)} y2={y(sc.target_f_ghz)} stroke="var(--warn)" strokeDasharray="4 3" strokeWidth={1} />
+                    <text x={W - 8} y={y(sc.target_f_ghz) - 3} fontSize={8} fill="var(--warn)" textAnchor="end" fontFamily="ui-monospace,monospace">{T(lang, '목표', 'target')} {sc.target_f_ghz}GHz</text>
+                    {sc.points.map((p, i) => {
+                      const x = x0 + i * (bw + gap)
+                      const chosen = p.n === sc.chosen_n
+                      const f = p.f_ghz ?? 0
+                      return (
+                        <g key={p.n}>
+                          <rect x={x} y={y(f)} width={bw} height={y0 - y(f)} rx={3}
+                            fill={chosen ? 'color-mix(in srgb, var(--ag) 45%, transparent)' : 'color-mix(in srgb, var(--si) 18%, transparent)'}
+                            stroke={chosen ? 'var(--ag)' : 'var(--line)'} strokeWidth={chosen ? 1.6 : 1} />
+                          <text x={x + bw / 2} y={y(f) - 4} fontSize={8.5} fill={chosen ? 'var(--ag)' : 'var(--muted)'} textAnchor="middle" fontFamily="ui-monospace,monospace">{p.f_ghz != null ? `${p.f_ghz}G` : '—'}</text>
+                          <text x={x + bw / 2} y={y0 + 12} fontSize={9} fill={chosen ? 'var(--ag)' : 'var(--faint)'} textAnchor="middle" fontFamily="ui-monospace,monospace">N={p.n}{chosen ? ' ✓' : ''}</text>
+                        </g>
+                      )
+                    })}
+                    <line x1={x0 - 6} x2={W - 8} y1={y0} y2={y0} stroke="var(--line)" strokeWidth={1} />
+                  </svg>
+                )
+              })()}
+              <p className="mono text-[10.5px] mt-1" style={{ color: 'var(--faint)' }}>
+                {T(lang, `N은 홀수(3~9)만 후보 — 목표에 가장 가까운 N=${opt.stage_scan.chosen_n} 선택 후 그 단수에서 W 최적화. 선택된 N은 에디터·회로도에 자동 반영됩니다.`,
+                  `Odd N only (3–9) — N=${opt.stage_scan.chosen_n} nearest the target is chosen, then W is optimized at that count. The chosen N lands in the editor/schematic.`)}
+              </p>
+            </div>
+          )}
           {view === 'opt' && opt && (
             <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg flex items-center justify-between gap-2" style={{ color: opt.success ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${opt.success ? 'var(--good)' : 'var(--warn)'} 12%, transparent)` }}>
               <span>{opt.success ? '✓' : '≈'} {T(lang, '목표', 'target')} {opt.target_f_ghz} GHz → {opt.nominal.f_osc_ghz} GHz · {opt.nominal.power_uw} µW · {opt.n_sims} SPICE evals{opt.n_surrogate_skips ? ` · ${opt.n_surrogate_skips} ${T(lang, '스킵', 'skipped')}` : ''}

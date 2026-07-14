@@ -237,6 +237,8 @@ export interface VcoOptimizeResult {
   n_surrogate_skips?: number
   // gaa2nm: 자동 사이징이 실제로 찾은 정수 스택 수(W = 스택 × 0.2µ)
   final_stacks?: Record<VcoDeviceKey, number> | null
+  // 단수 N 탐색 스캔(홀수 3~9): 후보별 공칭 f 와 선택된 N
+  stage_scan?: { points: { n: number; f_ghz: number | null; oscillates: boolean }[]; chosen_n: number; target_f_ghz: number } | null
   error?: string
 }
 export interface VcoWaveform { vdd: number; t_ns: number[]; o1: number[]; o2: number[]; period_ns: number | null; f_osc_ghz: number | null; error?: string }
