@@ -17,15 +17,15 @@ def test_nominal_verdict_margins():
 
 def test_dev_keys_by_topology():
     # xcpl 유닛(2N+4P)에는 스타빙이 없다
-    assert vw.dev_keys({}) == ["invp", "invn", "xcplp", "rstp"]   # 기본 = xcpl
+    assert vw.dev_keys({}) == ["invp", "invn", "xcplp"]   # 기본 = xcpl(유닛 소자만)
     assert vw.dev_keys({"topology": "starved"}) == ["invp", "invn", "starvep", "starven"]
-    assert vw.dev_keys(XCPL) == ["invp", "invn", "xcplp", "rstp"]
+    assert vw.dev_keys(XCPL) == ["invp", "invn", "xcplp"]
 
 
 def test_parameter_screening_ranks_inverters_for_frequency():
     r = vw.parameter_screening({}, delta=0.12)
     fr = r["rankings"]["f_osc_ghz"]
-    assert len(fr) == 4 and all(x["sensitivity"] >= 0 for x in fr)   # 2N+4P: inv/래치/리셋
+    assert len(fr) == 3 and all(x["sensitivity"] >= 0 for x in fr)   # 2N+4P: inv 2 + 래치
     # 스타빙이 없으니 주파수는 인버터(또는 래치 부하)가 지배해야 한다
     assert {fr[0]["key"], fr[1]["key"]} & {"invp", "invn", "xcplp"}
 
@@ -45,7 +45,7 @@ def test_mismatch_netlist_has_per_device_draws():
     nl = vw._netlist_with_mismatch(p, random.Random(1))
     assert "delvto={dvtn}" not in nl and "delvto={dvtp}" not in nl
     draws = re.findall(r"delvto=(-?[\d.e-]+)", nl)
-    assert len(draws) >= 6 * 3 + 1               # xcpl N=3: 스테이지당 6소자(2N+4P) + 리셋
+    assert len(draws) >= 6 * 3                   # xcpl N=3: 스테이지당 6소자(2N+4P)
     assert len({d for d in draws}) > 1           # independent, not one shared value
 
 

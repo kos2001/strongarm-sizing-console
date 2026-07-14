@@ -776,7 +776,7 @@ def parse_netlist_text(text):
       comparator(strongarm) — M1/M2=input, M7=tail, M3/M4=ncc, M5/M6=pcc,
                    MS3/MS4=pre(출력), MS1/MS2=prei(내부) — 구 표기(Mt, M7~M10)도 인식
       vco(xcpl)  — Mbp*/Mbpb*=starvep, Mp*/Mpb*=invp, Mn*/Mnb*=invn,
-                   Mbn*/Mbnb*=starven, Mx*/Mxb*=xcplp, Mrst=rstp (스테이지 번호로 N)
+                   Mbn*/Mbnb*=starven(구 덱), Mx*/Mxb*=xcplp (스테이지 번호로 N)
     규칙 밖 넷리스트도 소자 표/노드는 반환한다(kind='unknown').
     """
     import re
@@ -823,7 +823,7 @@ def parse_netlist_text(text):
         stages = [int(mm.group(1)) for n in names for mm in [_re.match(r"Mp(\d+)$", n)] if mm]
         role_of = [("Mbpb", "starvep"), ("Mbp", "starvep"), ("Mpb", "invp"), ("Mp", "invp"),
                    ("Mnb", "invn"), ("Mn", "invn"), ("Mbnb", "starven"), ("Mbn", "starven"),
-                   ("Mxb", "xcplp"), ("Mx", "xcplp"), ("Mrst", "rstp")]
+                   ("Mxb", "xcplp"), ("Mx", "xcplp")]   # Mrst(구 덱)는 매핑하지 않음 — 유닛에 없음
         dev_params = {}
         for d in devices:
             for prefix, key in role_of:

@@ -102,22 +102,18 @@ export default function VcoSchematic({ devices, nStages }: { devices: Record<Vco
     }
 
     {
-      txt(300, 22, 'unit cell: 2 NMOS + 4 PMOS (2 latched) — no current starving', C.dim, 9, 'middle')
+      txt(300, 22, 'unit cell: 2 NMOS + 4 PMOS (2 latched) — 유닛 소자 외 없음', C.dim, 9, 'middle')
       const XA = stack(100, '', 'o[i-1]')     // rail A -> node o
       const XB = stack(490, 'b', 'ob[i-1]')   // rail B -> node ob
       const outY = 156
       // node stubs: o runs right into the middle channel (Mrst/Mx land on it),
       // ob runs left from rail B (Mxb lands on it; crosses rail-B gate bus, no dot)
-      const mr = mos(190, 76, true, 'Mrst', sz('rstp'))
       const mx = mos(270, 76, true, 'Mx', sz('xcplp'))
       const mxb = mos(350, 76, true, 'Mxb', sz('xcplp'), true) // flip — 게이트가 안쪽(X 결선)
       dot(XA, outY); wire([[XA, outY], [mx.s[0] + 10, outY]]); txt(mx.s[0] + 16, outY + 3, 'o', C.net, 9.5)
       dot(XB, outY); wire([[XB, outY], [mxb.s[0], outY]]); txt(XB + 6, outY - 6, 'ob', C.net, 9.5)
       // sources at vdd
-      wire([[mr.d[0], mr.d[1]], [mr.d[0], VDD]]); wire([[mx.d[0], mx.d[1]], [mx.d[0], VDD]]); wire([[mxb.d[0], mxb.d[1]], [mxb.d[0], VDD]])
-      // reset PMOS: clamps o (stage 1) to vdd while rstb is low
-      wire([[mr.s[0], mr.s[1]], [mr.s[0], outY]]); dot(mr.s[0], outY)
-      wire([[mr.g[0], mr.g[1]], [mr.g[0] - 8, mr.g[1]]]); txt(mr.g[0] - 11, 79, 'rstb', C.prop, 8, 'end')
+      wire([[mx.d[0], mx.d[1]], [mx.d[0], VDD]]); wire([[mxb.d[0], mxb.d[1]], [mxb.d[0], VDD]])
       // cross-coupled PMOS pair (P1): drains on o/ob, gates crossed (X)
       wire([[mx.s[0], mx.s[1]], [mx.s[0], outY]]); dot(mx.s[0], outY)                     // Mx -> o
       wire([[mxb.s[0], mxb.s[1]], [mxb.s[0], outY]]); dot(mxb.s[0], outY)                 // Mxb -> ob

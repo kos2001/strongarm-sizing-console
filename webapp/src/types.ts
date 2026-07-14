@@ -195,7 +195,7 @@ export interface OptimizeResult {
 }
 
 // ---- MOSFET ring VCO ----
-export type VcoDeviceKey = 'invp' | 'invn' | 'starvep' | 'starven' | 'xcplp' | 'rstp'
+export type VcoDeviceKey = 'invp' | 'invn' | 'starvep' | 'starven' | 'xcplp'
 export type VcoTopology = 'starved' | 'xcpl'
 export interface VcoParams {
   vdd: number
@@ -303,7 +303,6 @@ export const VCO_DEVICE_META: Record<VcoDeviceKey, { name: string; role: { ko: s
   starvep: { name: 'Mbp', role: { ko: 'PMOS 전류 스타빙', en: 'PMOS current-starve' } },
   starven: { name: 'Mbn', role: { ko: 'NMOS 전류 스타빙 (V_ctrl)', en: 'NMOS current-starve (V_ctrl)' } },
   xcplp: { name: 'Mx', role: { ko: 'P1 — 교차 결합 PMOS (약하게)', en: 'P1 — cross-coupled PMOS (keep weak)' } },
-  rstp: { name: 'Mrst', role: { ko: '리셋 PMOS — o1 클램프', en: 'reset PMOS — clamps o1' } },
 }
 
 export const DEVICE_META: Record<DeviceKey, { name: string; role: string; world: 'si' | 'ag' }> = {

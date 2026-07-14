@@ -201,8 +201,8 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
   },
   vcoopt: {
     what: {
-      ko: '목표 발진 주파수를 입력하면, 그 주파수를 만족하면서 전력을 최소화하도록 4개 소자군(인버터 Mp/Mn, 래치 Mx, 리셋 Mrst)의 크기를 자동 탐색합니다. 비교기의 "자동 최적화"와 동일한 방식입니다.',
-      en: 'Enter a target oscillation frequency and the optimizer auto-sizes the four device groups (inverters Mp/Mn, latch Mx, reset Mrst) to hit it at minimum power — the same method as the comparator\'s auto-find.',
+      ko: '목표 발진 주파수를 입력하면, 그 주파수를 만족하면서 전력을 최소화하도록 3개 소자군(인버터 Mp/Mn·Mpb/Mnb, 래치 Mx)의 크기를 자동 탐색합니다. 비교기의 "자동 최적화"와 동일한 방식입니다.',
+      en: 'Enter a target oscillation frequency and the optimizer auto-sizes the three device groups (inverters, latch Mx) to hit it at minimum power — the same method as the comparator\'s auto-find.',
     },
     read: {
       ko: '탐색이 끝나면 결과가 편집기에 적용되고, 달성 주파수·전력·발진 여부와 갱신된 튜닝 곡선이 나옵니다. ✓ = 목표 ±10% 이내.',
