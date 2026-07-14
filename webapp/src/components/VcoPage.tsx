@@ -95,7 +95,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     const mm = await vcoWickedMismatch(params); setWk((w) => ({ ...w, mm }))
     const ys = await vcoWickedYieldsweep(params, targets); setWk((w) => ({ ...w, ys }))
   })
-  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning); setTimeout(() => document.getElementById('vco-tuning-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150) } })
+  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, n_stages: r.final_params.n_stages ?? p.n_stages, devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning); setTimeout(() => document.getElementById('vco-tuning-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150) } })
   const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
   const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
   const runPush = () => guard('push', async () => { const r = await vcoPushing(params); if (!r.error) setPush(r) })
