@@ -114,7 +114,9 @@ On the seed sizing it is **27.6 mV differential — 14.9× the offset σ (1.85 m
 grows the input pair and shrinks the latch/precharge pairs, whose mismatch is then
 free. Measured: input 8.0→19.12 µm and ncc 4.0→1.16 µm, so the reported σ *improves*
 1.285→0.889 mV while the real budget goes 1.669→**3.392 mV**, with `ncc` becoming
-dominant. Real-to-reported: **3.82× on the optimizer's own output**.
+dominant. Across four seeds `ncc` was dominant **every time** and the real-to-reported
+ratio ran **2.3×–7.1×** — the mechanism is reliable, the magnitude is not, so read the
+budget rather than predicting the factor.
 
 The result now carries `offset_budget` and `offset_budget_warning`. **When the warning
 is present, quote `offset_budget.total_sigma_mv`, not the `offset` field**, and tell

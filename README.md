@@ -386,8 +386,15 @@ and precharge pairs, whose mismatch is then free:
 
 **The reported offset improves (1.285 → 0.889 mV) while the real offset doubles
 (1.669 → 3.392 mV)**, and `ncc` overtakes the input pair as the dominant contributor.
-Ratio of real to reported: 1.30× on the seed, **3.82× on the optimizer's own output**.
 A textbook case of optimising against an incomplete model.
+
+The *mechanism* is fully reproducible; the *magnitude* is not. Across four optimizer
+seeds the latch always collapses (ncc 0.50–1.19 µm from a 4.0 µm seed) and **`ncc` is
+the dominant contributor in every run**, but the real-to-reported ratio lands anywhere
+from **2.3× to 7.1×** depending on where the stochastic search settles — so treat the
+ratio as "large and unpredictable", not as a number. The σ estimates themselves carry
+~15–35% run-to-run spread at these Monte-Carlo sample counts, which is why the warning
+triggers on a coarse 1.25× threshold rather than reporting a precise factor.
 
 Pricing every pair inside the search needs a per-group referral factor this code does
 not have — and fitting one on two data points is not something to slip into a cost
