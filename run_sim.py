@@ -123,9 +123,117 @@ DEFAULT_PARAMS = {
 }
 
 
-def _dev(d, vt="dvtn"):
-    # delvto = process-corner Vth shift (0 nominal); dvtn/dvtp set via .param
-    return f"W={d['w_um']}u L={d['l_nm']}n M={d['m']} delvto={{{vt}}}"
+# Polarity per device group — the latch is NMOS-below / PMOS-above, the
+# precharge switches are PMOS. Used to pick the right flavor table.
+NMOS_DEVICES = ("input", "tail", "ncc")
+PMOS_DEVICES = ("pcc", "pre", "prei")
+
+
+# --- threshold-voltage flavor as a design variable -----------------------------
+# Vth is a real per-device knob on a comparator, not just a corner perturbation:
+# measured on asap7, moving every device lvt->rvt trades 35.3->51.0 ps for
+# 12.2->9.2 uW, and `tail` alone to the low-Vth flavor buys 35.3->34.0 ps at
+# essentially unchanged power. Mixed assignments are not dominated by uniform
+# ones, so it is worth searching rather than prescribing.
+#
+# Devices carry a backend-neutral level; each backend maps it to what it really
+# has. "svt" is the default everywhere and reproduces the previous netlist
+# exactly, so adding this field changes no existing result.
+#
+# LIMITATION — per-flavor A_VT is not modelled. `avt_mv_um` is one number for the
+# whole design, so a flavor change moves offset only through the *simulated* Vth
+# (and through W·L·M), never through a different mismatch coefficient. Real
+# implants do differ in A_VT, so an offset-critical flavor decision needs the
+# foundry's per-flavor Pelgrom data, which none of these cards carry. Speed and
+# power effects are simulated and trustworthy; the offset effect is partial.
+VT_LEVELS = ("lvt", "svt", "hvt")        # lower Vth (fast) / standard / higher Vth
+
+# ASAP7 ships four flavors in the adapted cards (slvt/lvt/rvt/sram); the code
+# used to pin every device to `lvt`, so `lvt` is what "svt" maps to here and the
+# neutral "lvt" reaches down to slvt.
+_VT_ASAP7 = {"lvt": "slvt", "svt": "lvt", "hvt": "rvt"}
+
+# SKY130 has real LVT devices for both polarities but **no nfet_01v8_hvt** — only
+# the PMOS has an HVT variant. An nmos asked for hvt falls back to svt; callers
+# are told via `vt_fallbacks` rather than being silently given something else.
+_VT_SKY130_N = {"lvt": "sky130_fd_pr__nfet_01v8_lvt", "svt": "sky130_fd_pr__nfet_01v8"}
+_VT_SKY130_P = {"lvt": "sky130_fd_pr__pfet_01v8_lvt", "svt": "sky130_fd_pr__pfet_01v8",
+                "hvt": "sky130_fd_pr__pfet_01v8_hvt"}
+
+# Minimum usable drawn L per sky130 device. The smallest `lmin` bin edge in each
+# device's `.pm3.spice` card is 0.145 µm for most of them, but **pfet_01v8_lvt is
+# only characterized from 0.345 µm** — give it a shorter L and no bin matches, so
+# ngspice aborts the whole deck.
+#
+# The values here sit just *above* the bin edge, not on it: the binning compares
+# strictly, so l = 0.145 exactly falls through every bin and fails the same way
+# a too-short L does (which is why the original code used 0.15, not 0.145).
+#
+# This is a real PDK restriction, not a modelling choice: picking LVT for a PMOS
+# group forces its L up ~2.3x, costing speed and area. The clamp is reported via
+# `vt_plan` rather than applied silently.
+_SKY_MIN_L_UM = {
+    "sky130_fd_pr__nfet_01v8": 0.15,
+    "sky130_fd_pr__nfet_01v8_lvt": 0.15,
+    "sky130_fd_pr__pfet_01v8": 0.15,
+    "sky130_fd_pr__pfet_01v8_hvt": 0.15,
+    "sky130_fd_pr__pfet_01v8_lvt": 0.35,
+}
+_SKY_MIN_L_DEFAULT = 0.15
+
+
+def sky130_min_l_um(sub):
+    return _SKY_MIN_L_UM.get(sub, _SKY_MIN_L_DEFAULT)
+
+# PTM45 / GAA2NM are single generic BSIM4 cards with no flavors, so there the
+# level is applied as a delvto implant *proxy* — physically it only shifts Vth,
+# it does not carry the mobility/leakage/A_VT differences a real flavor implant
+# would. Scaled by skew_scale for the same reason the corner skew is: 50 mV is
+# too coarse against gaa2nm's |Vth0| = 0.20 V.
+_VT_PROXY_V = {"lvt": -0.05, "svt": 0.0, "hvt": +0.05}
+
+
+def vt_of(d):
+    """The requested Vt level for one device dict, defaulting to standard."""
+    v = (d or {}).get("vt", "svt")
+    return v if v in VT_LEVELS else "svt"
+
+
+def vt_offset_v(d, p, kind):
+    """delvto shift (volts) for the generic-card backends. `kind` is unused for
+    now — both polarities use the same implant magnitude — but is kept so an
+    asymmetric proxy can be introduced without changing callers."""
+    return _VT_PROXY_V[vt_of(d)] * skew_scale(p)
+
+
+def vt_plan(p):
+    """What the Vt request actually turns into: the level applied per device, any
+    level the backend could not honour, and any L the PDK forced up. Reported by
+    the optimizer/API so neither a fallback nor a geometry change is silent."""
+    model, plan, fell, clamps = p.get("model"), {}, {}, {}
+    for k, d in p["devices"].items():
+        want = vt_of(d)
+        got = want
+        if model == "sky130" and want == "hvt" and k in NMOS_DEVICES:
+            got = "svt"                     # no nfet_01v8_hvt exists in sky130
+        plan[k] = got
+        if got != want:
+            fell[k] = f"{want}->{got} (backend has no {want} for this polarity)"
+        if model == "sky130":
+            tbl = _VT_SKY130_N if k in NMOS_DEVICES else _VT_SKY130_P
+            sub = tbl.get(got) or tbl["svt"]
+            floor = sky130_min_l_um(sub)
+            if d.get("l_nm", 0) / 1000.0 < floor:
+                clamps[k] = (f"L {d['l_nm']}nm -> {floor * 1000:.0f}nm "
+                             f"({sub.replace('sky130_fd_pr__', '')} min bin)")
+    return {"levels": plan, "fallbacks": fell, "l_clamps": clamps}
+
+
+def _dev(d, vt="dvtn", vt_shift=0.0):
+    # delvto = corner Vth shift (dvtn/dvtp via .param) + the device's own implant
+    # level; the two compose rather than overwrite each other.
+    shift = f"{vt}{vt_shift:+g}" if vt_shift else vt
+    return f"W={d['w_um']}u L={d['l_nm']}n M={d['m']} delvto={{{shift}}}"
 
 
 def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
@@ -169,8 +277,12 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
 
         def dline(label, nodes, dk, kind):
             dd = d[dk]
-            l_um = max(dd["l_nm"] / 1000.0, 0.15)                # SKY130 min L
-            sub = "sky130_fd_pr__nfet_01v8" if kind == "n" else "sky130_fd_pr__pfet_01v8"
+            tbl = _VT_SKY130_N if kind == "n" else _VT_SKY130_P
+            # real PDK devices per Vt level; nmos has no hvt, fall back to svt
+            sub = tbl.get(vt_of(dd)) or tbl["svt"]
+            # min L is per device — pfet_01v8_lvt starts at 0.345 µm, and a
+            # shorter L matches no bin and aborts the deck
+            l_um = max(dd["l_nm"] / 1000.0, sky130_min_l_um(sub))
             return f"X{label} {nodes} {sub} w={dd['w_um']} l={round(l_um, 3)} nf=1 mult={dd['m']}"
     elif asap:
         corner = p.get("corner", "TT").upper()
@@ -180,7 +292,9 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
 
         def dline(label, nodes, dk, kind):
             dd = d[dk]
-            mdl = "nmos_lvt" if kind == "n" else "pmos_lvt"
+            # real ASAP7 flavor per Vt level (slvt/lvt/rvt already in the cards);
+            # orthogonal to the corner skew, which stays in delvtrand
+            mdl = f"{'nmos' if kind == 'n' else 'pmos'}_{_VT_ASAP7[vt_of(dd)]}"
             vt = "dvtn" if kind == "n" else "dvtp"
             return (f"N{label} {nodes} {mdl} l={dd['l_nm']}n "
                     f"nfin={nfin_of(dd)} delvtrand={{{vt}}}")
@@ -190,7 +304,10 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
         param_line = f".param dvtn={nskew} dvtp={-pskew_p}"
 
         def dline(label, nodes, dk, kind):
-            return f"{label} {nodes} {'nmos' if kind == 'n' else 'pmos'} {_dev(d[dk], 'dvtn' if kind == 'n' else 'dvtp')}"
+            # no flavors on a generic card — the level becomes a delvto implant
+            # proxy, added to (not replacing) the corner skew param
+            return (f"{label} {nodes} {'nmos' if kind == 'n' else 'pmos'} "
+                    f"{_dev(d[dk], 'dvtn' if kind == 'n' else 'dvtp', vt_offset_v(d[dk], p, kind))}")
 
     clkb_line = ""
     dev_block = "\n".join([
@@ -370,7 +487,13 @@ _SKY_CACHE = os.path.join(tempfile.gettempdir(), "strongarm_sky130_corners")
 
 # The only sky130 primitives this tool instantiates (see gen_netlist / _dev_line).
 # Everything else in a corner deck is a model bank we pay to parse and never use.
-_SKY_USED_DEVICES = ("nfet_01v8", "pfet_01v8")
+# Derived from the Vt flavor tables rather than written out, so the prune
+# whitelist and the set of devices gen_netlist can actually instantiate cannot
+# drift apart. They did drift once: the prune landed keeping only the SVT pair,
+# and the first LVT deck died on `unknown subckt: …nfet_01v8_lvt`.
+_SKY_USED_DEVICES = tuple(sorted(
+    {s.replace("sky130_fd_pr__", "")
+     for s in list(_VT_SKY130_N.values()) + list(_VT_SKY130_P.values())}))
 
 
 def _sky130_keep_include(base):
@@ -397,7 +520,7 @@ def _sky130_prune_corner_file(path, tag):
     if os.environ.get("SKY130_PRUNE") == "0":   # escape hatch: parse the full deck
         return path
     srcdir = os.path.dirname(os.path.abspath(path))
-    out = os.path.join(_SKY_CACHE, f"corner_{os.path.basename(path)}_{tag}_v3.spice")
+    out = os.path.join(_SKY_CACHE, f"corner_{os.path.basename(path)}_{tag}_v4.spice")
     try:
         if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(path):
             return out
@@ -446,7 +569,9 @@ def sky130_corner_lib(corner="tt"):
     # prune setting is part of the name — otherwise flipping SKY130_PRUNE would
     # silently reuse a lib built the other way.
     pr = "full" if os.environ.get("SKY130_PRUNE") == "0" else "lean"
-    out = os.path.join(_SKY_CACHE, f"sky130_{corner}_{tag}_v3{pr}.lib.spice")
+    # v4: the kept device set now includes the Vt flavors (lvt/hvt), so a v3
+    # cache file would be missing banks the netlist can reference
+    out = os.path.join(_SKY_CACHE, f"sky130_{corner}_{tag}_v4{pr}.lib.spice")
     try:
         if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(full):
             return out

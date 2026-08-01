@@ -47,6 +47,27 @@ On `asap7`/`gaa2nm` the optimizer runs integer coordinate descent and returns
 `final_stacks` (per-device fin/stack counts) — report sizes in those units.
 Never present `gaa2nm` numbers as sign-off quality; it is a trend-study card.
 
+### `vt` — Vth is searched too, not just W
+
+Every device takes `"vt": "lvt" | "svt" | "hvt"` (default `svt`). `strongarm_optimize`
+searches it after the widths converge and reports `final_vt` + `vt_note`; pass
+`optimize_vt: false` to skip it.
+
+Report the chosen level per device alongside W — it is part of the sizing, and on
+a real PDK it is a mask choice the user has to act on. Two things to carry over
+verbatim when they appear:
+
+- `final_vt.fallbacks` — **sky130 has no `nfet_01v8_hvt`.** An NMOS asked for hvt
+  silently becomes svt unless you say so.
+- `final_vt.l_clamps` — **sky130's `pfet_01v8_lvt` starts at L = 0.345 µm.** Choosing
+  it forces L up ~2.3x, which is why LVT PMOS measures *slower* there (189.9 ps vs
+  160.6 ps svt). Do not tell a user "LVT is faster" on sky130 PMOS.
+
+Vth genuinely moves the metrics (asap7: 35.3→51.0 ps and 12.2→9.2 µW across the
+flavors), and mixed assignments are not dominated by uniform ones — so let the
+search decide rather than prescribing a flavor. Offset caveat: per-flavor `A_VT`
+is not modelled, so flavor affects offset only through the simulated Vth.
+
 ## Tool-call discipline
 
 **Which** tool to reach for, and what each one costs in SPICE seconds, is in
