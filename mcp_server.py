@@ -192,6 +192,18 @@ TOOLS = [
                         "vdiff": {"type": "number"}}},
     },
     {
+        "name": "strongarm_cmrange",
+        "description": "Input common-mode range: sweeps vcm_frac and reports where the comparator "
+                       "resolves at all (a HARD bound, not a slow corner), plus decision time and power "
+                       "per operating point. On the seed sizing the usable range is vcm_frac 0.50-0.95 "
+                       "with a 9.4x speed spread, and the default 0.62 is 2.7x slower than the fastest "
+                       "usable point at NO offset cost — offset sigma is flat in Vcm. Returns no CMRR "
+                       "number: the deck is symmetric so systematic offset is structurally zero.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA,
+                        "vcm_fracs": {"type": "array", "items": {"type": "number"}},
+                        "with_offset": {"type": "boolean"}, "n_mc": {"type": "integer"}}},
+    },
+    {
         "name": "strongarm_offset_budget",
         "description": "Offset sigma broken down PER MATCHED PAIR (input, ncc, pcc, pre, prei), each "
                        "perturbed by its own Pelgrom sigma from its own W*L*M, plus the RSS total. The "
@@ -375,6 +387,7 @@ _TOOL_ENDPOINT = {
     "strongarm_ber": "/api/ber",
     "strongarm_noise_probit": "/api/noise/probit",
     "strongarm_kickback": "/api/kickback",
+    "strongarm_cmrange": "/api/cmrange",
     "strongarm_offset_budget": "/api/offset/budget",
     "strongarm_sensitivity": "/api/sensitivity",
     "strongarm_maxfclk": "/api/maxfclk",
