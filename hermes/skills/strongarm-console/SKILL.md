@@ -108,6 +108,24 @@ On the seed sizing it is **27.6 mV differential — 14.9× the offset σ (1.85 m
   offset by widening the input pair, mention the kickback cost. Cutting kickback
   instead wants a bigger sampling cap or a stiffer driver — system changes.
 
+## ⚠ The optimizer's reported offset is optimistic — check the warning
+
+`strongarm_optimize` prices **only the input pair's** mismatch, so minimising power it
+grows the input pair and shrinks the latch/precharge pairs, whose mismatch is then
+free. Measured: input 8.0→19.12 µm and ncc 4.0→1.16 µm, so the reported σ *improves*
+1.285→0.889 mV while the real budget goes 1.669→**3.392 mV**, with `ncc` becoming
+dominant. Real-to-reported: **3.82× on the optimizer's own output**.
+
+The result now carries `offset_budget` and `offset_budget_warning`. **When the warning
+is present, quote `offset_budget.total_sigma_mv`, not the `offset` field**, and tell
+the user which device dominates. Recommending "grow the input pair to cut offset"
+after an optimize run is usually wrong — the latch is the problem by then.
+
+`strongarm_fullflow` now includes offset budget, kickback, hysteresis (at the design's
+own max f_clk) and common-mode range. Stages with no target come back `ok: null` and
+are listed in `reported_not_judged` — **`overall: true` does not mean everything
+passed**, so read that list before saying a design signed off.
+
 ## Hysteresis: the error that does not calibrate out
 
 `strongarm_hysteresis` primes the latch one way, then finds the input threshold on
