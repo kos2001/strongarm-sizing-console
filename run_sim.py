@@ -820,9 +820,11 @@ def measure_offset(p, rng):
 
 def run_sim(params, seed=12345, do_offset=True, with_noise=False):
     import random
-    p = dict(DEFAULT_PARAMS)
-    p.update({k: v for k, v in params.items() if k != "devices"})
-    p["devices"] = merge_devices(params.get("devices"))
+    # _full, not a local copy of the merge: this function used to duplicate it,
+    # so per-model defaults added to _full (A_VT, nominal L) silently did not
+    # apply to the main entry point — asap7 kept running at the 45 nm-class seed
+    # length through the API while the UI got 21 nm.
+    p = _full(params)
     rng = random.Random(seed)
     result = {"nominal": measure_nominal(p, with_noise=with_noise)}
     if do_offset:
@@ -1021,9 +1023,7 @@ def capture_waveform(params, npoints=260):
     """Run one transient and return the actual ngspice waveform (clk, outp,
     outn) so the UI can plot the real regeneration event for this sizing."""
     import tempfile as _tf
-    p = dict(DEFAULT_PARAMS)
-    p.update({k: v for k, v in params.items() if k != "devices"})
-    p["devices"] = {**DEFAULT_PARAMS["devices"], **params.get("devices", {})}
+    p = _full(params)          # same merge as run_sim — not a third copy of it
     fd, wf = _tf.mkstemp(suffix=".txt")
     os.close(fd)
     try:
