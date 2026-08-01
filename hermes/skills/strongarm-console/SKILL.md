@@ -89,6 +89,37 @@ leaves L where the user fixed it (`optimize_l` defaults to false) and reports
   question, and worth mentioning that on ptm45 the input pair at 160 nm beats the
   seed's 80 nm on both speed (452 vs 530 ps) and matching (1.39 vs 1.85 mV σ).
 
+## Before claiming a resolution, check kickback
+
+`strongarm_kickback` measures how much the comparator disturbs the voltage it is
+measuring — charge pushed back through Cgd when the outputs slew, into the DAC's
+held sample. **It used to be unmeasurable**: the deck drove the gates from ideal
+sources, which hold the node rigid.
+
+On the seed sizing it is **27.6 mV differential — 14.9× the offset σ (1.85 mV) and
+4.8× the minimum usable input (5.72 mV)**. So:
+
+- Never quote an offset σ or a resolution as *the* input-referred error without
+  saying whether kickback was checked. It is usually the biggest term.
+- `rs_ohm`/`cs_ff` describe the **driver**, not the comparator (defaults 2 kΩ /
+  50 fF). Say which values you assumed; ask for the real front end if it matters.
+- **It fights the offset lever.** Growing the input pair improves matching and
+  worsens kickback (6.2 → 37.9 mV over W = 2 → 24 µm). If a user asks to cut
+  offset by widening the input pair, mention the kickback cost. Cutting kickback
+  instead wants a bigger sampling cap or a stiffer driver — system changes.
+
+## Offset is not just the input pair
+
+`strongarm_offset_budget` breaks offset σ down per matched pair, each perturbed by
+its own Pelgrom σ. Measured: input 1.448 mV, ncc 0.611, prei 0.490, pre 0.462,
+pcc 0.424 → **RSS 1.761 mV, so the plain offset number understates by 22%**.
+
+Report the RSS total when the user asks for offset sign-off, and name
+`dominant[0]` when they ask what to grow. Two things worth passing on: the latch
+devices have a *larger* Vth σ but contribute *less* input-referred offset (latch
+mismatch is divided by the input pair's gain), and `tail` is excluded because a
+single device's mismatch is common-mode, not offset.
+
 ## Input resolution: one call, not three
 
 `/api/resolution` (`strongarm_run_sim`'s console sibling) returns the τ sweep, the

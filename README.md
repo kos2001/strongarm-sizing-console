@@ -190,6 +190,65 @@ Two bugs this surfaced, both fixed:
    optimizer paid an offset penalty against that phantom. All area math now goes
    through `run_sim.effective_l_nm` / `gate_area_um2`.
 
+## Gaps against real sign-off criteria
+
+Two things a comparator design review asks for that the tool could not report. Both
+are opt-in — with the new inputs unset, every generated deck is byte-identical to
+before, verified against the previous revision on all four backends.
+
+### Kickback — was unmeasurable, not merely unmeasured
+
+`Vinp inpx 0 …` drove the gates from **ideal** voltage sources. An ideal source holds
+its node rigid, so the charge the input pair pushes back through Cgd when the outputs
+slew produced exactly zero disturbance. A real SAR comparator is driven by the DAC's
+finite output impedance into its own held sampling capacitance, and that held value
+is what kickback corrupts — along with every later bit decision in the conversion.
+
+`rs_ohm` / `cs_ff` insert that network (`/api/kickback`, `strongarm_kickback`). They
+describe the *driver*, not the comparator, so they are inputs; the 2 kΩ / 50 fF
+defaults are a plausible SAR front end, not a property of this circuit.
+
+Measured on the seed sizing, next to the budget the tool was already optimizing:
+
+| quantity | value |
+|---|---|
+| offset σ (input pair, MC) | 1.85 mV |
+| input-referred noise σ | 0.053 mV |
+| min usable input @ BER 1e-3 | 5.72 mV |
+| **kickback, differential** | **27.6 mV** |
+| **kickback, single-ended** | **67.9 mV** |
+
+Kickback is **14.9× the offset σ** being minimised and **4.8× the smallest input the
+tool claims to resolve**. Worse, it opposes the offset lever: growing the input pair
+buys matching and pays kickback (6.2 → 27.6 → 37.9 mV across W = 2 → 8 → 24 µm), a
+trade the optimizer cannot currently see. Sanity checks all hold — kickback rises
+with input-pair Cgd, falls with the held capacitance, and falls with a stiffer driver.
+
+### Offset budget past the input pair
+
+`measure_offset` modelled the input pair alone; the code called latch and tail
+mismatch "a documented extension point". For a StrongARM the cross-coupled pair
+fires exactly when regeneration is deciding, and the precharge pair leaves the
+outputs at unequal starting points. `/api/offset/budget`
+(`strongarm_offset_budget`) perturbs each matched pair by **its own** Pelgrom σ from
+its own W·L·M, one at a time, and reports the breakdown:
+
+| device | Vth σ | input-referred offset σ |
+|---|---|---|
+| `input` | 1.25 mV | **1.448 mV** |
+| `ncc` | 3.33 mV | 0.611 mV |
+| `prei` | 3.33 mV | 0.490 mV |
+| `pre` | 3.33 mV | 0.462 mV |
+| `pcc` | 1.57 mV | 0.424 mV |
+| **RSS total** | | **1.761 mV** |
+
+So the input pair does dominate — the original comment was right about that — but the
+input-pair-only figure **understates the total by 22%**. Note the latch devices carry
+a *larger* Vth σ (they are smaller) yet contribute *less* input-referred offset,
+because latch mismatch is divided by the input pair's gain on the way to the input.
+`tail` is excluded on purpose: one device, no differential partner, so its mismatch
+is common-mode rather than offset.
+
 ## Merging related sidebar pages
 
 The console has 24 pages (14 comparator + 10 VCO), several of which are views of
