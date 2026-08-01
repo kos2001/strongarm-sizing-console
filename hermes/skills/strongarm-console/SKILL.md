@@ -89,6 +89,35 @@ leaves L where the user fixed it (`optimize_l` defaults to false) and reports
   question, and worth mentioning that on ptm45 the input pair at 160 nm beats the
   seed's 80 nm on both speed (452 vs 530 ps) and matching (1.39 vs 1.85 mV σ).
 
+## Corners: what one corner does and does not prove
+
+`strongarm_optimize` sizes against a single corner (slow-N / −40 °C / 0.9·VDD) and
+returns `corner_guarantee`. Measured over 24 random sizings × 45 corners:
+
+- **Functionality: that corner is sufficient.** 0/24 sizings passed it and failed
+  another, and the failing sets are nested. Without the guard, nominal-only sizing
+  left 5/45 corners non-functional.
+- **Timing: it is not.** The slowest corner landed on 16 different corners and was
+  never the assumed one; the 3 most frequent worst corners still under-estimate
+  worst-case delay by up to 73%.
+
+So **never report timing closure from `final_corner`** — say "functional across
+corners" and run `strongarm_pvt` (45 corners) before claiming a delay spec holds.
+Quote `corner_guarantee` if the user asks how much the sizing run proved.
+
+## Pareto ⇄ sizing: answer with the device, not the curve
+
+`strongarm_pareto` returns `sizing_relation` — per device, how far its width
+travels along the front and its rank correlation with each objective, plus
+`drivers` (ordered) and `fixed_along_front`. Use it to answer trade-off questions
+as sizing moves: on the comparator's power↔speed front the drivers are `tail`
+(+0.98) and `input` (+0.97), while `pre` is ~uncorrelated (−0.15) because it only
+conducts during reset. Telling the user "buy speed with tail width, not precharge
+width" is more useful than handing over the curve.
+
+Caveat to pass on: on a 2-objective front the two correlations are exact negatives
+by construction — one finding per device, not two.
+
 ## Physics cheatsheet (for sane proposals)
 
 - Comparator decision time ∝ C_L·V / (gm_input · regeneration); widen `input`
