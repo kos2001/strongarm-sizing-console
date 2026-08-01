@@ -27,6 +27,7 @@ export const NAV_LABELS: Record<string, Bi> = {
   vcopn: { ko: '위상잡음', en: 'Phase noise' },
   vcopvt: { ko: 'PVT 코너', en: 'PVT corners' },
   vcopushing: { ko: '전원 푸싱', en: 'Supply pushing' },
+  vcoyield: { ko: '수율 · 강건성', en: 'Yield · robustness' },
   vcolayout: { ko: '레이아웃', en: 'Layout' },
   vcoflow: { ko: '전체 흐름', en: 'Full flow' },
 }
@@ -51,6 +52,7 @@ export const NAV_SUBS: Record<string, Bi> = {
   vcopareto: { ko: '전력 ↔ 주파수 (NSGA-II)', en: 'power ↔ freq (NSGA-II)' },
   vcopn: { ko: 'L(Δf) · 지터 · FoM', en: 'L(Δf) · jitter · FoM' },
   vcopvt: { ko: '공정 · 전압 · 온도', en: 'process · voltage · temp' },
+  vcoyield: { ko: 'WiCkeD · WCD·미스매치·수율', en: 'WiCkeD · WCD·mismatch·yield' },
   vcopushing: { ko: 'f vs VDD · GHz/V', en: 'f vs VDD · GHz/V' },
   vcolayout: { ko: 'GDS + DRC', en: 'GDS + DRC' },
   vcoflow: { ko: '크기→기생→PVT→GDS', en: 'size → parasitics → GDS' },
@@ -211,8 +213,8 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
   },
   vcoopt: {
     what: {
-      ko: '목표 발진 주파수를 입력하면, 그 주파수를 만족하면서 전력을 최소화하도록 4개 소자군(코어 Mp/Mn, 스타빙 Mbp/Mbn)의 크기를 차분진화(DE)로 자동 탐색합니다. 비교기의 "자동 최적화"와 동일한 방식입니다.',
-      en: 'Enter a target oscillation frequency and Differential Evolution auto-sizes the four device groups (core Mp/Mn, starve Mbp/Mbn) to hit it at minimum power — the same method as the comparator\'s auto-find.',
+      ko: '목표 발진 주파수를 입력하면, 그 주파수를 만족하면서 전력을 최소화하도록 3개 소자군(인버터 Mp/Mn·Mpb/Mnb, 래치 Mx)의 크기를 자동 탐색합니다. 비교기의 "자동 최적화"와 동일한 방식입니다.',
+      en: 'Enter a target oscillation frequency and the optimizer auto-sizes the three device groups (inverters, latch Mx) to hit it at minimum power — the same method as the comparator\'s auto-find.',
     },
     read: {
       ko: '탐색이 끝나면 결과가 편집기에 적용되고, 달성 주파수·전력·발진 여부와 갱신된 튜닝 곡선이 나옵니다. ✓ = 목표 ±10% 이내.',
@@ -229,6 +231,16 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
       en: 'Press ↻ waveform to plot the real transient of two ring nodes (o1·o2) — continuously oscillating at phase-shifted delays. The schematic W×M reflects the current sizing.',
     },
   },
+  vcoyield: {
+    what: {
+      ko: 'WiCkeD식 강건성 분석 — ① 공칭 판정(목표 밴드·전력 마진), ② 최악거리 WCD(공정/전압/온도 공간에서 실패까지의 σ 거리 → 수율 추정), ③ V_th 미스매치 MC(주파수 산포 σ_f·기동 수율), ④ 공정 스큐별 수율 스윕. 전부 실제 ngspice 실행입니다.',
+      en: 'WiCkeD-style robustness — ① nominal verdict (band/power margins), ② worst-case distance in σ (yield estimate), ③ V_th-mismatch MC (σ_f, startup yield), ④ yield vs process skew. All real ngspice runs.',
+    },
+    read: {
+      ko: 'β(σ)가 클수록 강건 — 3σ ≈ 99.87%. 미스매치 σ_f 는 PLL 대역폭이 흡수할 수 있는 수준인지로 판단. 수율 스윕이 0%대라면 목표 f 밴드(기본 1.5GHz±15%)와 현재 설계의 f 가 어긋난 것이니 목표 f 를 조정하세요.',
+      en: 'Larger β(σ) = more robust (3σ ≈ 99.87%). Judge σ_f against what your PLL bandwidth can absorb. A ~0% sweep usually means the design frequency sits outside the target band (default 1.5GHz±15%) — adjust target f.',
+    },
+  },
   vcopn: {
     what: {
       ko: 'VCO의 가장 중요한 스펙 — 위상잡음 L(Δf)과 지터를 추정합니다. 각 인버터 전이가 열잡음(sqrt(kT·C)/기울기)만큼 시간축에서 흔들리고, 이것이 주파수로 접혀 위상잡음이 됩니다.',
@@ -241,7 +253,7 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
   },
   vcopvt: {
     what: {
-      ko: '공정(SS/TT/FF)·전압·온도 27개 코너에서 VCO가 발진하는지와 주파수가 얼마나 변하는지 확인합니다. 비교기 PVT와 같은 방식.',
+      ko: '공정 5코너(SS/SF/TT/FS/FF)·전압·온도 45개 코너에서 VCO가 발진하는지와 주파수가 얼마나 변하는지 확인합니다. 비교기 PVT와 같은 방식.',
       en: 'Checks whether the VCO oscillates and how much its frequency shifts across 27 process/voltage/temperature corners — same as the comparator PVT.',
     },
     read: {
@@ -297,7 +309,8 @@ export const DEVICE_ROLES: Record<string, Bi> = {
   tail: { ko: '테일 스위치 — 속도', en: 'tail switch — speed' },
   ncc: { ko: 'NMOS 래치 — 재생', en: 'latch NMOS — regeneration' },
   pcc: { ko: 'PMOS 래치 — 재생', en: 'latch PMOS — regeneration' },
-  pre: { ko: '프리차지 — 리셋', en: 'precharge — reset' },
+  pre: { ko: 'S3/S4 프리차지 — 출력 X·Y 리셋', en: 'S3/S4 precharge — output X·Y reset' },
+  prei: { ko: 'S1/S2 프리차지 — 내부 P·Q 리셋', en: 'S1/S2 precharge — internal P·Q reset' },
 }
 
 // Small bits of shared UI chrome.

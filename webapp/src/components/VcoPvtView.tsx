@@ -5,7 +5,7 @@ import type { VcoPvtResult } from '../types'
 export default function VcoPvtView({ pvt, lang }: { pvt: VcoPvtResult; lang: 'ko' | 'en' }) {
   const temps = [-40, 27, 125]
   const vfs = [0.9, 1.0, 1.1]
-  const procs = ['SS', 'TT', 'FF']
+  const procs = ['SS', 'SF', 'TT', 'FS', 'FF']
   const cell = (proc: string, t: number, vf: number) =>
     pvt.corners.find((c) => c.process === proc && c.temp === t && c.v_frac === vf)
   const fmin = pvt.f_min_ghz ?? 0, fmax = pvt.f_max_ghz ?? 1

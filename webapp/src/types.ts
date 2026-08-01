@@ -1,4 +1,4 @@
-export type DeviceKey = 'input' | 'tail' | 'ncc' | 'pcc' | 'pre'
+export type DeviceKey = 'input' | 'tail' | 'ncc' | 'pcc' | 'pre' | 'prei'
 
 export interface Device {
   w_um: number
@@ -11,7 +11,7 @@ export interface Params {
   cload_ff: number
   avt_mv_um: number
   n_mc: number
-  model?: 'ptm' | 'sky130'
+  model?: 'ptm' | 'sky130' | 'gaa2nm' | 'asap7'
   devices: Record<DeviceKey, Device>
 }
 
@@ -247,16 +247,25 @@ export interface OptimizeResult {
   targets: Record<string, number>
   final_power_uw?: number | null
   final_total_w_um?: number
+  // gaa2nm: 자동 사이징이 실제로 찾은 정수 스택 수(W = 스택 × 0.2µ)
+  final_stacks?: Record<DeviceKey, number> | null
+  corner_aware?: boolean
+  corner_note?: string | null
+  final_corner?: { functional?: boolean; decision_time_ps?: number | null } | null
   error?: string
 }
 
 // ---- MOSFET ring VCO ----
-export type VcoDeviceKey = 'invp' | 'invn' | 'starvep' | 'starven'
+export type VcoDeviceKey = 'invp' | 'invn' | 'starvep' | 'starven' | 'xcplp'
+export type VcoTopology = 'starved' | 'xcpl'
 export interface VcoParams {
   vdd: number
   vctrl: number
   n_stages: number
   cload_ff: number
+  topology?: VcoTopology
+  trst_ns?: number
+  model?: 'ptm' | 'gaa2nm' | 'asap7'   // VCO 는 sky130 미지원(subckt 경로 없음)
   devices: Record<VcoDeviceKey, Device>
 }
 export interface VcoNominal {
@@ -277,7 +286,7 @@ export interface VcoTuning {
   center_ghz: number | null
 }
 export interface VcoResult { nominal: VcoNominal; tuning?: VcoTuning; params?: VcoParams; error?: string }
-export interface VcoOptStep { action: string; f_osc_ghz: number | null; power_uw: number | null; oscillates: boolean; params: Record<VcoDeviceKey, Device> }
+export interface VcoOptStep { action: string; f_osc_ghz: number | null; power_uw: number | null; oscillates: boolean; params: Partial<Record<VcoDeviceKey, Device>> }
 export interface VcoOptimizeResult {
   trajectory: VcoOptStep[]
   final_params: VcoParams
@@ -287,6 +296,10 @@ export interface VcoOptimizeResult {
   target_f_ghz: number
   n_sims: number
   n_surrogate_skips?: number
+  // gaa2nm: 자동 사이징이 실제로 찾은 정수 스택 수(W = 스택 × 0.2µ)
+  final_stacks?: Record<VcoDeviceKey, number> | null
+  // 단수 N 탐색 스캔(홀수 3~9): 후보별 공칭 f 와 선택된 N
+  stage_scan?: { points: { n: number; f_ghz: number | null; oscillates: boolean }[]; chosen_n: number; target_f_ghz: number } | null
   error?: string
 }
 export interface VcoWaveform { vdd: number; t_ns: number[]; o1: number[]; o2: number[]; period_ns: number | null; f_osc_ghz: number | null; error?: string }
@@ -303,8 +316,37 @@ export interface VcoPhaseNoise {
   measured?: VcoPhaseNoiseMeasured
   error?: string
 }
-export interface VcoParetoPoint { power_uw: number | null; f_osc_ghz: number | null; devices: Record<VcoDeviceKey, Device> }
+export interface VcoParetoPoint { power_uw: number | null; f_osc_ghz: number | null; devices: Partial<Record<VcoDeviceKey, Device>> }
 export interface VcoParetoResult { front: VcoParetoPoint[]; all: { power_uw: number | null; f_osc_ghz: number | null; feasible: boolean }[]; error?: string }
+// ── VCO WiCkeD (수율·강건성) ──────────────────────────────────────────────
+export interface VcoWickedVerdict {
+  nominal: VcoNominal & { vctrl_v?: number }
+  margins: Record<string, number | null>
+  pass: boolean
+  targets?: Record<string, number>
+  error?: string
+}
+export interface VcoWickedWcd {
+  beta_sigma: number | null
+  estimated_yield_pct: number | null
+  nearest_failure?: { vdd?: number; temp?: number; pskew?: number; f_osc_ghz?: number | null; power_uw?: number | null; oscillates?: boolean } | null
+  n_samples?: number
+  error?: string
+}
+export interface VcoWickedMismatch {
+  n: number
+  mean_f_ghz: number | null
+  sigma_f_mhz: number | null
+  sigma_f_pct: number | null
+  osc_failures: number
+  startup_yield_pct: number | null
+  error?: string
+}
+export interface VcoWickedYieldSweep {
+  points: { pskew: number; yield_pct: number; n: number }[]
+  error?: string
+}
+
 export interface VcoPostLayout { schematic: VcoWaveform; postlayout: VcoWaveform; par_caps: { c_node_ff: number; per_device_ff: Record<string, number>; method: string }; error?: string }
 export interface VcoFlowStage { name: string; ok: boolean; detail: string }
 export interface VcoFullflow {
@@ -323,12 +365,23 @@ export const VCO_DEVICE_META: Record<VcoDeviceKey, { name: string; role: { ko: s
   invn: { name: 'Mn', role: { ko: '코어 NMOS — 하강', en: 'core NMOS — pull-down' } },
   starvep: { name: 'Mbp', role: { ko: 'PMOS 전류 스타빙', en: 'PMOS current-starve' } },
   starven: { name: 'Mbn', role: { ko: 'NMOS 전류 스타빙 (V_ctrl)', en: 'NMOS current-starve (V_ctrl)' } },
+  xcplp: { name: 'Mx', role: { ko: 'P1 — 교차 결합 PMOS (약하게)', en: 'P1 — cross-coupled PMOS (keep weak)' } },
 }
 
 export const DEVICE_META: Record<DeviceKey, { name: string; role: string; world: 'si' | 'ag' }> = {
-  input: { name: 'Mn1 / Mn2', role: 'input pair — offset & noise', world: 'si' },
-  tail: { name: 'Mtail', role: 'tail switch — speed', world: 'si' },
-  ncc: { name: 'Mn3 / Mn4', role: 'latch NMOS — regeneration', world: 'si' },
-  pcc: { name: 'Mp3 / Mp4', role: 'latch PMOS — regeneration', world: 'si' },
-  pre: { name: 'Mp1 / Mp2', role: 'precharge — reset', world: 'si' },
+  input: { name: 'M1 / M2', role: 'input pair — offset & noise', world: 'si' },
+  tail: { name: 'M7', role: 'tail switch — speed', world: 'si' },
+  ncc: { name: 'M3 / M4', role: 'latch NMOS — regeneration', world: 'si' },
+  pcc: { name: 'M5 / M6', role: 'latch PMOS — regeneration', world: 'si' },
+  pre: { name: 'S3 / S4', role: 'precharge X·Y (outputs)', world: 'si' },
+  prei: { name: 'S1 / S2', role: 'precharge P·Q (internal)', world: 'si' },
+}
+
+export interface ProbitResult {
+  sigma_uv_probit?: number
+  sigma_uv_analytic?: number
+  ratio?: number
+  points?: { vin_uv: number; p_plus: number; n: number }[]
+  n_sims?: number
+  error?: string
 }

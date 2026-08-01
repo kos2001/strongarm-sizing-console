@@ -57,7 +57,7 @@ def test_gen_netlist_defaults_unchanged():
     """Clock parameterization must be byte-identical to the original when the
     optional timing params are absent (protects existing behavior/tests)."""
     nl = run_sim.gen_netlist(run_sim.DEFAULT_PARAMS, vdiff=0.01)
-    assert "PULSE(0 1.0 200p 12p 12p 3.0n 6.0n)" in nl
+    assert "PULSE(0 0.7 200p 12p 12p 3.0n 6.0n)" in nl   # 기본 vdd 0.7
     assert "tran 1.0p 2.2n" in nl   # 1 ps step (perf): decision time bit-identical to 0.2 ps
 
 

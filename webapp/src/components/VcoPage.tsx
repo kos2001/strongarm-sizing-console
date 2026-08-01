@@ -1,10 +1,14 @@
 import { useState } from 'react'
-import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform } from '../types'
+import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, VcoWickedMismatch, VcoWickedVerdict, VcoWickedWcd, VcoWickedYieldSweep } from '../types'
 import { VCO_DEVICE_META } from '../types'
-import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform } from '../api'
+import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform, vcoWickedMismatch, vcoWickedVerdict, vcoWickedWcd, vcoWickedYieldsweep } from '../api'
 import VcoPhaseNoiseChart from './VcoPhaseNoiseChart'
 import TuningChart from './TuningChart'
 import VcoSchematic from './VcoSchematic'
+import NetlistImport from './NetlistImport'
+import VcoAgentSizing from './VcoAgentSizing'
+import AgentDock from './AgentDock'
+import { downloadNetlist } from '../netlist'
 import VcoWaveformChart from './VcoWaveformChart'
 import VcoPvtView from './VcoPvtView'
 import VcoPushingChart from './VcoPushingChart'
@@ -13,15 +17,23 @@ import LayoutView from './LayoutView'
 import type { Lang } from '../i18n'
 
 const VCO_DEFAULTS: VcoParams = {
-  vdd: 1.0, vctrl: 0.6, n_stages: 5, cload_ff: 3.0,
+  vdd: 1.0, vctrl: 0.6, n_stages: 3, cload_ff: 3.0, topology: 'xcpl',
   devices: {
     invp: { w_um: 2.0, l_nm: 45, m: 2 }, invn: { w_um: 1.0, l_nm: 45, m: 2 },
     starvep: { w_um: 2.0, l_nm: 45, m: 2 }, starven: { w_um: 1.0, l_nm: 45, m: 1 },
+    xcplp: { w_um: 1.0, l_nm: 45, m: 2 },
   },
 }
-const DKEYS: VcoDeviceKey[] = ['invp', 'invn', 'starvep', 'starven']
+// xcpl 유닛(2N+4P)에는 스타빙이 없다 — 인버터 + 래치/리셋 PMOS 만 사이징
+const XKEYS: VcoDeviceKey[] = ['invp', 'invn', 'xcplp']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
-type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn'
+type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'
+
+const normalizeVcoStages = (raw: number | undefined | null) => {
+  let n = Math.max(3, Math.round(Number(raw) || 3))
+  if (n % 2 === 0) n += 1
+  return Math.min(n, 9)
+}
 
 export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: View }) {
   const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
@@ -32,26 +44,71 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   const [pvt, setPvt] = useState<VcoPvtResult | null>(null)
   const [push, setPush] = useState<VcoPushing | null>(null)
   const [pareto, setPareto] = useState<VcoParetoResult | null>(null)
+  const [paretoSel, setParetoSel] = useState<number | null>(null) // 파레토 front 선택점(상세 패널)
+  // WiCkeD 수율·강건성 결과(4종 병렬 실행)
+  const [wk, setWk] = useState<{ verdict?: VcoWickedVerdict; wcd?: VcoWickedWcd; mm?: VcoWickedMismatch; ys?: VcoWickedYieldSweep } | null>(null)
   const [lay, setLay] = useState<LayoutResult | null>(null)
   const [flow, setFlow] = useState<VcoFullflow | null>(null)
   const [pn, setPn] = useState<VcoPhaseNoise | null>(null)
   const [load, setLoad] = useState('')
   const [targetF, setTargetF] = useState(1.5)
+  const [showLiveSchematic, setShowLiveSchematic] = useState(false)
   const busy = load !== ''
 
-  const setDev = (k: VcoDeviceKey, f: 'w_um' | 'l_nm' | 'm', v: number) =>
+  // W 그리드 모델: gaa2nm = 나노시트 스택 0.2µ, asap7 = 핀 0.07µ — 입력을 그리드에 스냅
+  const unit = params.model === 'gaa2nm' ? 0.2 : params.model === 'asap7' ? 0.07 : null
+  const unitName = params.model === 'asap7' ? '핀' : '스택'
+  const setDev = (k: VcoDeviceKey, f: 'w_um' | 'l_nm' | 'm', v: number) => {
+    if (unit && f === 'w_um') v = Math.max(unit, Math.round(Math.round(v / unit) * unit * 1000) / 1000)
     setParams((p) => ({ ...p, devices: { ...p.devices, [k]: { ...p.devices[k], [f]: v } } }))
-  const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff', v: number) => setParams((p) => ({ ...p, [f]: v }))
+  }
+  // 모델 프리셋 — vdd·V_ctrl·L 을 노드에 맞게 일괄 설정(그리드 모델은 W 스냅/사이징 포함)
+  const setModel = (m: 'ptm' | 'gaa2nm' | 'asap7') => {
+    const v = m === 'gaa2nm' ? { vdd: 0.65, vctrl: 0.5, l: 14 } : m === 'asap7' ? { vdd: 0.7, vctrl: 0.45, l: 21 } : { vdd: 1.0, vctrl: 0.6, l: 45 }
+    // asap7: 핀 수 기준 현실적 사이징(코어 4/2핀, starve 4/2핀, 커플러 1핀 — 2.96GHz 검증)
+    const wmap7: Record<VcoDeviceKey, number> = { invp: 0.28, invn: 0.14, starvep: 0.28, starven: 0.14, xcplp: 0.07 }
+    setParams((p) => ({
+      ...p, model: m, vdd: v.vdd, vctrl: v.vctrl,
+      devices: Object.fromEntries((Object.keys(p.devices) as VcoDeviceKey[]).map((k) => {
+        const dd = p.devices[k]
+        const w_um = m === 'gaa2nm' ? Math.max(0.2, Math.round(Math.round(dd.w_um / 0.2) * 0.2 * 1000) / 1000)
+          : m === 'asap7' ? wmap7[k] : dd.w_um
+        return [k, { ...dd, l_nm: v.l, w_um }]
+      })) as VcoParams['devices'],
+    }))
+  }
+  const setTop = (f: 'vctrl' | 'n_stages' | 'cload_ff', v: number) => {
+    // 링 단수 N 은 발진 조건상 홀수만 허용(짝수 입력은 위로 올림), 3~9 범위로 schematic/netlist와 동일하게 정규화
+    if (f === 'n_stages') v = normalizeVcoStages(v)
+    setParams((p) => ({ ...p, [f]: v }))
+  }
+  // 토폴로지는 교차결합+리셋(xcpl) 단일 — 전류제한(starved) 회로는 제거됨
+  const dkeys = XKEYS
+  const topoBadge = (
+    <span className="mono text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'var(--ag)', color: 'var(--bg)' }}>
+      {T(lang, '교차결합+리셋', 'x-coupled+rst')}
+    </span>
+  )
 
   const guard = async (tag: string, fn: () => Promise<void>) => { setLoad(tag); try { await fn() } catch { /* ignore */ } finally { setLoad('') } }
   const run = () => guard('run', async () => { const r = await vcoSimulate(params, true); setRes(r); setTuning(r.tuning ?? null) })
-  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, devices: r.final_params.devices })); setRes({ nominal: r.nominal }); setTuning(r.tuning) } })
+  const runWicked = () => guard('wicked', async () => {
+    // 무거운 분석 4종 — 동시 실행은 로컬 ngspice 풀을 고갈시키므로 순차 실행,
+    // 단계별로 카드가 나타나도록 부분 상태를 즉시 반영한다.
+    const targets = { f_ghz: targetF }
+    setWk({})
+    const verdict = await vcoWickedVerdict(params, targets); setWk((w) => ({ ...w, verdict }))
+    const wcd = await vcoWickedWcd(params, targets); setWk((w) => ({ ...w, wcd }))
+    const mm = await vcoWickedMismatch(params); setWk((w) => ({ ...w, mm }))
+    const ys = await vcoWickedYieldsweep(params, targets); setWk((w) => ({ ...w, ys }))
+  })
+  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, n_stages: normalizeVcoStages(r.final_params.n_stages ?? p.n_stages), devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning); setTimeout(() => document.getElementById('vco-tuning-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150) } })
   const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
   const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
   const runPush = () => guard('push', async () => { const r = await vcoPushing(params); if (!r.error) setPush(r) })
   const runPareto = () => guard('pareto', async () => { const r = await vcoPareto(params); if (!r.error) setPareto(r) })
   const runLayout = () => guard('layout', async () => { const r = await vcoLayout(params); if (!r.error) setLay(r) })
-  const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, devices: r.final_params.devices })) } })
+  const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, n_stages: normalizeVcoStages(r.final_params.n_stages ?? p.n_stages), devices: { ...p.devices, ...r.final_params.devices } })) } })
   const runPn = () => guard('pn', async () => { const r = await vcoPhaseNoise(params); if (!r.error) setPn(r) })
 
   const nom = res?.nominal
@@ -69,26 +126,53 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   )
 
   // ---- circuit · waveform ----
+  // 모든 뷰에서 접근 가능한 플로팅 에이전트 독(대화 상태 유지)
+  const agentDock = (
+    <AgentDock ko={lang === 'ko'}>
+          <VcoAgentSizing params={params} targetF={targetF} ko={lang === 'ko'} disabled={busy}
+            onApply={(pr) => {
+              if (pr.target_f_ghz != null) setTargetF(pr.target_f_ghz)
+              setParams((prev) => ({
+                ...prev,
+                ...(pr.vdd != null ? { vdd: pr.vdd } : {}),
+                ...(pr.vctrl != null ? { vctrl: pr.vctrl } : {}),
+                ...(pr.n_stages != null ? { n_stages: normalizeVcoStages(pr.n_stages) } : {}),
+                ...(pr.cload_ff != null ? { cload_ff: pr.cload_ff } : {}),
+                devices: Object.fromEntries((Object.keys(prev.devices) as VcoDeviceKey[]).map((k) => [k, { ...prev.devices[k], ...(pr.devices?.[k] ?? {}) }])) as VcoParams['devices'],
+              }))
+            }} />
+    </AgentDock>
+  )
+  const withDock = (node: React.ReactNode) => <>{node}{agentDock}</>
+
   if (view === 'circuit') {
-    return (
+    return withDock(
       <div className="flex flex-col gap-4">
         <div className="p-5" style={box}>
-          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform')))}
-          <VcoSchematic devices={params.devices} nStages={params.n_stages} />
+          {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), <div className="flex items-center gap-2">{topoBadge}
+            <button onClick={() => downloadNetlist('/api/vco/netlist', params, `vco_xcpl_N${params.n_stages}.sp`).catch(() => {})}
+              className="mono text-xs px-3 py-1.5 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+              title={T(lang, '현재 파라미터의 SPICE 덱(.sp) 다운로드 — ngspice 로 직접 실행 가능', 'Download the SPICE deck (.sp) for the current parameters — runs directly in ngspice')}>
+              ⤓ {T(lang, '넷리스트', 'netlist')}
+            </button>
+            {runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform'))}</div>)}
+          <div className="overflow-x-auto"><VcoSchematic devices={params.devices} nStages={params.n_stages} /></div>
           {wf ? (
             <div className="mt-4">
-              <VcoWaveformChart wf={wf} theme={theme} />
-              <p className="mono text-[11px] mt-2" style={lab}>{T(lang, '두 링 노드(o1·o2)의 실제 발진 — 주기', 'real oscillation of two ring nodes (o1·o2) — period')} {wf.period_ns} ns → {wf.f_osc_ghz} GHz</p>
+              <VcoWaveformChart wf={wf} theme={theme} labels={['o1', 'ob1']} />
+              <p className="mono text-[11px] mt-2" style={lab}>
+                {T(lang, '상보 링 노드(o1·ob1)의 실제 발진 — 리셋 해제 후 시작 — 주기', 'real oscillation of the complementary nodes (o1·ob1), starting on reset release — period')} {wf.period_ns} ns → {wf.f_osc_ghz} GHz</p>
             </div>
           ) : <p className="text-sm mt-3" style={{ color: 'var(--muted)' }}>{T(lang, '↻ 파형을 눌러 실제 발진 트랜지언트를 캡처하세요.', 'Press ↻ waveform to capture the real oscillation transient.')}</p>}
         </div>
+        <NetlistImport kind="vco" ko={lang === 'ko'} onApply={(pp) => setParams((prev) => ({ ...prev, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.vctrl != null ? { vctrl: pp.vctrl } : {}), ...(pp.n_stages != null ? { n_stages: normalizeVcoStages(pp.n_stages) } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'gaa2nm' } : {}), devices: { ...prev.devices, ...pp.devices } }))} />
       </div>
     )
   }
 
   // ---- PVT ----
   if (view === 'pvt') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, 'PVT 코너 · 주파수 / 발진', 'PVT corners · frequency / oscillation'), runBtn(runPvt, 'pvt', T(lang, '◫ 27코너 실행', '◫ run 27 corners')))}
         {pvt ? <VcoPvtView pvt={pvt} lang={lang} /> : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '공정·전압·온도 27코너에서 발진 주파수와 발진 여부를 확인합니다.', 'Check oscillation frequency and startup across 27 process/voltage/temperature corners.')}</p>}
@@ -98,7 +182,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- supply pushing ----
   if (view === 'pushing') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '전원 푸싱 · f vs VDD', 'supply pushing · f vs VDD'), runBtn(runPush, 'push', T(lang, '⇅ 스윕 실행', '⇅ run sweep')))}
         {push ? (
@@ -116,7 +200,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- phase noise / jitter ----
   if (view === 'pn') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '위상잡음 · L(Δf) / 지터', 'phase noise · L(Δf) / jitter'), runBtn(runPn, 'pn', T(lang, '⌇ 위상잡음 계산', '⌇ compute phase noise')))}
         {pn ? (
@@ -147,21 +231,146 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     )
   }
 
+  // ---- WiCkeD 수율 · 강건성 ----
+  if (view === 'yield') {
+    const mg = wk?.verdict?.margins ?? {}
+    const mgLabel: Record<string, { ko: string; en: string }> = {
+      oscillates: { ko: '발진', en: 'oscillates' }, f_band: { ko: 'f 밴드', en: 'f band' }, power_uw: { ko: '전력', en: 'power' },
+    }
+    return withDock(
+      <div className="p-5" style={box}>
+        {hd(T(lang, '수율 · 강건성 (WiCkeD)', 'Yield · robustness (WiCkeD)'),
+          <div className="flex gap-2 items-center">
+            <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
+            <input type="number" step={0.1} min={0.1} disabled={busy} value={targetF} onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
+            <span className="mono text-[11px]" style={lab}>GHz ±15%</span>
+            {runBtn(runWicked, 'wicked', T(lang, '⊞ 강건성 분석 실행', '⊞ Run robustness'))}
+          </div>)}
+        {wk ? (
+          <div className="flex flex-col gap-4">
+            {busy && <p className="mono text-[11px]" style={lab}>{T(lang, '실행 중 — 완료된 단계부터 표시됩니다…', 'running — stages appear as they finish…')}</p>}
+            {/* ① 공칭 판정 */}
+            {wk.verdict && <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '① 공칭 판정 · 스펙 마진', '① nominal verdict · spec margins')}</div>
+                <span className="mono text-xs px-2.5 py-1 rounded-full" style={{ color: wk.verdict.pass ? 'var(--good)' : 'var(--bad)', background: `color-mix(in srgb, ${wk.verdict.pass ? 'var(--good)' : 'var(--bad)'} 14%, transparent)` }}>
+                  {wk.verdict.pass ? 'PASS' : 'FAIL'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <Metric label="f_osc" value={wk.verdict.nominal.f_osc_ghz != null ? `${wk.verdict.nominal.f_osc_ghz} GHz` : '—'} />
+                <Metric label={T(lang, '전력', 'power')} value={wk.verdict.nominal.power_uw != null ? `${wk.verdict.nominal.power_uw} µW` : '—'} />
+                <Metric label={T(lang, '발진', 'oscillates')} value={wk.verdict.nominal.oscillates ? '✓' : '✗'} ok={wk.verdict.nominal.oscillates} />
+              </div>
+              <div className="flex gap-2 mt-2 flex-wrap">
+                {Object.entries(mg).map(([k, v]) => (
+                  <span key={k} className="mono text-[10.5px] px-2 py-1 rounded-full tnum" style={{ color: (v ?? -1) >= 0 ? 'var(--good)' : 'var(--bad)', border: '1px solid var(--line)' }}>
+                    {T(lang, mgLabel[k]?.ko ?? k, mgLabel[k]?.en ?? k)} {T(lang, '마진', 'margin')} {v != null ? (v * 100).toFixed(1) + '%' : '—'}
+                  </span>
+                ))}
+              </div>
+            </div>}
+            {/* ② WCD + ③ 미스매치 */}
+            <div className="grid grid-cols-2 gap-4">
+              {wk.wcd && <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+                <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={lab}>{T(lang, '② 최악거리 WCD', '② worst-case distance')}</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Metric label="β (σ)" value={wk.wcd.beta_sigma != null ? `${wk.wcd.beta_sigma} σ` : '—'} big ok={(wk.wcd.beta_sigma ?? 0) >= 3} />
+                  <Metric label={T(lang, '추정 수율', 'est. yield')} value={wk.wcd.estimated_yield_pct != null ? `${wk.wcd.estimated_yield_pct}%` : '—'} />
+                </div>
+                {wk.wcd.nearest_failure && (
+                  <p className="mono text-[10.5px] mt-2 leading-relaxed" style={lab}>
+                    {T(lang, '가장 가까운 실패점', 'nearest failure')}: VDD {wk.wcd.nearest_failure.vdd ?? '—'}V · {wk.wcd.nearest_failure.temp ?? '—'}°C
+                    {wk.wcd.nearest_failure.f_osc_ghz != null ? ` · f ${wk.wcd.nearest_failure.f_osc_ghz} GHz` : ''}{wk.wcd.nearest_failure.oscillates === false ? T(lang, ' · 발진 실패', ' · no oscillation') : ''}
+                  </p>
+                )}
+              </div>}
+              {wk.mm && <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+                <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={lab}>{T(lang, '③ V_th 미스매치 MC', '③ V_th mismatch MC')} · n={wk.mm.n}</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <Metric label="σ_f" value={wk.mm.sigma_f_mhz != null ? `${wk.mm.sigma_f_mhz} MHz (${wk.mm.sigma_f_pct}%)` : '—'} big />
+                  <Metric label={T(lang, '기동 수율', 'startup yield')} value={wk.mm.startup_yield_pct != null ? `${wk.mm.startup_yield_pct}%` : '—'} ok={(wk.mm.startup_yield_pct ?? 0) >= 99} />
+                </div>
+                <p className="mono text-[10.5px] mt-2" style={lab}>{T(lang, '평균 f', 'mean f')} {wk.mm.mean_f_ghz ?? '—'} GHz · {T(lang, '발진 실패', 'osc failures')} {wk.mm.osc_failures}</p>
+              </div>}
+            </div>
+            {/* ④ 수율 스윕 */}
+            {wk.ys && <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}>
+              <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={lab}>{T(lang, '④ 수율 vs 공정 스큐', '④ yield vs process skew')}</div>
+              <svg viewBox="0 0 420 110" width="100%" style={{ maxWidth: 560, display: 'block' }} role="img" aria-label="yield vs process skew">
+                <line x1={34} y1={8} x2={34} y2={88} stroke="var(--line)" strokeWidth={1} />
+                <line x1={34} y1={88} x2={410} y2={88} stroke="var(--line)" strokeWidth={1} />
+                {(() => {
+                  const pts = wk.ys.points ?? []
+                  if (!pts.length) return null
+                  const xs = pts.map((q) => q.pskew), lo = Math.min(...xs), hi = Math.max(...xs)
+                  const X = (v: number) => 34 + ((v - lo) / (hi - lo || 1)) * 370
+                  const Y = (v: number) => 88 - (v / 100) * 76
+                  return (
+                    <g>
+                      <polyline points={pts.map((q) => `${X(q.pskew)},${Y(q.yield_pct)}`).join(' ')} fill="none" stroke="var(--ag)" strokeWidth={1.8} />
+                      {pts.map((q, i) => (
+                        <g key={i}>
+                          <circle cx={X(q.pskew)} cy={Y(q.yield_pct)} r={3} fill="var(--ag)" />
+                          <text x={X(q.pskew)} y={102} fontSize={8.5} fill="var(--faint)" textAnchor="middle" fontFamily="ui-monospace,monospace">{(q.pskew * 100).toFixed(0)}%</text>
+                        </g>
+                      ))}
+                      <text x={30} y={14} fontSize={8.5} fill="var(--faint)" textAnchor="end" fontFamily="ui-monospace,monospace">100</text>
+                      <text x={30} y={90} fontSize={8.5} fill="var(--faint)" textAnchor="end" fontFamily="ui-monospace,monospace">0</text>
+                    </g>
+                  )
+                })()}
+              </svg>
+              <p className="mono text-[10.5px] mt-1" style={lab}>{T(lang, 'x = 공정 스큐(±%), y = 수율(%) — 각 점은 미스매치 MC n=6', 'x = process skew (±%), y = yield (%) — each point is a mismatch MC of n=6')}</p>
+            </div>}
+          </div>
+        ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '⊞ 실행을 누르면 공칭 판정 → 최악거리(WCD) → 미스매치 MC → 수율 스윕을 실제 ngspice 로 수행합니다(수십 초).', 'Press ⊞ to run nominal verdict → WCD → mismatch MC → yield sweep with real ngspice (tens of seconds).')}</p>}
+      </div>
+    )
+  }
+
   // ---- Pareto (power ↔ frequency, NSGA-II) ----
   if (view === 'pareto') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, 'Pareto · 전력 ↔ 주파수 (NSGA-II)', 'Pareto · power ↔ frequency (NSGA-II)'), runBtn(runPareto, 'pareto', T(lang, '⤢ 프론트 탐색', '⤢ run NSGA-II')))}
         {pareto ? (
           <>
-            <VcoParetoChart res={pareto} theme={theme} />
+            <VcoParetoChart res={pareto} theme={theme} selected={paretoSel} onSelect={setParetoSel} />
             <p className="mono text-[11px] mt-2 leading-relaxed" style={lab}>
-              <span style={{ color: A }}>— 프론트</span> = {pareto.front.length} {T(lang, '개 비지배 설계 (주파수별 최소 전력). 왼쪽-위가 우수(고주파·저전력).', 'non-dominated designs (min power per frequency). Upper-left is better.')}
+              <span style={{ color: A }}>— 프론트</span> = {pareto.front.length} {T(lang, '개 비지배 설계 (주파수별 최소 전력). 왼쪽-위가 우수(고주파·저전력) — 점을 클릭하면 상세.', 'non-dominated designs (min power per frequency). Upper-left is better — click a point for details.')}
             </p>
+            {/* 선택점 상세: 측정값 + 소자 크기 + 적용/넷리스트 */}
+            {paretoSel != null && pareto.front[paretoSel] && (() => {
+              const pt = pareto.front[paretoSel]
+              const merged = { ...params, devices: { ...params.devices, ...pt.devices } }
+              return (
+                <div className="rounded-xl p-3 mt-3" style={{ background: 'color-mix(in srgb, var(--warn) 7%, var(--surface-2))', border: '1px solid color-mix(in srgb, var(--warn) 35%, var(--line))' }}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="mono text-[11px] tnum" style={{ color: 'var(--text)' }}>
+                      ◎ front #{paretoSel + 1} — <span style={{ color: A }}>{pt.f_osc_ghz} GHz</span> · {pt.power_uw} µW · N={params.n_stages}
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setParams(merged)} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: A, border: `1px solid color-mix(in srgb, ${A} 40%, var(--line))` }} title={T(lang, '이 크기를 편집기에 로드', 'load into editor')}>↧ {T(lang, '적용', 'apply')}</button>
+                      <button onClick={() => downloadNetlist('/api/vco/netlist', merged, `vco_front${paretoSel + 1}.sp`).catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }} title={T(lang, '이 크기의 SPICE 덱 다운로드', 'download SPICE deck')}>⤓ {T(lang, '넷리스트', 'netlist')}</button>
+                    </div>
+                  </div>
+                  <div className="grid gap-1.5 mt-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+                    {(Object.keys(pt.devices) as VcoDeviceKey[]).map((k) => (
+                      <div key={k} className="mono text-[10.5px] tnum rounded-lg px-2 py-1.5" style={{ background: 'var(--surface)', border: '1px solid var(--line-soft)' }}>
+                        <span style={{ color: 'var(--si)' }}>{VCO_DEVICE_META[k]?.name ?? k}</span>
+                        <span style={{ color: 'var(--muted)' }}> {pt.devices[k]!.w_um}µ × {pt.devices[k]!.m}</span>
+                        <div style={{ color: 'var(--faint)' }}>{VCO_DEVICE_META[k]?.role[lang]}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
             <div className="flex flex-col gap-1.5 mt-3">
               {pareto.front.slice(0, 8).map((pt, i) => (
-                <button key={i} onClick={() => setParams((p) => ({ ...p, devices: pt.devices }))} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5"
-                  style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)', color: 'var(--muted)' }} title={T(lang, '이 설계를 편집기에 로드', 'load this sizing')}>
+                <button key={i} onClick={() => setParetoSel(i)} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5"
+                  style={{ background: paretoSel === i ? 'color-mix(in srgb, var(--warn) 10%, var(--surface-2))' : 'var(--surface-2)', border: `1px solid ${paretoSel === i ? 'color-mix(in srgb, var(--warn) 40%, var(--line))' : 'var(--line-soft)'}`, color: 'var(--muted)' }} title={T(lang, '이 점의 상세 보기', 'show details')}>
                   {pt.f_osc_ghz} GHz · {pt.power_uw} µW
                 </button>
               ))}
@@ -174,7 +383,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- Layout (GDS + DRC) ----
   if (view === 'layout') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '레이아웃 · GDSII + DRC', 'layout · GDSII + DRC'), runBtn(runLayout, 'layout', T(lang, '▧ 레이아웃 생성', '▧ generate layout')))}
         {lay ? (
@@ -186,7 +395,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg inline-block" style={{ color: lay.drc.clean ? 'var(--good)' : 'var(--bad)', background: `color-mix(in srgb, ${lay.drc.clean ? 'var(--good)' : 'var(--bad)'} 12%, transparent)` }}>
               {T(lang, '셀 면적', 'cell area')} {lay.area_um2} µm² · {lay.drc.clean ? T(lang, 'DRC 통과', 'DRC CLEAN') : `${lay.drc.n_violations} DRC`}
             </div>
-            <p className="mono text-[11px] mt-2" style={lab}>{T(lang, '바이어스 미러 + N단(각 Mbp/Mp/Mn/Mbn) 멀티핑거 MOS + 가드링. PoC 레이아웃(사인오프 DRC 아님).', 'bias mirror + N stages (Mbp/Mp/Mn/Mbn each) as multi-finger MOS + guard ring. PoC layout, not sign-off DRC.')}</p>
+            <p className="mono text-[11px] mt-2" style={lab}>{T(lang, 'N단(각 인버터 2쌍 Mp/Mn·Mpb/Mnb + 래치 Mx/Mxb — 유닛 소자만) 멀티핑거 MOS + 가드링. PoC 레이아웃(사인오프 DRC 아님).', 'N stages (2 inverter pairs + latch Mx/Mxb each — unit devices only) as multi-finger MOS + guard ring. PoC layout, not sign-off DRC.')}</p>
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '현재 소자 크기로 링 VCO의 트랜지스터 레벨 GDSII 레이아웃을 합성하고 규칙 DRC를 돌립니다.', 'Synthesize the transistor-level GDSII layout of the ring VCO from the current sizing and run rule DRC.')}</p>}
       </div>
@@ -195,7 +404,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
 
   // ---- Full flow ----
   if (view === 'flow') {
-    return (
+    return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, '전체 흐름 · 사이징 → 기생 → PVT → 레이아웃', 'full flow · size → parasitics → PVT → layout'), runBtn(runFlow, 'flow', T(lang, '⇉ 전체 실행', '⇉ run full flow')))}
         {flow ? (
@@ -220,28 +429,59 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
   }
 
   // ---- main (sizing · tuning) & opt (auto-size): 2-column with editor ----
-  return (
+  return withDock(
     <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0,400px) 1fr' }}>
       <section className="flex flex-col gap-4">
         <div className="p-4" style={box}>
-          <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{T(lang, '링 VCO · 소자 크기', 'ring VCO · sizing')}</div>
-          <div className="grid gap-2 mono text-[11px] uppercase tracking-wider px-1 mb-1" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', color: 'var(--faint)' }}>
-            <span>{T(lang, '소자', 'Device')}</span><span>W (µm)</span><span>L (nm)</span><span>M</span>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '링 VCO · 소자 크기', 'ring VCO · sizing')}</div>
+            {topoBadge}
           </div>
-          {DKEYS.map((k) => (
+          <div className="flex items-center gap-2 mb-2">
+            <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>Model</span>
+            {([['ptm', 'PTM 45nm'], ['gaa2nm', 'GAA 2nm≈'], ['asap7', 'ASAP7 7nm']] as const).map(([m, label]) => {
+              const on = (params.model ?? 'ptm') === m
+              return (
+                <button key={m} disabled={busy} onClick={() => setModel(m)}
+                  className="mono text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-50"
+                  style={{ color: on ? 'var(--si)' : 'var(--muted)', background: on ? 'color-mix(in srgb, var(--si) 12%, transparent)' : 'transparent', border: `1px solid ${on ? 'color-mix(in srgb, var(--si) 35%, var(--line))' : 'var(--line)'}` }}>
+                  {label}
+                </button>
+              )
+            })}
+            <span className="mono text-[10.5px]" style={{ color: 'var(--faint)' }}>VDD {params.vdd}V</span>
+          </div>
+          {params.model === 'gaa2nm' && (
+            <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5 mb-2" style={{ color: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--warn) 30%, var(--line))' }}>
+              {T(lang, '≈ 2nm급 근사 모델(BSIM4 스케일링) — W 는 나노시트 스택 단위(0.2µ)의 정수배로 스냅. 경향 분석용, 사인오프 불가.',
+                '≈ 2nm-class approximation (scaled BSIM4) — W snaps to the 0.2µ nanosheet-stack grid. Trend study only, not for sign-off.')}
+            </p>
+          )}
+          {params.model === 'asap7' && (
+            <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5 mb-2" style={{ color: 'var(--si)', background: 'color-mix(in srgb, var(--si) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--si) 30%, var(--line))' }}>
+              {T(lang, 'ASAP7 7nm FinFET — 진짜 BSIM-CMG 107 을 ngspice OSDI 로 실행(ASU 예측 PDK, LVT). W 는 핀 수 양자화(1핀 ≈ 0.07µ).',
+                'ASAP7 7nm FinFET — real BSIM-CMG 107 via ngspice OSDI (ASU predictive PDK, LVT). W quantizes to fins (1 fin ≈ 0.07µ).')}
+            </p>
+          )}
+          <div className="grid gap-2 mono text-[11px] uppercase tracking-wider px-1 mb-1" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', color: 'var(--faint)' }}>
+            <span>{T(lang, '소자', 'Device')}</span><span>{unit ? `W (${unit}µ×${lang === 'ko' ? unitName : (params.model === 'asap7' ? 'fins' : 'stacks')})` : 'W (µm)'}</span><span>L (nm)</span><span>M</span>
+          </div>
+          {dkeys.map((k) => (
             <div key={k} className="grid gap-2 items-center rounded-xl p-2.5 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: `3px solid ${A}` }}>
               <div className="min-w-0">
                 <div className="mono text-sm" style={{ color: 'var(--text)' }}>{VCO_DEVICE_META[k].name}</div>
                 <div className="text-xs truncate" style={{ color: 'var(--muted)' }}>{VCO_DEVICE_META[k].role[lang]}</div>
               </div>
               {(['w_um', 'l_nm', 'm'] as const).map((f) => (
-                <input key={f} type="number" step={f === 'w_um' ? 0.5 : f === 'l_nm' ? 5 : 1} min={0} disabled={busy}
+                <input key={f} type="number" step={f === 'w_um' ? (unit ?? 0.5) : f === 'l_nm' ? 5 : 1} min={0} disabled={busy}
+                  title={unit && f === 'w_um' ? T(lang, `${unit}µ(${unitName} 1개) 단위 스냅 — 현재 ${Math.round(params.devices[k].w_um / unit)}${unitName} × M${params.devices[k].m}`, `snaps to ${unit}µ — ${Math.round(params.devices[k].w_um / unit)} units × M${params.devices[k].m}`) : undefined}
                   value={params.devices[k][f]} onChange={(e) => setDev(k, f, parseFloat(e.target.value) || 0)} />
               ))}
             </div>
           ))}
-          <div className="grid grid-cols-3 gap-2 mt-2">
-            {([['vctrl', 'V_ctrl (V)', 0.05], ['n_stages', T(lang, '단수 N', 'stages N'), 2], ['cload_ff', 'C_L (fF)', 0.5]] as const).map(([f, label, step]) => (
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            {/* V_ctrl 입력 없음 — 2N+4P 유닛에는 튜닝 노브가 없다(주파수: 인버터 폭·N·C_L) */}
+            {([['n_stages', T(lang, '단수 N', 'stages N'), 2], ['cload_ff', 'C_L (fF)', 0.5]] as const).map(([f, label, step]) => (
               <label key={f} className="mono text-[10px]" style={lab}>{label}
                 <input type="number" step={step as number} min={f === 'n_stages' ? 3 : 0} disabled={busy}
                   value={params[f as 'vctrl' | 'n_stages' | 'cload_ff']} onChange={(e) => setTop(f as 'vctrl' | 'n_stages' | 'cload_ff', parseFloat(e.target.value) || 0)} style={{ width: '100%', marginTop: 3 }} />
@@ -261,9 +501,32 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             {runBtn(optimize, 'opt', T(lang, '◴ 자동 사이징 실행', '◴ Run auto-size'))}
           </div>
         )}
+
       </section>
 
       <section className="flex flex-col gap-4">
+        <div className="p-4" style={box}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '회로도 동기화', 'schematic sync')}</div>
+              <p className="mono text-[10.5px] mt-1" style={lab}>
+                {T(lang, 'N 변경은 회로 탭의 schematic에 즉시 반영됩니다.', 'N changes are reflected immediately in the Circuit schematic.')}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="mono text-[10.5px] tnum" style={{ color: A }}>N={normalizeVcoStages(params.n_stages)}</span>
+              <button onClick={() => setShowLiveSchematic((v) => !v)} className="mono text-[10.5px] px-2.5 py-1 rounded-full"
+                style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 35%, var(--line))' }}>
+                {showLiveSchematic ? T(lang, '접기', 'hide') : T(lang, '미리보기', 'preview')}
+              </button>
+            </div>
+          </div>
+          {showLiveSchematic && (
+            <div className="overflow-x-auto mt-3" style={{ maxHeight: 260 }}>
+              <VcoSchematic devices={params.devices} nStages={params.n_stages} />
+            </div>
+          )}
+        </div>
         <div className="p-5" style={box}>
           <div className="mono text-[11px] uppercase tracking-[0.16em] mb-4" style={lab}>{T(lang, '발진 측정', 'oscillation metrics')}</div>
           {res?.error ? <p className="mono text-sm" style={{ color: 'var(--bad)' }}>error: {res.error}</p> : (
@@ -275,15 +538,61 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
               {!res && <p className="col-span-2 text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '소자 크기를 정하고 VCO를 실행하면 발진 주파수·전력·튜닝 곡선이 나옵니다.', 'Set the device sizes and run the VCO to see oscillation frequency, power, and the tuning curve.')}</p>}
             </div>
           )}
+          {view === 'opt' && opt?.stage_scan && (
+            <div className="rounded-2xl p-4 mt-3" style={{ background: 'var(--surface)', border: '1px solid color-mix(in srgb, var(--ag) 30%, var(--line))' }}>
+              <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={lab}>{T(lang, '단수 N 탐색 — 후보별 공칭 f vs 목표', 'stage-count search — nominal f per N vs target')}</div>
+              {(() => {
+                const sc = opt.stage_scan!
+                const fs = sc.points.map((p) => p.f_ghz ?? 0)
+                const fmax = Math.max(...fs, sc.target_f_ghz) * 1.15
+                const W = 360, H = 120, x0 = 34, y0 = 96
+                const bw = 44, gap = 32
+                const y = (f: number) => y0 - (f / fmax) * 78
+                return (
+                  <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: 420, display: 'block' }}>
+                    {/* 목표선 */}
+                    <line x1={x0 - 6} x2={W - 8} y1={y(sc.target_f_ghz)} y2={y(sc.target_f_ghz)} stroke="var(--warn)" strokeDasharray="4 3" strokeWidth={1} />
+                    <text x={W - 8} y={y(sc.target_f_ghz) - 3} fontSize={8} fill="var(--warn)" textAnchor="end" fontFamily="ui-monospace,monospace">{T(lang, '목표', 'target')} {sc.target_f_ghz}GHz</text>
+                    {sc.points.map((p, i) => {
+                      const x = x0 + i * (bw + gap)
+                      const chosen = p.n === sc.chosen_n
+                      const f = p.f_ghz ?? 0
+                      return (
+                        <g key={p.n}>
+                          <rect x={x} y={y(f)} width={bw} height={y0 - y(f)} rx={3}
+                            fill={chosen ? 'color-mix(in srgb, var(--ag) 45%, transparent)' : 'color-mix(in srgb, var(--si) 18%, transparent)'}
+                            stroke={chosen ? 'var(--ag)' : 'var(--line)'} strokeWidth={chosen ? 1.6 : 1} />
+                          <text x={x + bw / 2} y={y(f) - 4} fontSize={8.5} fill={chosen ? 'var(--ag)' : 'var(--muted)'} textAnchor="middle" fontFamily="ui-monospace,monospace">{p.f_ghz != null ? `${p.f_ghz}G` : '—'}</text>
+                          <text x={x + bw / 2} y={y0 + 12} fontSize={9} fill={chosen ? 'var(--ag)' : 'var(--faint)'} textAnchor="middle" fontFamily="ui-monospace,monospace">N={p.n}{chosen ? ' ✓' : ''}</text>
+                        </g>
+                      )
+                    })}
+                    <line x1={x0 - 6} x2={W - 8} y1={y0} y2={y0} stroke="var(--line)" strokeWidth={1} />
+                  </svg>
+                )
+              })()}
+              <p className="mono text-[10.5px] mt-1" style={{ color: 'var(--faint)' }}>
+                {T(lang, `N은 홀수(3~9)만 후보 — 목표에 가장 가까운 N=${opt.stage_scan.chosen_n} 선택 후 그 단수에서 W 최적화. 선택된 N은 에디터·회로도에 자동 반영됩니다.`,
+                  `Odd N only (3–9) — N=${opt.stage_scan.chosen_n} nearest the target is chosen, then W is optimized at that count. The chosen N lands in the editor/schematic.`)}
+              </p>
+            </div>
+          )}
           {view === 'opt' && opt && (
-            <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg" style={{ color: opt.success ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${opt.success ? 'var(--good)' : 'var(--warn)'} 12%, transparent)` }}>
-              {opt.success ? '✓' : '≈'} {T(lang, '목표', 'target')} {opt.target_f_ghz} GHz → {opt.nominal.f_osc_ghz} GHz · {opt.nominal.power_uw} µW · {opt.n_sims} SPICE evals{opt.n_surrogate_skips ? ` · ${opt.n_surrogate_skips} ${T(lang, '스킵', 'skipped')}` : ''}
+            <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg flex items-center justify-between gap-2" style={{ color: opt.success ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${opt.success ? 'var(--good)' : 'var(--warn)'} 12%, transparent)` }}>
+              <span>{opt.success ? '✓' : '≈'} {T(lang, '목표', 'target')} {opt.target_f_ghz} GHz → {opt.nominal.f_osc_ghz} GHz · {opt.nominal.power_uw} µW · {opt.n_sims} SPICE evals{opt.n_surrogate_skips ? ` · ${opt.n_surrogate_skips} ${T(lang, '스킵', 'skipped')}` : ''}
+                {opt.final_stacks && <span style={{ color: 'var(--si)' }}> · 2nm: {T(lang, '탐색된 것은 정수 스택 수', 'found integer stack counts')} — {(Object.keys(opt.final_stacks) as VcoDeviceKey[]).map((k) => `${k} ${opt.final_stacks![k]}`).join(' / ')} (×0.2µ)</span>}
+              </span>
+              <button onClick={() => downloadNetlist('/api/vco/netlist', opt.final_params, `vco_xcpl_opt_N${opt.final_params.n_stages}.sp`).catch(() => {})}
+                className="mono text-[11px] px-2.5 py-1 rounded-full shrink-0" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                title={T(lang, '최적화된 소자 크기가 반영된 SPICE 덱(.sp) 다운로드', 'Download the SPICE deck (.sp) with the optimized device sizes')}>
+                ⤓ {T(lang, '넷리스트', 'netlist')}
+              </button>
             </div>
           )}
         </div>
         {tuning && (
-          <div className="p-5" style={box}>
-            <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{T(lang, '튜닝 곡선 · f vs V_ctrl', 'tuning curve · f vs V_ctrl')}</div>
+          <div id="vco-tuning-card" className="p-5" style={box}>
+            <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{view === 'opt' ? T(lang, '최적화된 크기의 튜닝 곡선 · f vs V_ctrl', 'tuning curve of the optimized sizing · f vs V_ctrl') : T(lang, '튜닝 곡선 · f vs V_ctrl', 'tuning curve · f vs V_ctrl')}</div>
             <TuningChart tuning={tuning} theme={theme} />
             <div className="grid grid-cols-4 gap-3 mt-3">
               <Metric label={T(lang, '최소 f', 'f min')} value={tuning.f_min_ghz != null ? `${tuning.f_min_ghz} GHz` : '—'} />

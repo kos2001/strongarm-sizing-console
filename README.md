@@ -4,20 +4,39 @@ An agent-driven analog design tool that closes the loop **simulate → evaluate 
 optimize → sign-off** against real ngspice, with a React web console. Two circuit
 domains share the same backend and algorithms:
 
-- **Comparator** (StrongARM latch, 13 pages) — sizing, transient, metastability
-  (τ), max f_clk + energy, DE + GP-surrogate auto-find, sensitivity, NSGA-II
-  Pareto, Monte-Carlo offset, noise/BER, PVT (27 corners), parametric yield,
-  GDSII layout + DRC, full flow.
-- **VCO** (current-starved ring, 9 pages) — oscillation + waveform, tuning (Kvco),
-  DE + GP auto-size, NSGA-II Pareto (power↔freq), phase noise / jitter / FoM
-  (analytic + SPICE trnoise cross-check), PVT, supply pushing, GDSII layout + DRC,
-  full flow.
+- **Comparator** (StrongARM latch, 13 pages) —
+  sizing, transient, metastability (τ), max f_clk + energy, auto-find (DE +
+  GP-surrogate, or **integer coordinate descent** on quantized-W backends),
+  sensitivity, NSGA-II Pareto, Monte-Carlo offset, noise/BER, PVT (45 corners:
+  SS/SF/TT/FS/FF × temp × VDD), parametric yield, GDSII layout + DRC, full flow,
+  netlist export/import roundtrip, natural-language sizing agent.
+- **VCO** (cross-coupled pseudo-differential ring with reset, odd-N, 10 pages) —
+  oscillation + waveform, tuning (Kvco), auto-size, NSGA-II Pareto (power↔freq),
+  phase noise / jitter / FoM (analytic + SPICE trnoise cross-check), PVT, supply
+  pushing, WiCkeD yield/robustness, GDSII layout + DRC, full flow, NL agent.
 
-Stack: ngspice (BSIM4 PTM 45 nm + real SkyWater SKY130) · dependency-free stdlib
-HTTP bridge · React 19 + Vite + TypeScript (Cadence Virtuoso-styled schematic /
-layout / waveform, KO/EN i18n) · MCP server · pytest suite. The sections below
-document the original comparator backend ("method 1"); see the VCO section for
-the ring-oscillator flow and `webapp/README.md` for the web console.
+**Four model backends** share every page and algorithm:
+
+| Backend | What it is | W sizing |
+|---|---|---|
+| PTM 45 nm | BSIM4 predictive bulk (default) | continuous µm |
+| SKY130 | **real SkyWater production PDK** (.lib corners) | continuous µm |
+| ASAP7 7 nm | **real BSIM-CMG 107 FinFET via ngspice OSDI** (ASU predictive PDK) | integer fins (1 fin ≈ Weff 0.07 µm) |
+| GAA 2nm≈ | BSIM4 scaled to IRDS 2 nm-class targets — trend study only | integer nanosheet stacks (1 stack ≈ 0.2 µm) |
+
+On the quantized backends (`asap7`, `gaa2nm`) W exists only on the fin/stack
+grid: the editor snaps, the netlist quantizes, the layout draws the grid, and
+the auto-sizer switches from continuous DE to **integer coordinate descent on
+stack/fin counts** (what it searches *is* the integer, and the trajectory
+reports it that way).
+
+Stack: ngspice-46 (BSIM4 + **OSDI/BSIM-CMG**, compiled with OpenVAF) ·
+dependency-free stdlib HTTP bridge · React 19 + Vite + TypeScript
+(Virtuoso-styled schematic / layout / waveform, KO/EN i18n) · MCP stdio server
+(46 tools) · hermes-agent profile + skills (`hermes/`) · pytest suite. The
+sections below document the original comparator backend ("method 1"); see the
+VCO section for the ring-oscillator flow and `webapp/README.md` for the web
+console.
 
 📊 **Overview presentation:** `docs/presentation.html` (English) /
 `docs/presentation.ko.html` (한국어) — a self-contained scroll-deck (open in any
@@ -30,8 +49,16 @@ optimizers, phase-noise, performance, and rigor.
 |------|---------|
 | `run_sim.py` | Core `run_sim(params) → measurements` wrapper. Generates a parameterized StrongARM netlist, runs ngspice in batch, returns JSON metrics. CLI + importable. |
 | `vco_sim.py` | MOSFET **current-starved ring VCO** backend, sharing the same ngspice plumbing: `measure_vco` (osc. frequency / power / does-it-oscillate), `vco_tuning` (f vs V_ctrl → range, Kvco). Same simulate→evaluate→optimize loop as the comparator. |
-| `mcp_server.py` | Minimal dependency-free MCP stdio server exposing `run_sim` as a native tool (`strongarm_run_sim`) for future-session agents. |
-| `models/ptm_45nm_bulk.txt` | Real BSIM4 (level=54) device model — PTM 45 nm bulk (`nmos`/`pmos`). |
+| `mcp_server.py` | Dependency-free MCP stdio server — **46 tools** covering both domains: simulate, optimize (single + Pareto), metastability, PVT, yield/WiCkeD, layout, netlist text, raw-deck `spice_run_netlist`, … for hermes/Claude agents. |
+| `wicked.py` / `vco_wicked.py` | WiCkeD-inspired robustness flows (WCO/WCD/mismatch/high-sigma/yield sweep) for comparator / VCO. |
+| `layout.py` | GDSII layout synthesis + rule DRC + parasitic extraction — sky130-class rules, or the **nanosheet grid ruleset** on `gaa2nm` (CPP 48 nm, stack-row diffusion). |
+| `models/ptm_45nm_bulk.txt` | BSIM4 (level=54) PTM 45 nm bulk (`nmos`/`pmos`). |
+| `models/gaa2nm_approx.txt` | BSIM4 card scaled to 2 nm-class targets (EOT 0.85 nm, \|Vth0\| 0.20 V, VDD 0.65 V, SCE suppressed as a GAA-electrostatics proxy). **Trend study only — never sign-off.** |
+| `models/asap7/` | ASAP7 7 nm FinFET: ngspice-adapted TT/SS/FF cards + compiled `bsimcmg107.osdi` (arm64). Rebuild: `scripts/build_bsimcmg_osdi.sh`. |
+| `third_party/bsimcmg107/` | CMC BSIM-CMG 107.0.0 Verilog-A with two local patches (instance-param attributes; EOTACC bound 1-ulp fix) — see `scripts/build_bsimcmg_osdi.sh` header. |
+| `third_party/asap7_models/` | Original ASU ASAP7 HSPICE cards (BSD-3), converted by `scripts/adapt_asap7.py`. |
+| `hermes/` | **Hermes-agent assets**: profile/MCP registration guide + agent skills (`strongarm-console`, `analog-ic-robustness-optimization`). |
+| `webapp/` | React console + stdlib HTTP bridge (`server.py`) — optimizers, PVT, agent proxy (`/api/agent/chat`), netlist parse. |
 | `README.md` | This file. |
 
 ## Measured metrics
@@ -113,19 +140,25 @@ Restart Claude Code; the tool `strongarm_run_sim` becomes available.
 
 ## Expose the optimizer through hermes-agent's api_server
 
-The whole console is registered as a hermes-agent MCP server (`mcp_server.py`,
-`strongarm-sim`) so it is callable through the OpenAI-compatible **api_server**
-(and the hermes-gateway front, model alias `ai-fde`). It exposes **5 tools**:
-`strongarm_run_sim` (direct ngspice eval of a sizing), and `strongarm_optimize`
-(DE + GP-surrogate auto-size), `strongarm_pareto` (NSGA-II front), `strongarm_pvt`
-(27-corner sign-off), `strongarm_fullflow` (end-to-end sign-off) — the latter four
-proxy to the running backend at `$STRONGARM_API` (default `:8770`). A client can
-ask the agent to "size / sign off a StrongARM comparator" and it drives the flow.
+> Agent-facing assets (profile setup, MCP registration script, and the agent
+> **skills** — `strongarm-console`, `analog-ic-robustness-optimization`) live in
+> **`hermes/`**; see `hermes/README.md`. The web console's floating 🤖 agent
+> panels proxy to this profile via `/api/agent/chat` (session-scoped, MCP-only
+> steering).
+
+The whole console is registered as a hermes-agent MCP server (`mcp_server.py`)
+so it is callable through the OpenAI-compatible **api_server** (the dedicated
+`strong-arm` profile, `:8645`, and the hermes-gateway front). It now exposes
+**46 tools** covering both domains: simulate / optimize (single + NSGA-II) /
+metastability / noise·BER / PVT (45 corners) / WiCkeD yield & robustness /
+layout / netlist text export + raw-deck `spice_run_netlist` — all proxying to
+the running backend at `$STRONGARM_API` (default `:8770`). A client can ask the
+agent to "size / sign off a StrongARM comparator" and it drives the flow.
 
 Registered via:
 
 ```sh
-hermes mcp add strongarm-sim --command python3 \
+hermes mcp add strongarm --command python3 \
   --args /Users/kos2001/gitspace/ip-dev-fde/strongarm_sim/mcp_server.py
 ```
 
@@ -184,6 +217,37 @@ To use a **specific foundry PDK** (e.g. SkyWater sky130) instead, point
 Everything else — netlist topology, measurement setup, the agent loop — stays
 the same. Also update the Pelgrom `avt_mv_um` to the PDK's value.
 
+### ASAP7 7 nm FinFET — real BSIM-CMG 107 via ngspice OSDI (`"model": "asap7"`)
+
+Not an approximation: the ASU **ASAP7 predictive PDK** model cards run on the
+CMC **BSIM-CMG 107** compact model, compiled from Verilog-A to a native
+`.osdi` plugin with **OpenVAF** and loaded by ngspice-46 (`pre_osdi`).
+
+- Sizing is **integer fins**: the netlist folds `w_um × m` into
+  `nfin = round(W_total / 0.07 µm)` (Weff/fin = 2·HFIN + TFIN). Node defaults:
+  VDD 0.7 V, L 21 nm, LVT flavor. Corners: TT/SS/FF cards + cross corners
+  (SF/FS) via the `DELVTRAND` instance parameter (note: **+ lowers Vth** —
+  opposite sign to `delvto`; `gen_netlist` flips it).
+- Rebuild the plugin after changing the va sources:
+  `scripts/build_bsimcmg_osdi.sh` (needs `openvaf-r`; macOS builds from source
+  with `brew install rust llvm@21`). Two local va patches are documented in the
+  script header (instance-param attributes; an EOTACC bound 1-ulp float fix).
+- Regenerate the cards from the ASU originals: `scripts/adapt_asap7.py`
+  (level=72 → `bsimcmg`, `nmos/pmos` → `devtype 1/0`, drop `version`).
+
+Measured (TT, preset sizing): comparator **94.8 ps / 2.3 µW** (16–36 fins),
+VCO xcpl **2.96 GHz / 66.8 µW**, tuning 0.84–5.41 GHz.
+
+### GAA 2nm≈ — scaled-BSIM4 trend card (`"model": "gaa2nm"`)
+
+`models/gaa2nm_approx.txt` scales the PTM card to IRDS 2 nm-class targets
+(EOT 0.85 nm, |Vth0| 0.20 V, VDD 0.65 V) and suppresses short-channel roll-off
+as a proxy for GAA electrostatics. W exists only on the **0.2 µm nanosheet-stack
+grid**; corner skew is ±25 mV and Pelgrom A_VT defaults to 1.2 mV·µm. The layout
+generator draws the nanosheet grid (CPP 48 nm, stack-row diffusion) with a
+2 nm-class rule DRC. **Trend analysis only — real 2 nm PDKs are foundry-NDA.**
+For a rigorous multi-gate model use the ASAP7/BSIM-CMG path above.
+
 ## MOSFET ring VCO (same optimization loop)
 
 Beyond the comparator, the tool sizes a **pure-MOSFET current-starved ring VCO**
@@ -196,6 +260,14 @@ PVT corners / Supply pushing / **Layout (GDSII + DRC)** / **Full flow**
 - **Topology** — N odd current-starved CMOS inverter stages in a ring; V_ctrl
   sets the tail current (NMOS ref mirrored to a diode PMOS → vbp), hence the
   per-stage delay `t_d ≈ C_L·VDD/I_D` and frequency `f = 1/(2N·t_d)`.
+- **Cross-coupled topology** (`"topology": "xcpl"`) — a pseudo-differential
+  variant: two odd-N starved inverter rails (N0/P0) tied at every stage by a
+  weak cross-coupled PMOS pair (P1 = `Mx`/`Mxb`, Mansuri-CCO style), started
+  deterministically by a reset PMOS (`Mrst`) that clamps `o1` while `rstb` is
+  low — no `.ic` kick-start; the t=0 DC operating point *is* the reset state.
+  Same V_ctrl tuning rails, so tuning/pushing/phase-noise/waveform all reuse
+  the same pipeline. Keep P1 weak: oversized, it latches the stage
+  (`oscillates: false`), which the mismatch MC below quantifies.
 - **Metrics** — `measure_vco`: oscillation frequency, does-it-oscillate, power,
   swing. `vco_tuning`: sweeps V_ctrl → tuning range %, Kvco (GHz/V), center.
 - **Auto-size** — `optimize_vco` (log-space Differential Evolution + `_pmap`
@@ -278,6 +350,33 @@ HTTP endpoints exposed by `webapp/server.py`:
 - `POST /api/wicked/corners` — worst-case corner extraction and ranking
 - `POST /api/wicked/fullflow` — FEO → DNO → WCO-in-loop → full WCO → WCD → mismatch → importance → screening → corners → post-layout WCD
 
+### WiCkeD for the VCO (`vco_wicked.py`)
+
+The same methodology is ported to the ring VCO (both topologies), with the
+comparator's spec triple replaced by *oscillates / frequency band
+(f_ghz ± f_tol_pct) / power*:
+
+- `nominal_verdict` — FEO-style margins against the f-band and power targets.
+- `parameter_screening` — OAT width ranking for f and power, with a
+  `kills_osc` flag on moves that stop the oscillation.
+- `wco_operating` / `worst_case_corners` — 27 PVT corners, ranked by f-margin.
+- `worst_case_distance` — WCD beta over (pskew, VDD, temp) with linear
+  interpolation to the band edge; `yop_optimize` centers the design on beta.
+- `mismatch_mc` — the comparator's Monte-Carlo offset analog: an independent
+  Pelgrom `delvto` per MOSFET (both rails, bias, cross-couple, reset) →
+  σ_f/f spread **and start-up failures** — the key xcpl risk, where mismatch
+  strengthening P1 against a weakened tail latches a stage. No global-corner
+  analysis reveals this.
+- `yield_sweep` — mismatch+PVT MC per process-skew point (yield-plot style).
+- `dno_refine` — feasibility (restore oscillation; for xcpl weaken P1) →
+  center f with the starve widths → power trim via screening.
+- `postlayout_wcd` — `layout.extract_vco_parasitics` → cload → WCD re-check.
+- `wicked_flow` — staged FEO → DNO → WCO → WCD → mismatch MC → screening →
+  corners → post-layout report (`POST /api/vco/wicked/fullflow`).
+
+HTTP endpoints: `POST /api/vco/wicked/{verdict,screening,wcd,mismatch,
+yieldsweep,dno,yop,postlayout,corners,fullflow}`.
+
 MCP tools exposed by `mcp_server.py`:
 
 - `strongarm_wicked`
@@ -288,6 +387,8 @@ MCP tools exposed by `mcp_server.py`:
 - `strongarm_wicked_yop`
 - `strongarm_wicked_postlayout`
 - `strongarm_wicked_corners`
+- `vco_wicked` / `vco_wicked_mismatch` / `vco_wicked_screening` /
+  `vco_wicked_wcd` / `vco_wicked_corners` — the VCO ports (both topologies)
 
 Current limitations: WCD is a practical proxy, not a commercial high-sigma
 implementation; only input-pair mismatch is directly injected into SPICE while

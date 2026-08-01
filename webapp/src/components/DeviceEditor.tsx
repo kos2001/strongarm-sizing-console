@@ -9,7 +9,7 @@ interface Props {
   lang: Lang
 }
 
-const KEYS: DeviceKey[] = ['input', 'tail', 'ncc', 'pcc', 'pre']
+const KEYS: DeviceKey[] = ['input', 'tail', 'ncc', 'pcc', 'pre', 'prei']
 const FIELDS: { k: 'w_um' | 'l_nm' | 'm'; label: string; step: number }[] = [
   { k: 'w_um', label: 'W (µm)', step: 0.5 },
   { k: 'l_nm', label: 'L (nm)', step: 5 },
@@ -17,7 +17,11 @@ const FIELDS: { k: 'w_um' | 'l_nm' | 'm'; label: string; step: number }[] = [
 ]
 
 export default function DeviceEditor({ params, onChange, disabled, lang }: Props) {
+  // W 그리드 모델: gaa2nm = 나노시트 스택 0.2µ, asap7 = 핀 0.07µ — 입력을 그리드에 스냅
+  const unit = params.model === 'gaa2nm' ? 0.2 : params.model === 'asap7' ? 0.07 : null
+  const unitName = params.model === 'asap7' ? { ko: '핀', en: 'fin' } : { ko: '스택', en: 'stack' }
   const setDev = (dk: DeviceKey, field: 'w_um' | 'l_nm' | 'm', v: number) => {
+    if (unit && field === 'w_um') v = Math.max(unit, Math.round(Math.round(v / unit) * unit * 1000) / 1000)
     onChange({
       ...params,
       devices: { ...params.devices, [dk]: { ...params.devices[dk], [field]: v } },
@@ -31,7 +35,7 @@ export default function DeviceEditor({ params, onChange, disabled, lang }: Props
         style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', color: 'var(--faint)' }}
       >
         <span>{t(lang, UI.device)}</span>
-        <span>W (µm)</span>
+        <span>{unit ? `W (${unit}µ×${lang === 'ko' ? unitName.ko : unitName.en})` : 'W (µm)'}</span>
         <span>L (nm)</span>
         <span>M</span>
       </div>
@@ -60,9 +64,10 @@ export default function DeviceEditor({ params, onChange, disabled, lang }: Props
               <input
                 key={f.k}
                 type="number"
-                step={f.step}
+                step={unit && f.k === 'w_um' ? unit : f.step}
                 min={0}
                 disabled={disabled}
+                title={unit && f.k === 'w_um' ? (lang === 'ko' ? `${unit}µ(${unitName.ko} 1개) 단위로 스냅 — 현재 ${Math.round(params.devices[dk].w_um / unit)}${unitName.ko} × M${params.devices[dk].m}` : `snaps to ${unit}µ (1 ${unitName.en}) — ${Math.round(params.devices[dk].w_um / unit)} ${unitName.en}s × M${params.devices[dk].m}`) : undefined}
                 value={params.devices[dk][f.k]}
                 onChange={(e) => setDev(dk, f.k, parseFloat(e.target.value) || 0)}
                 aria-label={`${meta.name} ${f.label}`}

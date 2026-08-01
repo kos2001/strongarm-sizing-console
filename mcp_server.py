@@ -40,6 +40,21 @@ _TARGETS_SCHEMA = {
 
 TOOLS = [
     {
+        "name": "strongarm_design_brief",
+        "description": "ONE-CALL design briefing for the comparator: nominal ngspice metrics, "
+                       "predicted offset, spec margins, W-grid/stack info (gaa2nm/asap7), and "
+                       "actionable lever hints. Call this FIRST — it replaces separate "
+                       "run_sim + sensitivity round-trips for situational awareness.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
+    },
+    {
+        "name": "vco_design_brief",
+        "description": "ONE-CALL design briefing for the ring VCO: nominal oscillation, target-f "
+                       "margin, W-grid/stack info, and lever hints (starve widths, N, xcpl strength).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"},
+                        "targets": {"type": "object", "properties": {"f_ghz": {"type": "number"}}}}},
+    },
+    {
         "name": "strongarm_run_sim",
         "description": "Simulate a StrongARM latch comparator in ngspice for a given sizing: "
                        "decision_time_ps, power_uw, functional, and Monte-Carlo offset_sigma_mv.",
@@ -54,8 +69,12 @@ TOOLS = [
         "name": "strongarm_optimize",
         "description": "Autonomously size W/M via log-space Differential Evolution + a GP surrogate, "
                        "minimizing power subject to offset + decision-time + functional constraints. "
-                       "Returns the search trajectory, final sizing, and pass/fail verdicts.",
-        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
+                       "CORNER-AWARE by default: a FEO-style feasibility stage lifts vcm_frac until the "
+                       "worst corner (slow-N/-40C/0.9VDD) survives, then every candidate is co-evaluated "
+                       "there (widths alone cannot save that corner — measured x8 still dead). "
+                       "Returns trajectory, final sizing, verdicts, corner_note, final_corner.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA,
+                        "corner_aware": {"type": "boolean"}, "corner_relax": {"type": "number"}}},
     },
     {
         "name": "strongarm_pareto",
@@ -125,13 +144,236 @@ TOOLS = [
         "description": "Worst-case corner extraction: rank the full 27-corner PVT grid by decision margin.",
         "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA, "targets": _TARGETS_SCHEMA}},
     },
+    {
+        "name": "vco_simulate",
+        "description": "Simulate the xcpl ring VCO in ngspice for a given sizing/params "
+                       "(devices invp/invn/starvep/starven/xcplp/rstp, vdd, vctrl, n_stages odd, cload_ff). "
+                       "Returns f_osc_ghz, power_uw, vpp, oscillates; do_tuning=true adds the V_ctrl tuning curve/Kvco.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "do_tuning": {"type": "boolean"}}},
+    },
+    {
+        "name": "vco_optimize",
+        "description": "Auto-size the ring VCO device widths (DE + GP surrogate, real ngspice) to hit a target "
+                       "oscillation frequency at minimum power. targets={f_ghz: X}. Returns trajectory, final_params, tuning. "
+                       "For agent turns pass pop=6, gens=3 (full-budget search belongs to the console button). "
+                       "search_stages (default true) also picks the odd stage count N in 3..9 nearest the target f.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"},
+                        "pop": {"type": "integer"}, "gens": {"type": "integer"}, "search_stages": {"type": "boolean"}}},
+    },
+    {
+        "name": "strongarm_metastability",
+        "description": "Comparator metastability sweep: decision time vs shrinking input (log sweep) -> regeneration tau.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "strongarm_noise_probit",
+        "description": "MEASURE input-referred noise sigma by probit noise-counting: repeated clocked "
+                       "decisions with injected device thermal noise near metastability, P(+|vin) fitted "
+                       "to a Gaussian CDF. Cross-checks the analytic estimate. ~5s.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA,
+                        "n_per_point": {"type": "integer"}}},
+    },
+    {
+        "name": "strongarm_ber",
+        "description": "Comparator bit-error-rate vs input amplitude (noise + metastability model).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "strongarm_sensitivity",
+        "description": "Per-device sensitivity: which W is the lever for decision time / power / offset (finite differences, real sims).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "strongarm_maxfclk",
+        "description": "Maximum clock rate sweep: highest f_clk where the comparator still resolves, + energy per conversion.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "strongarm_yield",
+        "description": "Parametric yield (mismatch x PVT Monte Carlo) against the spec targets.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}, "n": {"type": "integer"}}},
+    },
+    {
+        "name": "strongarm_layout",
+        "description": "Generate the comparator layout (GDS-style rects) + light DRC (min width/spacing) for the current sizing.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "strongarm_postlayout",
+        "description": "Re-simulate with layout-extracted node capacitance (drawn geometry x cap density): schematic vs post-layout decision time.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "strongarm_netlist",
+        "description": "Return the ngspice deck (.sp text) for the given comparator params — run it directly or hand-edit.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "vdiff": {"type": "number"}}},
+    },
+    {
+        "name": "strongarm_netlist_parse",
+        "description": "Parse a SPICE deck (this console's naming) back into params: kind comparator|vco, devices W/L/M, vdd, topology, N.",
+        "inputSchema": {"type": "object", "properties": {"netlist": {"type": "string"}}, "required": ["netlist"]},
+    },
+    {
+        "name": "strongarm_wicked_wcd",
+        "description": "Comparator worst-case distance (sigma robustness proxy) over PVT space -> beta_sigma + estimated yield.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
+        "name": "strongarm_wicked_mismatch",
+        "description": "Comparator per-device mismatch Monte Carlo (netlist-level delvto sampling).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "strongarm_wicked_dno",
+        "description": "Deterministic nominal optimization refinement (WiCkeD DNO) for the comparator.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
+        "name": "vco_tuning",
+        "description": "Ring-VCO V_ctrl sweep -> f(V_ctrl) tuning curve, tuning range %, Kvco (GHz/V).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "vco_pvt",
+        "description": "Ring-VCO 27-corner PVT sweep (SS/TT/FF x -40/27/125C x 90/100/110% VDD): f_osc & power per corner.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "vco_pushing",
+        "description": "Supply pushing: f_osc vs VDD -> pushing coefficient (MHz/V).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "vco_phasenoise",
+        "description": "Phase noise estimate L(df), jitter, FoM for the ring VCO.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "vco_pareto",
+        "description": "NSGA-II power vs frequency Pareto front for the ring VCO (front carries per-point device sizing).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "vco_fullflow",
+        "description": "One-shot VCO flow: size -> parasitics -> PVT -> GDS, with per-stage verdicts.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
+        "name": "vco_layout",
+        "description": "Generate the ring-VCO layout (rects) + light DRC for the current sizing.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "vco_postlayout",
+        "description": "Re-simulate the VCO with layout-extracted node caps: schematic vs post-layout f_osc.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "vco_netlist",
+        "description": "Return the ngspice deck (.sp text) for the given xcpl ring-VCO params — run directly or hand-edit.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
+    },
+    {
+        "name": "vco_wicked_verdict",
+        "description": "VCO nominal verdict vs targets (f band +-tol, power, oscillates) with margins.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
+        "name": "vco_wicked_yieldsweep",
+        "description": "VCO yield vs process skew (mismatch MC per skew point).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
+        "name": "vco_wicked_yop",
+        "description": "VCO yield optimization (WiCkeD YOP): iterate sizing to maximize estimated yield.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
+        "name": "vco_wicked_dno",
+        "description": "VCO deterministic nominal optimization (frequency centering) refinement.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
+        "name": "vco_wicked_postlayout",
+        "description": "VCO worst-case distance including layout parasitics.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
+    {
+        "name": "spice_run_netlist",
+        "description": "Run an ARBITRARY ngspice deck (.sp text) and return every .meas result + the log tail. "
+                       "Use for structural circuit edits: fetch a deck with strongarm_netlist/vco_netlist, "
+                       "add/remove/rewire devices, then verify here. `shell` commands are rejected.",
+        "inputSchema": {"type": "object", "properties": {"netlist": {"type": "string"}}, "required": ["netlist"]},
+    },
+    {
+        "name": "vco_wicked",
+        "description": "WiCkeD-inspired flow for the ring VCO (starved or xcpl topology): FEO feasibility, "
+                       "DNO frequency-centering refinement, WCO PVT worst case, WCD sigma/yield proxy, "
+                       "per-device mismatch Monte Carlo (start-up/latch-up risk), screening, corners, post-layout.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"},
+            "dno_iterations": {"type": "integer"}, "wcd_samples": {"type": "integer"}, "mc_samples": {"type": "integer"}}},
+    },
+    {
+        "name": "vco_wicked_mismatch",
+        "description": "Ring-VCO per-device Vth mismatch Monte Carlo: sigma_f/f spread and oscillation-failure "
+                       "count (xcpl cross-coupled latch-up risk under Pelgrom mismatch).",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "n": {"type": "integer"}}},
+    },
+    {
+        "name": "vco_wicked_screening",
+        "description": "Ring-VCO parameter screening: rank device widths by frequency/power sensitivity, "
+                       "flagging moves that kill the oscillation.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"},
+            "delta": {"type": "number"}}},
+    },
+    {
+        "name": "vco_wicked_wcd",
+        "description": "Ring-VCO worst-case distance (sigma robustness proxy) over process skew, VDD, and temperature.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"},
+            "n_samples": {"type": "integer"}}},
+    },
+    {
+        "name": "vco_wicked_corners",
+        "description": "Ring-VCO worst-case corner extraction: rank the 27-corner PVT grid by frequency-band margin.",
+        "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}, "targets": {"type": "object"}}},
+    },
 ]
 _TOOL_ENDPOINT = {
+    "strongarm_design_brief": "/api/brief",
+    "vco_design_brief": "/api/vco/brief",
     "strongarm_optimize": "/api/optimize",
     "strongarm_pareto": "/api/pareto",
     "strongarm_pvt": "/api/pvt",
     "strongarm_fullflow": "/api/fullflow",
     "strongarm_wicked": "/api/wicked/fullflow",
+    "vco_simulate": "/api/vco/simulate",
+    "vco_optimize": "/api/vco/optimize",
+    "strongarm_metastability": "/api/metastability",
+    "strongarm_ber": "/api/ber",
+    "strongarm_noise_probit": "/api/noise/probit",
+    "strongarm_sensitivity": "/api/sensitivity",
+    "strongarm_maxfclk": "/api/maxfclk",
+    "strongarm_yield": "/api/yield",
+    "strongarm_layout": "/api/layout",
+    "strongarm_postlayout": "/api/postlayout",
+    "strongarm_netlist_parse": "/api/netlist/parse",
+    "spice_run_netlist": "/api/spice/run",
+    "strongarm_wicked_wcd": "/api/wicked/wcd",
+    "strongarm_wicked_mismatch": "/api/wicked/mismatch",
+    "strongarm_wicked_dno": "/api/wicked/dno",
+    "vco_tuning": "/api/vco/tuning",
+    "vco_pvt": "/api/vco/pvt",
+    "vco_pushing": "/api/vco/pushing",
+    "vco_phasenoise": "/api/vco/phasenoise",
+    "vco_pareto": "/api/vco/pareto",
+    "vco_fullflow": "/api/vco/fullflow",
+    "vco_layout": "/api/vco/layout",
+    "vco_postlayout": "/api/vco/postlayout",
+    "vco_wicked_verdict": "/api/vco/wicked/verdict",
+    "vco_wicked_yieldsweep": "/api/vco/wicked/yieldsweep",
+    "vco_wicked_yop": "/api/vco/wicked/yop",
+    "vco_wicked_dno": "/api/vco/wicked/dno",
+    "vco_wicked_postlayout": "/api/vco/wicked/postlayout",
     "strongarm_wicked_importance": "/api/wicked/importance",
     "strongarm_wicked_optimize": "/api/wicked/optimize",
     "strongarm_wicked_screening": "/api/wicked/screening",
@@ -139,7 +381,27 @@ _TOOL_ENDPOINT = {
     "strongarm_wicked_yop": "/api/wicked/yop",
     "strongarm_wicked_postlayout": "/api/wicked/postlayout",
     "strongarm_wicked_corners": "/api/wicked/corners",
+    "vco_wicked": "/api/vco/wicked/fullflow",
+    "vco_wicked_mismatch": "/api/vco/wicked/mismatch",
+    "vco_wicked_screening": "/api/vco/wicked/screening",
+    "vco_wicked_wcd": "/api/vco/wicked/wcd",
+    "vco_wicked_corners": "/api/vco/wicked/corners",
 }
+
+
+# 텍스트(.sp) 를 반환하는 도구 — JSON 파싱 없이 원문 그대로 전달
+_TEXT_ENDPOINT = {
+    "strongarm_netlist": "/api/netlist",
+    "vco_netlist": "/api/vco/netlist",
+}
+
+
+def _api_post_text(path, body):
+    import urllib.request
+    req = urllib.request.Request(API_BASE + path, data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=900) as r:
+        return r.read().decode()
 
 
 def _api_post(path, body):
@@ -147,7 +409,7 @@ def _api_post(path, body):
     import urllib.request
     req = urllib.request.Request(API_BASE + path, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=600) as r:
+    with urllib.request.urlopen(req, timeout=900) as r:
         return json.loads(r.read())
 
 
@@ -187,6 +449,10 @@ def handle(msg):
             if name == "strongarm_run_sim":
                 do_off = args.pop("do_offset", True)
                 out = run_sim.run_sim(args, do_offset=do_off)
+            elif name in _TEXT_ENDPOINT:
+                text = _api_post_text(_TEXT_ENDPOINT[name], args)
+                _result(rid, {"content": [{"type": "text", "text": text}]})
+                return
             elif name in _TOOL_ENDPOINT:
                 out = _api_post(_TOOL_ENDPOINT[name], args)   # proxy to the running backend
             else:

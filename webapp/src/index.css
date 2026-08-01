@@ -41,6 +41,9 @@
    here caps the scroll region to the viewport, so tall pages become unreachable
    (the sidebar stays sticky via position:sticky, not a fixed-height ancestor). */
 html, body, #root { min-height: 100%; }
+/* 모든 화면에서 스크롤 보장: 내용이 넘치면 문서 스크롤이 항상 동작하고,
+   임베드/확장 등 외부에서 overflow:hidden 을 걸어도 되돌린다. */
+html, body { overflow-y: auto !important; overflow-x: auto !important; }
 body {
   margin: 0;
   background: var(--bg);

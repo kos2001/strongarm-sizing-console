@@ -51,13 +51,63 @@ def _find_ngspice():
 NGSPICE = _find_ngspice()
 
 # ---- real BSIM4 device model: PTM 45nm bulk (models nmos/pmos, level=54) ----
+GAA2NM_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "models", "gaa2nm_approx.txt")
 MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "models", "ptm_45nm_bulk.txt")
 
+# ---- ASAP7 7nm FinFET (진짜 BSIM-CMG 107, ngspice OSDI 로 실행) ----
+# openvaf-r 로 컴파일한 bsimcmg107.osdi + ASU ASAP7 예측 PDK 모델 카드(TT/SS/FF,
+# scripts/adapt_asap7.py 로 ngspice 형식 변환). 소자는 핀 수(NFIN)로만 사이징.
+ASAP7_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "asap7")
+ASAP7_OSDI = os.path.join(ASAP7_DIR, "bsimcmg107.osdi")
+W_FIN_UM = 0.07     # Weff per fin ≈ 2×HFIN(32n) + TFIN(6.5n) ≈ 70nm
+
+
+def nfin_of(dd):
+    """asap7: 소자의 총 폭(w_um × m)을 핀 수로 양자화 — FinFET 에서 W 는
+    연속값이 아니라 핀 개수다(핀 1개 ≈ Weff 0.07µm)."""
+    return max(1, round(dd["w_um"] * dd["m"] / W_FIN_UM))
+
+# gaa2nm 에서 W 는 연속값이 아니다 — 나노시트 스택 1개의 등가폭(3시트 ×
+# 둘레 ≈ 0.2 µm)의 정수배로만 존재한다(스택 수 = W/0.2). 넷리스트 생성 시
+# W 를 이 그리드에 스냅한다.
+W_SHEET_UM = 0.2
+
+
+def skew_scale(p):
+    """공정 코너/시그마 Vth 스큐 스케일. gaa2nm(|Vth0| 0.20V)·asap7(LVT
+    |Vth|~0.17V)은 45nm급 ±50mV 코너가 과대 — 절반(±25mV)으로 줄인다."""
+    return 0.5 if p.get("model") in ("gaa2nm", "asap7") else 1.0
+
+
+def w_unit(p):
+    """모델별 W 그리드 단위(µm): gaa2nm 은 나노시트 스택 0.2, asap7 은 핀 0.07.
+    연속-W 모델(ptm/sky130)은 None."""
+    if p.get("model") == "gaa2nm":
+        return W_SHEET_UM
+    if p.get("model") == "asap7":
+        return W_FIN_UM
+    return None
+
+
+def quantize_devices(p):
+    """W 그리드 모델(gaa2nm/asap7): W 를 단위 그리드(w_unit 정수배, 최소 1)에
+    스냅. W 를 단위폭 고정 + M=finger 로 접지 않는 이유(gaa2nm): 카드가
+    geoMod=1(비공유 접합 기하 자동계산)이라 finger 수에 비례해 접합 둘레 캡이
+    부풀어, 같은 총폭인데 지연이 2배로 나오는 아티팩트가 있다(실 레이아웃은
+    확산 공유). asap7 은 넷리스트에서 NFIN=총폭/0.07 로 접힌다(핀은 실제
+    병렬 구조라 물리적으로 정확). 연속-W 모델은 그대로 통과."""
+    u = w_unit(p)
+    if u is None:
+        return p["devices"]
+    return {k: {**d, "w_um": max(u, round(round(d["w_um"] / u) * u, 3))}
+            for k, d in p["devices"].items()}
+
 # default seed = P1_SAR_ADC first-cut sizing, adapted to PTM 45nm bulk
-# (VDD 1.0 V nominal, minimum L = 45 nm for this node)
+# (VDD 0.7 V nominal, minimum L = 45 nm for this node)
 DEFAULT_PARAMS = {
-    "vdd": 1.0,
+    "vdd": 0.7,
     "vcm_frac": 0.62,     # input common mode as fraction of vdd
     "cload_ff": 15.0,
     "avt_mv_um": 2.0,     # Pelgrom coefficient (mV*um), ~45nm-class
@@ -67,7 +117,8 @@ DEFAULT_PARAMS = {
         "tail":  {"w_um": 12.0, "l_nm": 45.0, "m": 6},
         "ncc":   {"w_um": 4.0, "l_nm": 45.0, "m": 2},
         "pcc":   {"w_um": 9.0, "l_nm": 45.0, "m": 4},
-        "pre":   {"w_um": 4.0, "l_nm": 45.0, "m": 2},
+        "pre":   {"w_um": 4.0, "l_nm": 45.0, "m": 2},   # S3/S4 — 출력 X/Y 프리차지
+        "prei":  {"w_um": 4.0, "l_nm": 45.0, "m": 2},   # S1/S2 — 내부 P/Q 프리차지 (부하가 달라 독립 사이징)
     },
 }
 
@@ -78,7 +129,7 @@ def _dev(d, vt="dvtn"):
 
 
 def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
-    d = p["devices"]
+    d = quantize_devices(p)
     vdd = p["vdd"]
     vcm = p["vcm_frac"] * vdd
     cl = p["cload_ff"]
@@ -95,14 +146,21 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
             def _sw(*ks):
                 return sum(d[k]["w_um"] * d[k]["m"] for k in ks)
             c_out = round(0.25 * _sw("pcc", "ncc", "pre") + 1.5, 3)   # fF at outp/outn
-            c_int = round(0.25 * _sw("input", "ncc") + 1.0, 3)        # fF at nX/nY
+            c_int = round(0.25 * _sw("input", "ncc", "prei") + 1.0, 3)        # fF at internal nodes
+        _in1, _in2 = ("nX", "nY")
         par_lines = ("* --- extracted layout parasitics ---\n"
                      f"Cpo outp 0 {c_out}f\nCpn outn 0 {c_out}f\n"
-                     f"Cpx nX 0 {c_int}f\nCpy nY 0 {c_int}f")
+                     f"Cpx {_in1} 0 {c_int}f\nCpy {_in2} 0 {c_int}f")
     temp = p.get("temp", 27)
     pskew = p.get("pskew", 0.0)   # process corner: +slow (SS), -fast (FF), 0 typical
-    # model backend: generic PTM 45nm (.model) or REAL SkyWater SKY130 (.lib subckts)
+    # 교차 코너(SF/FS)용 독립 스큐 — 미지정 시 정렬 코너(pskew)로 동작.
+    # 표기: 첫 글자=NMOS, 둘째=PMOS. nskew>0 = slow N, pskew_p>0 = slow P.
+    nskew = p.get("nskew", pskew)
+    pskew_p = p.get("pskew_p", pskew)
+    # model backend: generic PTM 45nm (.model), REAL SkyWater SKY130 (.lib subckts),
+    # or REAL ASAP7 7nm FinFET (BSIM-CMG 107 via ngspice OSDI)
     sky = p.get("model") == "sky130"
+    asap = p.get("model") == "asap7"
     if sky:
         corner = p.get("corner", "tt")
         # one-corner trimmed lib: ~1.4s/sim vs ~19s for the full 51-corner .lib
@@ -114,19 +172,33 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
             l_um = max(dd["l_nm"] / 1000.0, 0.15)                # SKY130 min L
             sub = "sky130_fd_pr__nfet_01v8" if kind == "n" else "sky130_fd_pr__pfet_01v8"
             return f"X{label} {nodes} {sub} w={dd['w_um']} l={round(l_um, 3)} nf=1 mult={dd['m']}"
+    elif asap:
+        corner = p.get("corner", "TT").upper()
+        model_header = f'.include "{os.path.join(ASAP7_DIR, f"7nm_{corner}.sp")}"'
+        # BSIM-CMG DELVTRAND 는 + 가 Vth ↓(빠름) — delvto 관례와 부호가 반대라 반전
+        param_line = f".param dvtn={-nskew} dvtp={-pskew_p}"
+
+        def dline(label, nodes, dk, kind):
+            dd = d[dk]
+            mdl = "nmos_lvt" if kind == "n" else "pmos_lvt"
+            vt = "dvtn" if kind == "n" else "dvtp"
+            return (f"N{label} {nodes} {mdl} l={dd['l_nm']}n "
+                    f"nfin={nfin_of(dd)} delvtrand={{{vt}}}")
     else:
-        model_header = f'.include "{MODEL_PATH}"'
-        param_line = f".param dvtn={pskew} dvtp={-pskew}"
+        model_header = (f'.include "{GAA2NM_PATH}"' if p.get("model") == "gaa2nm"
+                        else f'.include "{MODEL_PATH}"')
+        param_line = f".param dvtn={nskew} dvtp={-pskew_p}"
 
         def dline(label, nodes, dk, kind):
             return f"{label} {nodes} {'nmos' if kind == 'n' else 'pmos'} {_dev(d[dk], 'dvtn' if kind == 'n' else 'dvtp')}"
 
+    clkb_line = ""
     dev_block = "\n".join([
         "* --- input differential pair ---",
         dline("M1", "nX g1 tail 0", "input", "n"),
         dline("M2", "nY g2 tail 0", "input", "n"),
         "* --- tail switch ---",
-        dline("Mt", "tail clk 0 0", "tail", "n"),
+        dline("M7", "tail clk 0 0", "tail", "n"),     # 그림 표기: 테일 = M7
         "* --- cross-coupled NMOS latch ---",
         dline("M3", "outp outn nX 0", "ncc", "n"),
         dline("M4", "outn outp nY 0", "ncc", "n"),
@@ -134,10 +206,10 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
         dline("M5", "outp outn vdd vdd", "pcc", "p"),
         dline("M6", "outn outp vdd vdd", "pcc", "p"),
         "* --- precharge PMOS (on when clk low) ---",
-        dline("M7", "outp clk vdd vdd", "pre", "p"),
-        dline("M8", "outn clk vdd vdd", "pre", "p"),
-        dline("M9", "nX clk vdd vdd", "pre", "p"),
-        dline("M10", "nY clk vdd vdd", "pre", "p"),
+        dline("MS3", "outp clk vdd vdd", "pre", "p"),   # S3/S4 — 출력 X/Y 프리차지
+        dline("MS4", "outn clk vdd vdd", "pre", "p"),
+        dline("MS1", "nX clk vdd vdd", "prei", "p"),    # S1/S2 — 내부 P/Q 프리차지
+        dline("MS2", "nY clk vdd vdd", "prei", "p"),
     ])
     # clock timing (defaults reproduce the original 200p/3n-high/6n-period run)
     clk_hi = p.get("clk_high_ns", 3.0)
@@ -157,7 +229,7 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
 {model_header}
 Vdd vdd 0 {vdd}
 * clock: precharge (clk=0) for 200ps, then evaluate
-Vclk clk 0 PULSE(0 {vdd} 200p 12p 12p {clk_hi}n {clk_per}n)
+Vclk clk 0 PULSE(0 {vdd} 200p 12p 12p {clk_hi}n {clk_per}n)\n{clkb_line}
 * differential input around common mode
 Vinp inpx 0 {vcm + vdiff/2.0}
 Vinn innx 0 {vcm - vdiff/2.0}
@@ -176,6 +248,7 @@ Babs  outabs  0 V=abs(V(outp)-V(outn))
 
 .control
 set noaskquit
+{f"pre_osdi {ASAP7_OSDI}" if asap else ""}
 tran {tstep}p {tstop}n
 meas tran tdec TRIG v(clk) VAL='{vdd/2.0}' RISE=1 TARG v(outabs) VAL='{0.7*vdd}' CROSS=1
 meas tran fdiff FIND v(outdiff) AT={meas_at}n
@@ -187,16 +260,94 @@ meas tran iavg AVG i(Vdd) FROM=200p TO={iavg_to}n
 """
 
 
-def _run(netlist):
-    with tempfile.NamedTemporaryFile("w", suffix=".sp", delete=False) as f:
-        f.write(netlist)
-        path = f.name
-    try:
-        r = subprocess.run([NGSPICE, "-b", path], capture_output=True,
-                            text=True, timeout=60)
-        return r.stdout + "\n" + r.stderr
-    finally:
-        os.unlink(path)
+# --- ngspice invocation: one gate, one memo -----------------------------------
+# Every ngspice run is a CPU-bound process, and the thread pools in this codebase
+# nest: a 45-corner PVT fan-out calls run_sim, whose offset Monte-Carlo fans out
+# again, so per-pool limits multiply (8 x 8 = 64 processes). This bounds the total
+# process-wide instead. Measured throughput is flat from 8 to 64 slots — macOS
+# absorbs the oversubscription — so this is a resource ceiling for smaller/loaded
+# machines and a single knob for it, not a speedup. Default leaves headroom.
+_NG_SLOTS = int(os.environ.get("NGSPICE_MAX_PROCS") or 0) or max(8, os.cpu_count() or 8)
+_ng_gate = threading.BoundedSemaphore(_NG_SLOTS)
+
+# A deck's output is a deterministic function of its text, so identical decks are
+# worth remembering: coordinate descent revisits candidates, the console re-runs
+# the same sizing across pages, and sweeps overlap at their endpoints. Bounded
+# LRU on sha1(deck) — set NGSPICE_CACHE=0 to disable.
+_NG_CACHE_MAX = 4096 if os.environ.get("NGSPICE_CACHE") is None else int(os.environ["NGSPICE_CACHE"])
+_ng_cache = {}
+_ng_order = []                      # LRU order, newest last; guarded by _ng_lock
+_ng_lock = threading.Lock()
+_ng_stats = {"hits": 0, "misses": 0}
+
+# Decks that write files (waveform capture, user `wrdata` decks) have a side
+# effect beyond their stdout, so a hit would silently skip producing the file.
+_NG_SIDE_EFFECT = re.compile(r"^\s*(wrdata|write|print\s*>)", re.MULTILINE)
+
+
+def pmap(fn, items):
+    """Order-preserving parallel map for sim work. Each ngspice call is a
+    subprocess that releases the GIL, so threads are the right tool; the total
+    process count is bounded by `_ng_gate`, so the pool size here only needs to
+    be wide enough to keep that gate fed."""
+    items = list(items)
+    if len(items) < 2:
+        return [fn(i) for i in items]
+    with ThreadPoolExecutor(max_workers=min(len(items), _NG_SLOTS)) as ex:
+        return list(ex.map(fn, items))
+
+
+def ngspice_cache_stats():
+    """{hits, misses, size} — surfaced by /api/health so the cache is observable
+    rather than a silent behaviour change."""
+    with _ng_lock:
+        return {**_ng_stats, "size": len(_ng_cache), "max": _NG_CACHE_MAX,
+                "max_procs": _NG_SLOTS}
+
+
+def _ng_cache_get(key):
+    with _ng_lock:
+        if key not in _ng_cache:
+            _ng_stats["misses"] += 1
+            return None
+        _ng_stats["hits"] += 1
+        try:
+            _ng_order.remove(key)
+        except ValueError:
+            pass
+        _ng_order.append(key)
+        return _ng_cache[key]
+
+
+def _ng_cache_put(key, val):
+    with _ng_lock:
+        if key not in _ng_cache:
+            _ng_order.append(key)
+        _ng_cache[key] = val
+        while len(_ng_order) > _NG_CACHE_MAX:
+            _ng_cache.pop(_ng_order.pop(0), None)
+
+
+def _run(netlist, cache=True):
+    cacheable = cache and _NG_CACHE_MAX > 0 and not _NG_SIDE_EFFECT.search(netlist)
+    key = hashlib.sha1(netlist.encode()).hexdigest() if cacheable else None
+    if key is not None:
+        hit = _ng_cache_get(key)
+        if hit is not None:
+            return hit
+    with _ng_gate:                  # bound total concurrent ngspice, not per pool
+        with tempfile.NamedTemporaryFile("w", suffix=".sp", delete=False) as f:
+            f.write(netlist)
+            path = f.name
+        try:
+            r = subprocess.run([NGSPICE, "-b", path], capture_output=True,
+                               text=True, timeout=60)
+            out = r.stdout + "\n" + r.stderr
+        finally:
+            os.unlink(path)
+    if key is not None:
+        _ng_cache_put(key, out)
+    return out
 
 
 def _parse(out, key):
@@ -217,21 +368,85 @@ def _sky130_lib_path():
 # cache of one-corner libs (keeps ngspice from re-parsing all 51 corners each run)
 _SKY_CACHE = os.path.join(tempfile.gettempdir(), "strongarm_sky130_corners")
 
+# The only sky130 primitives this tool instantiates (see gen_netlist / _dev_line).
+# Everything else in a corner deck is a model bank we pay to parse and never use.
+_SKY_USED_DEVICES = ("nfet_01v8", "pfet_01v8")
+
+
+def _sky130_keep_include(base):
+    """Should this include inside a sky130 corner deck be parsed?
+
+    A corner file (`corners/tt.spice`) pulls ~30 model banks: LVT/HVT variants,
+    the 3.3/5/16/20 V families, ESD devices, the NPN, the RF cards and the
+    passive (`nonfet`) bank. We instantiate only the 1.8 V core nfet/pfet
+    subckts, so every other bank is parse time spent on models the netlist never
+    references — dropping them is bit-identical, and it is the same argument the
+    outer lib already makes for the R/C and specialized-cell banks.
+
+    Kept: the corner + mismatch cards for the devices in `_SKY_USED_DEVICES`,
+    and `all.spice` (shared process/statistical `.param`s the subckts read)."""
+    if base == "all.spice":
+        return True
+    return any(f"sky130_fd_pr__{d}__" in base for d in _SKY_USED_DEVICES)
+
+
+def _sky130_prune_corner_file(path, tag):
+    """Rewrite one `corners/<c>.spice` with the unused model banks dropped and
+    relative includes made absolute. Returns the cached pruned path, or `path`
+    unchanged if pruning is disabled or anything goes wrong."""
+    if os.environ.get("SKY130_PRUNE") == "0":   # escape hatch: parse the full deck
+        return path
+    srcdir = os.path.dirname(os.path.abspath(path))
+    out = os.path.join(_SKY_CACHE, f"corner_{os.path.basename(path)}_{tag}_v3.spice")
+    try:
+        if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(path):
+            return out
+        with open(path) as f:
+            lines = f.readlines()
+    except OSError:
+        return path
+    kept = []
+    for ln in lines:
+        m = re.match(r'^(\s*\.include\s+)"([^"]+)"(.*)$', ln)
+        if m:
+            inc = m.group(2)
+            if not _sky130_keep_include(os.path.basename(inc)):
+                continue
+            if not os.path.isabs(inc):
+                inc = os.path.normpath(os.path.join(srcdir, inc))
+            ln = f'{m.group(1)}"{inc}"{m.group(3)}\n'
+        kept.append(ln)
+    try:
+        os.makedirs(_SKY_CACHE, exist_ok=True)
+        tmp = f"{out}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "w") as f:
+            f.writelines(kept)
+        os.replace(tmp, out)   # atomic promote — concurrent builders are safe
+        return out
+    except OSError:
+        return path
+
 
 def sky130_corner_lib(corner="tt"):
     """The full sky130 .lib bundles 51 corner sections; ngspice re-parses ALL of
     them (the entire binned BSIM4 corpus) on every process launch — ~19s — even
     when one corner is used. This extracts just the requested `.lib <corner>`
     block into a standalone one-corner file (relative .includes rewritten to
-    absolute so it can live anywhere), cutting each sim to ~1.4s. Cached on disk
-    and reused; regenerated only if the source lib is newer. Falls back to the
-    full lib if the corner block isn't found."""
+    absolute so it can live anywhere), cutting each sim to ~1.4s. The corner file
+    it points at is pruned in turn to the device families we actually instantiate
+    (`_sky130_prune_corner_file`), which is what takes a warm sim from ~420ms to
+    ~185ms. Cached on disk and reused; regenerated only if the source lib is
+    newer. Falls back to the full lib if the corner block isn't found."""
     full = _sky130_lib_path()
     libdir = os.path.dirname(full)
     # cache key includes a hash of the source lib path so repointing
     # SKY130_NGSPICE_LIB to a different PDK can't reuse the wrong corner block
     tag = hashlib.sha1(os.path.abspath(full).encode()).hexdigest()[:8]
-    out = os.path.join(_SKY_CACHE, f"sky130_{corner}_{tag}_v2.lib.spice")  # v2: drops R/C banks
+    # v3: also prunes the corner file's unused device-family model banks. The
+    # prune setting is part of the name — otherwise flipping SKY130_PRUNE would
+    # silently reuse a lib built the other way.
+    pr = "full" if os.environ.get("SKY130_PRUNE") == "0" else "lean"
+    out = os.path.join(_SKY_CACHE, f"sky130_{corner}_{tag}_v3{pr}.lib.spice")
     try:
         if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(full):
             return out
@@ -257,7 +472,11 @@ def sky130_corner_lib(corner="tt"):
                 if re.search(r"(^|/)(r\+c|specialized_cells)", inc):
                     continue
                 if not os.path.isabs(inc):
-                    ln = f'{m.group(1)}"{os.path.join(libdir, inc)}"{m.group(3)}\n'
+                    inc = os.path.join(libdir, inc)
+                # the per-corner deck is the expensive one — prune its model banks
+                if os.path.basename(os.path.dirname(inc)) == "corners":
+                    inc = _sky130_prune_corner_file(inc, tag)
+                ln = f'{m.group(1)}"{inc}"{m.group(3)}\n'
             block.append(ln)
             if re.match(r"^\.endl\b", s):
                 break
@@ -281,6 +500,11 @@ def _model_header(p):
     if p.get("model") == "sky130":
         corner = p.get("corner", "tt")
         return f'.lib "{sky130_corner_lib(corner)}" {corner}'
+    if p.get("model") == "gaa2nm":
+        return f'.include "{GAA2NM_PATH}"'   # 2nm급 근사(BSIM4) — 경향 분석용
+    if p.get("model") == "asap7":
+        corner = p.get("corner", "TT").upper()
+        return f'.include "{os.path.join(ASAP7_DIR, f"7nm_{corner}.sp")}"'
     return f'.include "{MODEL_PATH}"'
 
 
@@ -288,12 +512,15 @@ def _input_id(p, vg):
     """|Id| (A) of one input device biased at (Vgs=vg, Vds=vdd/2, Vs=0) — op point."""
     d = p["devices"]["input"]
     vdd = p["vdd"]
+    osdi = f"pre_osdi {ASAP7_OSDI}\n" if p.get("model") == "asap7" else ""
     if p.get("model") == "sky130":
         dev = f"XM d g 0 0 sky130_fd_pr__nfet_01v8 w={d['w_um']} l={round(max(d['l_nm'] / 1000.0, 0.15), 3)} nf=1 mult={d['m']}"
+    elif p.get("model") == "asap7":
+        dev = f"NM d g 0 0 nmos_lvt l={d['l_nm']}n nfin={nfin_of(d)}"
     else:
         dev = f"M d g 0 0 nmos W={d['w_um']}u L={d['l_nm']}n M={d['m']}"
     out = _run(f".option temp={p.get('temp', 27)}\n{_model_header(p)}\n"
-               f"Vd d 0 {vdd / 2.0}\nVg g 0 {vg}\n{dev}\n.control\nop\nprint i(Vd)\n.endc\n.end\n")
+               f"Vd d 0 {vdd / 2.0}\nVg g 0 {vg}\n{dev}\n.control\n{osdi}op\nprint i(Vd)\n.endc\n.end\n")
     m = re.search(r"i\(vd\)\s*=\s*([-\d.eE+]+)", out, re.IGNORECASE)
     return abs(float(m.group(1))) if m else None
 
@@ -380,12 +607,7 @@ def measure_offset(p, rng):
     # identical to the serial version), then bisect each sample in parallel — the
     # samples are independent and each ngspice call releases the GIL.
     pairs = [(rng.gauss(0.0, sigma_vth), rng.gauss(0.0, sigma_vth)) for _ in range(p["n_mc"])]
-    workers = max(1, min(8, (os.cpu_count() or 4)))
-    if workers > 1 and len(pairs) > 1:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            offsets = list(ex.map(lambda ab: _offset_sample(p, ab[0], ab[1]), pairs))
-    else:
-        offsets = [_offset_sample(p, a, b) for a, b in pairs]
+    offsets = pmap(lambda ab: _offset_sample(p, ab[0], ab[1]), pairs)
     offsets = [o for o in offsets if o is not None]  # drop failed-sim samples (#5)
     n = len(offsets)
     if n == 0:                                       # no usable sample
@@ -416,6 +638,84 @@ def run_sim(params, seed=12345, do_offset=True, with_noise=False):
     return result
 
 
+
+def _probit(p):
+    """표준정규 역CDF Φ⁻¹(p) — 이분법(math.erfc 기반), 의존성 없음."""
+    lo, hi = -8.0, 8.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if 0.5 * math.erfc(-mid / math.sqrt(2.0)) < p:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def noise_probit(params, points=5, n_per_point=24, seed0=1000):
+    """입력환산 노이즈의 SPICE 실측 — 프로빗(noise-counting) 방법.
+
+    준안정점 주변의 DC 입력 vin 에서, 입력쌍 열잡음(S_v = 2·4kTγ/gm)을
+    trnoise 소스로 게이트에 주입한 클록 판정을 시드만 바꿔 반복하고
+    P(결정=+|vin) 을 센다. 가우시안 노이즈면 P = Φ(vin/σ) 이므로 probit
+    선형화 Φ⁻¹(P) = vin/σ 의 기울기에서 σ 를 얻는다. 해석적
+    √(2γkT/(gm·t_int)) 추정의 교차검증 (방법론은 공개 comparator 스킬
+    계열의 표준 기법 — 구현은 자체, VCO 지터 실측과 같은 주입 방식)."""
+    p = _full(params)
+    nom = measure_nominal(p)
+    dec = nom.get("decision_time_ps")
+    est = _estimate_noise(p, dec)          # 해석적 σ (µVrms) — 스윕 스케일
+    if not est:
+        return {"error": "해석적 노이즈 추정 실패(비기능?) — 프로빗 스윕 스케일을 정할 수 없습니다."}
+    vcm = p["vcm_frac"] * p["vdd"]
+    i0, i1 = _input_id(p, vcm), _input_id(p, vcm + 0.005)
+    gm = (i1 - i0) / 0.005
+    kT = 1.380649e-23 * (p.get("temp", 27) + 273.15)
+    tstep = p.get("tstep_ps", 1.0)
+    # 입력쌍 2개의 게이트 환산 백색잡음 → 단일 소스로 합산 주입
+    na = math.sqrt(2.0 * 4.0 * kT * (2.0 / 3.0) / gm / (tstep * 1e-12))
+
+    s = est * 1e-6
+    vins = [round(k * s, 12) for k in (-1.2, -0.6, 0.0, 0.6, 1.2)][:points]
+
+    def one(args):
+        vin, seed = args
+        nl = gen_netlist(p, vdiff=vin)
+        nl = nl.replace("Vos1 g1 inpx 0.0",
+                        f"Vos1 g1 inpx DC 0 trnoise({na:.6g} {tstep}p 0 0)")
+        nl = nl.replace("set noaskquit", f"set noaskquit\nsetseed {seed}")
+        f = _parse(_run(nl), "fdiff")
+        return None if f is None else (f < 0)   # 극성: vin>0 → outdiff<0
+
+    jobs = [(v, seed0 + i) for i in range(n_per_point) for v in vins]
+    outs = pmap(one, jobs)
+
+    pts, fit = [], []
+    for v in vins:
+        ds = [o for (vv, _), o in zip(jobs, outs) if vv == v and o is not None]
+        if not ds:
+            continue
+        n = len(ds)
+        p1 = sum(ds) / n
+        pts.append({"vin_uv": round(v * 1e6, 3), "p_plus": round(p1, 4), "n": n})
+        pc = min(max(p1, 0.5 / n), 1 - 0.5 / n)   # 프로빗 정의역으로 클램프
+        fit.append((v, _probit(pc)))
+    # 최소자승 z = a + b·vin → σ = 1/b
+    m = len(fit)
+    sx = sum(v for v, _ in fit); sz = sum(z for _, z in fit)
+    sxx = sum(v * v for v, _ in fit); sxz = sum(v * z for v, z in fit)
+    denom = m * sxx - sx * sx
+    if denom <= 0:
+        return {"error": "프로빗 피팅 실패(점 부족)", "points": pts}
+    b = (m * sxz - sx * sz) / denom
+    if b <= 0:
+        return {"error": "프로빗 기울기 비양수 — 노이즈가 스윕 범위를 지배", "points": pts}
+    sigma_uv = 1e6 / b
+    return {"sigma_uv_probit": round(sigma_uv, 1), "sigma_uv_analytic": est,
+            "ratio": round(sigma_uv / est, 3), "points": pts,
+            "n_sims": len(jobs), "inject_na_v": round(na, 9),
+            "method": "probit fit of P(+|vin), input-referred trnoise (2 devices), gamma=2/3"}
+
+
 def merge_devices(override):
     """Field-wise merge of a (possibly partial) device dict over the defaults, so
     a caller sending only e.g. {"input":{"w_um":10}} keeps l_nm/m from the default
@@ -432,6 +732,10 @@ def _full(params):
     p = dict(DEFAULT_PARAMS)
     p.update({k: v for k, v in params.items() if k != "devices"})
     p["devices"] = merge_devices(params.get("devices"))
+    # Pelgrom A_VT: 호출자가 명시하지 않으면 모델별 기본 — gaa2nm 은 얇은
+    # EOT·언도프드 채널로 매칭이 좋아 ~1.2mV·µm (45nm급 기본 2.0)
+    if p.get("model") == "gaa2nm" and "avt_mv_um" not in params:
+        p["avt_mv_um"] = 1.2
     return p
 
 
@@ -451,7 +755,7 @@ def metastability_sweep(params, amps=None):
         resolved = tdec is not None and fdiff is not None and abs(fdiff) > 0.7 * p["vdd"]
         return {"vin_v": v, "decision_time_ps": round(tdec * 1e12, 2) if (tdec and resolved) else None,
                 "resolved": bool(resolved)}
-    points = [_one(v) for v in amps]
+    points = pmap(_one, amps)          # the amplitudes are independent sims
     # fit t_dec = tau*ln(1/Vin) + c  over resolved points (regeneration regime)
     fit = _fit_tau(points)
     return {"points": points, "tau_ps": fit[0], "intercept_ps": fit[1],
@@ -502,7 +806,7 @@ def max_fclk_sweep(params, periods_ns=None):
                 "power_uw": round(pw, 3) if pw is not None else None,
                 "energy_fj": round(pw * T, 2) if pw is not None else None}
 
-    pts = [_one(T) for T in periods_ns]
+    pts = pmap(_one, periods_ns)       # each clock period is an independent sim
     ok = [pt for pt in pts if pt["ok"]]
     best = min(ok, key=lambda pt: pt["period_ns"]) if ok else None
     return {"points": pts,

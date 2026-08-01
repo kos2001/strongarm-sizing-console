@@ -89,3 +89,31 @@ def test_tight_offset_lowers_yield():
     loose = server.parametric_yield(base, {"decision_time_ps": 400, "offset_sigma_mv": 20}, n=24, seed=4)["yield_pct"]
     tight = server.parametric_yield(base, {"decision_time_ps": 400, "offset_sigma_mv": 1}, n=24, seed=4)["yield_pct"]
     assert tight <= loose
+
+
+def test_intent_router_classifies_common_asks():
+    """오케스트레이터 라우터 — 대표 요청들이 올바른 전문 역할로 분류돼야 한다."""
+    cases = [
+        ("지금 스펙 대비 마진 알려줘", "diagnose"),
+        ("판정시간이 왜 이렇게 길어?", "diagnose"),
+        ("전력 30µW 이하로 만들어줘", "size"),
+        ("입력쌍 W를 두 배로 키워줘", "size"),
+        ("PVT 코너 전부 확인해줘", "signoff"),
+        ("수율이 얼마나 나와?", "signoff"),
+        ("출력에 버퍼 인버터를 추가해줘", "edit"),
+        ("넷리스트에서 리셋 스위치를 제거해줘", "edit"),
+    ]
+    for q, want in cases:
+        assert server.classify_intent(q) == want, q
+
+
+def test_role_rules_are_domain_and_role_specific():
+    """역할 규칙: 도메인별 도구 이름, 역할별 단일 목적이 반영돼야 한다."""
+    d = server._role_rules("diagnose", "comparator")
+    assert "strongarm_design_brief" in d and "제안 금지" in d
+    v = server._role_rules("diagnose", "vco")
+    assert "vco_design_brief" in v
+    s = server._role_rules("size", "comparator")
+    assert "strongarm_optimize" in s and "미검증 제안 금지" in s
+    e = server._role_rules("edit", "comparator")
+    assert "spice_run_netlist" in e

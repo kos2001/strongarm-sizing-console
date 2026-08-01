@@ -12,17 +12,28 @@ Run:  python3 server.py [port]     (default 8770)
 The Vite dev server proxies /api to this port (see vite.config.ts).
 """
 import copy
+import gzip
 import json
 import math
 import mimetypes
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ngspice runs as a subprocess (releases the GIL), so independent evaluations
 # parallelize for real. Cap workers so a big DE/PVT sweep can't fork-bomb.
+# (run_sim._ng_gate bounds the total process count across nested pools.)
 _WORKERS = max(2, min(8, (os.cpu_count() or 4)))
+
+# Response compression. Bodies below the threshold aren't worth the framing.
+_GZIP_MIN = 1024
+_GZIP_LEVEL = 6
+# The built assets are content-hashed and immutable, so their compressed bytes
+# are worth keeping instead of re-gzipping ~370 KiB of JS on every page load.
+_static_gz = {}
+_static_gz_lock = threading.Lock()
 
 
 def _pmap(fn, items):
@@ -40,6 +51,7 @@ import run_sim  # noqa: E402
 import layout  # noqa: E402
 import vco_sim  # noqa: E402
 import wicked  # noqa: E402
+import vco_wicked  # noqa: E402
 
 def _arg_port(default=8770):
     if len(sys.argv) > 1:
@@ -102,7 +114,7 @@ def _verdicts(nominal, offset, targets):
     return meas, v
 
 
-DEV_KEYS = ["input", "tail", "ncc", "pcc", "pre"]
+DEV_KEYS = ["input", "tail", "ncc", "pcc", "pre", "prei"]
 
 
 def _pred_offset_mv(p):
@@ -115,7 +127,35 @@ def _total_w(p):
     return round(sum(d["w_um"] * d["m"] for d in p["devices"].values()), 1)
 
 
-def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
+def _snap_w(p):
+    # W 그리드 모델(gaa2nm: 시트 0.2µ, asap7: 핀 0.07µ) — 옵티마이저 후보의
+    # 표시값이 넷리스트 양자화(run_sim.quantize_devices) 결과와 일치하도록 스냅.
+    s = run_sim.w_unit(p)
+    if s:
+        for d in p["devices"].values():
+            d["w_um"] = max(s, round(round(d["w_um"] / s) * s, 3))
+    return p
+
+
+def _stacks(p):
+    # 그리드 모델의 소자별 정수 단위 수(gaa2nm: 스택 W/0.2, asap7: 핀 W/0.07)
+    # — 자동 사이징이 실제로 찾는 것은 연속 W 가 아니라 이 정수다.
+    s = run_sim.w_unit(p) or 1.0
+    return {k: int(round(d["w_um"] / s)) for k, d in p["devices"].items()}
+
+
+def _xkey(base, x):
+    # 후보 캐시 키. W 그리드 모델(gaa2nm/asap7)은 정수(스택/핀 수) 공간으로
+    # 키를 잡는다 — 같은 그리드 점으로 스냅되는 연속 후보들이 ngspice 를 다시
+    # 돌지 않으므로, log-공간 DE/CD 는 사실상 정수 탐색이 된다.
+    s = run_sim.w_unit(base)
+    if s:
+        return tuple(max(1, round((10 ** v) / s)) for v in x)
+    return tuple(round(v, 3) for v in x)
+
+
+def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
+             corner_aware=True, corner_relax=2.5):
     """Global sizing via log-space **Differential Evolution**.
 
     Minimizes power subject to offset + decision-time + functional constraints
@@ -160,10 +200,22 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
         p = copy.deepcopy(base)
         for i, dv in enumerate(DEV_KEYS):
             p["devices"][dv]["w_um"] = round(10 ** x[i], 2)
-        return p
+        return _snap_w(p)
 
     cache = {}
     n_sims = [0]
+
+    # 코너 인지: 공칭만 보고 사이징하면 slow-N/저온/저전압에서 죽는 설계가
+    # '성공'으로 나온다(45코너 실측: 실패 9개 전부 SS/SF·-40°C·0.9VDD 계열).
+    # 대표 최악 코너(slow NMOS + -40°C + 0.9·VDD) 1회를 후보마다 같이 평가해
+    # 비기능은 사실상 배제하고, 코너 판정시간은 완화 스펙(corner_relax×)으로
+    # 제약한다 — 후보당 시뮬 2배, 사인오프는 여전히 45코너 PVT 로.
+    _sk = 0.05 * run_sim.skew_scale(base)
+
+    def _worst_corner(p):
+        wp = {**copy.deepcopy(p), "nskew": _sk, "pskew_p": _sk,
+              "temp": -40, "vdd": round(p["vdd"] * 0.9, 4)}
+        return run_sim.run_sim(wp, do_offset=False)["nominal"]
 
     def _eval_raw(x):
         # pure: runs one ngspice sim, touches no shared state (thread-safe)
@@ -181,11 +233,19 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
             cost += 5000.0 * (dec / dec_t - 1.0)      # decision-time penalty
         if offp > off_t:
             cost += 5000.0 * (offp / off_t - 1.0)     # offset penalty (Pelgrom)
-        return {"cost": cost, "x": list(x), "p": p, "nom": nom, "offp": offp}
+        wc = None
+        if corner_aware:
+            wc = _worst_corner(p)
+            wdec = wc.get("decision_time_ps")
+            if not wc.get("functional") or wdec is None:
+                cost += 5e5                            # 최악 코너 비기능 — 배제급
+            elif wdec > corner_relax * dec_t:
+                cost += 3000.0 * (wdec / (corner_relax * dec_t) - 1.0)
+        return {"cost": cost, "x": list(x), "p": p, "nom": nom, "offp": offp, "wc": wc}
 
     def _merge(out):
         # single-thread bookkeeping after a (possibly parallel) evaluation
-        cache[tuple(round(v, 3) for v in out["x"])] = out
+        cache[_xkey(base, out["x"])] = out
         n_sims[0] += 1
         X_train.append(out["x"])
         Y_train.append(math.log10(max(out["cost"], 1e-3)))
@@ -195,60 +255,151 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
         """Evaluate a batch of candidates in parallel; cache hits are free.
         Returns results in the same order as xs."""
         results = [None] * len(xs)
-        todo = []
+        todo, seen = [], {}
         for i, x in enumerate(xs):
-            hit = cache.get(tuple(round(v, 3) for v in x))
+            key = _xkey(base, x)
+            hit = cache.get(key)
             if hit is not None:
                 results[i] = hit
+            elif key in seen:
+                results[i] = ("dup", seen[key])   # 같은 그리드 점 — 배치 내 중복
             else:
+                seen[key] = i
                 todo.append(i)
         for i, out in zip(todo, _pmap(_eval_raw, [xs[i] for i in todo])):
             results[i] = _merge(out)
+        # 배치 내 중복(같은 그리드 점) 참조 해소
+        for i, r in enumerate(results):
+            if isinstance(r, tuple) and r[0] == "dup":
+                results[i] = results[r[1]]
         return results
 
-    base_x = [max(LO, min(HI, math.log10(base["devices"][dv]["w_um"]))) for dv in DEV_KEYS]
-    pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in DEV_KEYS] for _ in range(pop - 1)]
-    pop_e = evaluate_many(pop_x)
     traj = []
 
-    def record(gen):
-        bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
-        e = pop_e[bi]
-        meas, v = _verdicts(e["nom"], None, targets)
-        traj.append({
-            "action": f"DE gen {gen}: best power {round(e['nom'].get('power_uw') or 0, 1)}µW (cost {round(e['cost'], 1)})",
-            "measured": meas, "verdicts": v, "predicted_offset_mv": round(e["offp"], 3),
-            "total_w_um": _total_w(e["p"]), "params": copy.deepcopy(e["p"]["devices"]),
-        })
-        return bi
+    # ── 코너 가용성(FEO 식) 선행 단계 — DE/CD 공통 ───────────────────────
+    corner_note = None
+    if corner_aware:
+        wc0 = _worst_corner(base)
+        if not (wc0.get("functional") and wc0.get("decision_time_ps") is not None):
+            vf0 = base.get("vcm_frac", 0.62)
+            for vf in (0.66, 0.70, 0.74, 0.78, 0.82, 0.86):
+                if vf <= vf0:
+                    continue
+                cand = {**copy.deepcopy(base), "vcm_frac": vf}
+                w = _worst_corner(cand)
+                if w.get("functional") and w.get("decision_time_ps") is not None:
+                    base = cand      # make()/후속 평가가 이 동작점을 쓴다
+                    corner_note = f"corner feasibility: vcm_frac {vf0}→{vf} (최악 코너 생존 최소 동작점)"
+                    break
+            else:
+                corner_note = "corner infeasible: vcm_frac 0.86 에서도 최악 코너 비기능 — vdd 하한 필요"
+        else:
+            corner_note = "corner feasible at base operating point"
+    if corner_note:
+        traj.append({"action": corner_note, "measured": {}, "verdicts": {},
+                     "total_w_um": _total_w(base), "params": copy.deepcopy(base["devices"])})
 
-    record(0)
-    F, CR = 0.6, 0.9
-    for g in range(1, gens + 1):
-        _fit_gp()  # refit surrogate on all SPICE-evaluated points so far
-        survivors = []  # (target index, trial vector) that clear the surrogate gate
-        for i in range(pop):
-            a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
-            jr = rng.randrange(len(DEV_KEYS))
-            trial = []
-            for j in range(len(DEV_KEYS)):
-                if rng.random() < CR or j == jr:
-                    val = pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j])
-                    trial.append(max(LO, min(HI, val)))
+    if run_sim.w_unit(base):
+        # ---- 그리드 모델: 정수 스택/핀 좌표 하강(coordinate descent) ------
+        # W 가 0.2µ 그리드 위에만 있으므로 탐색 공간은 소자당 정수 스택 수다.
+        # DE(연속 완화) 대신 정수 공간을 직접 걷는다: 소자별로 거친 배수 이동
+        # (×0.5…×2)을 병렬 평가해 최선을 채택, 전 소자 수렴 후 ±1 미세 단계.
+        # 캐시 키가 스택 튜플이라 재방문 점은 SPICE 를 다시 돌지 않는다.
+        s0 = run_sim.w_unit(base)
+        NMAX = int(round(10 ** HI / s0))     # W 상한(40µm) → 최대 스택/핀 수
+        budget = pop * gens + pop            # DE 와 같은 SPICE 예산
+        cur = [min(NMAX, max(1, round(base["devices"][dv]["w_um"] / s0))) for dv in DEV_KEYS]
+
+        def x_of(ns):
+            return [math.log10(v * s0) for v in ns]
+
+        cur_e = evaluate_many([x_of(cur)])[0]
+
+        def rec(tag, e, ns):
+            meas, v = _verdicts(e["nom"], None, targets)
+            stacks_note = " ".join(f"{dv} {n}" for dv, n in zip(DEV_KEYS, ns))
+            traj.append({
+                "action": f"{tag}: power {round(e['nom'].get('power_uw') or 0, 1)}µW (cost {round(e['cost'], 1)}) · stacks {stacks_note}",
+                "measured": meas, "verdicts": v, "predicted_offset_mv": round(e["offp"], 3),
+                "total_w_um": _total_w(e["p"]), "params": copy.deepcopy(e["p"]["devices"]),
+            })
+
+        rec("CD start", cur_e, cur)
+        coarse = True
+        for pass_i in range(1, 13):
+            improved = False
+            for ci in range(len(DEV_KEYS)):
+                b_n = cur[ci]
+                if coarse:
+                    cands = sorted({max(1, min(NMAX, round(b_n * f)))
+                                    for f in (0.5, 0.67, 0.8, 1.25, 1.5, 2.0)} - {b_n})
                 else:
-                    trial.append(pop_x[i][j])
-            if _reject(trial, pop_e[i]["cost"]):
-                n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
-                continue
-            survivors.append((i, trial))
-        # evaluate this generation's surviving trials in parallel, then select
-        for (i, trial), te in zip(survivors, evaluate_many([t for _, t in survivors])):
-            if te["cost"] <= pop_e[i]["cost"]:
-                pop_x[i], pop_e[i] = trial, te
-        record(g)
+                    cands = [v for v in (b_n - 1, b_n + 1) if 1 <= v <= NMAX]
+                if not cands:
+                    continue
+                trials = []
+                for v in cands:
+                    t = list(cur)
+                    t[ci] = v
+                    trials.append(x_of(t))
+                evs = evaluate_many(trials)   # 한 좌표의 이동 후보들을 병렬 평가
+                bi2 = min(range(len(evs)), key=lambda i: evs[i]["cost"])
+                if evs[bi2]["cost"] < cur_e["cost"]:
+                    cur[ci], cur_e, improved = cands[bi2], evs[bi2], True
+                if n_sims[0] >= budget:
+                    break
+            rec(f"CD pass {pass_i} ({'coarse ×' if coarse else 'fine ±1'})", cur_e, cur)
+            if n_sims[0] >= budget:
+                break
+            if not improved:
+                if coarse:
+                    coarse = False           # 거친 배수 단계 수렴 → ±1 미세 단계
+                else:
+                    break                    # 정수 국소 최적 도달
+        best = cur_e["p"]
+    else:
+        base_x = [max(LO, min(HI, math.log10(base["devices"][dv]["w_um"]))) for dv in DEV_KEYS]
+        pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in DEV_KEYS] for _ in range(pop - 1)]
+        pop_e = evaluate_many(pop_x)
 
-    bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
-    best = pop_e[bi]["p"]
+        def record(gen):
+            bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
+            e = pop_e[bi]
+            meas, v = _verdicts(e["nom"], None, targets)
+            traj.append({
+                "action": f"DE gen {gen}: best power {round(e['nom'].get('power_uw') or 0, 1)}µW (cost {round(e['cost'], 1)})",
+                "measured": meas, "verdicts": v, "predicted_offset_mv": round(e["offp"], 3),
+                "total_w_um": _total_w(e["p"]), "params": copy.deepcopy(e["p"]["devices"]),
+            })
+            return bi
+
+        record(0)
+        F, CR = 0.6, 0.9
+        for g in range(1, gens + 1):
+            _fit_gp()  # refit surrogate on all SPICE-evaluated points so far
+            survivors = []  # (target index, trial vector) that clear the surrogate gate
+            for i in range(pop):
+                a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
+                jr = rng.randrange(len(DEV_KEYS))
+                trial = []
+                for j in range(len(DEV_KEYS)):
+                    if rng.random() < CR or j == jr:
+                        val = pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j])
+                        trial.append(max(LO, min(HI, val)))
+                    else:
+                        trial.append(pop_x[i][j])
+                if _reject(trial, pop_e[i]["cost"]):
+                    n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
+                    continue
+                survivors.append((i, trial))
+            # evaluate this generation's surviving trials in parallel, then select
+            for (i, trial), te in zip(survivors, evaluate_many([t for _, t in survivors])):
+                if te["cost"] <= pop_e[i]["cost"]:
+                    pop_x[i], pop_e[i] = trial, te
+            record(g)
+
+        bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
+        best = pop_e[bi]["p"]
     r = run_sim.run_sim(best, do_offset=True, with_noise=True)   # confirm the winner's offset (MC) + report noise
     meas, v = _verdicts(r["nominal"], r.get("offset"), targets)
     surrogate_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
@@ -258,7 +409,12 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True):
     success = v.get("offset_sigma_mv") is True and v.get("decision_time_ps") is True
     return {"trajectory": traj, "final_params": best, "final_result": r, "verdicts": v,
             "success": success, "targets": targets, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
-            "final_power_uw": r["nominal"].get("power_uw"), "final_total_w_um": _total_w(best)}
+            "final_power_uw": r["nominal"].get("power_uw"), "final_total_w_um": _total_w(best),
+            # 대표 최악 코너(slow-N/-40°C/0.9VDD) 확인 결과 — 코너 인지 사이징의 증빙
+            "final_corner": (_worst_corner(best) if corner_aware else None),
+            "corner_aware": corner_aware, "corner_note": corner_note,
+            # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
+            "final_stacks": _stacks(best) if run_sim.w_unit(base) else None}
 
 
 def optimize_pareto(base, targets, pop=16, gens=6, seed=7):
@@ -274,7 +430,7 @@ def optimize_pareto(base, targets, pop=16, gens=6, seed=7):
         p = copy.deepcopy(base)
         for i, dv in enumerate(DEV_KEYS):
             p["devices"][dv]["w_um"] = round(10 ** x[i], 2)
-        return p
+        return _snap_w(p)
 
     def ev(x):
         p = make(x)
@@ -473,7 +629,252 @@ def parametric_yield(base, targets, n=48, seed=11):
             "targets": {"decision_time_ps": dec_t, "offset_mv": off_t}}
 
 
-def optimize_vco(base, targets, pop=12, gens=7, seed=41):
+NETLIST_MOS_RE = None  # lazy re
+
+
+AGENT_PROFILE_CFG = os.path.expanduser("~/.hermes/profiles/strong-arm/config.yaml")
+
+
+def _agent_endpoint():
+    """hermes strong-arm 프로파일의 api_server 주소·토큰(설정 파일에서 발견).
+
+    실패 시 (None, None) — 프록시 엔드포인트가 503 으로 안내한다.
+    """
+    import re
+    url = os.environ.get("STRONGARM_AGENT_URL")
+    tok = os.environ.get("STRONGARM_AGENT_TOKEN")
+    if url and tok:
+        return url, tok
+    try:
+        cfg = open(AGENT_PROFILE_CFG, encoding="utf-8").read()
+        port = re.search(r"api_server:.*?port:\s*(\d+)", cfg, re.S)
+        token = re.search(r"platforms:.*?api_server:.*?token:\s*([0-9a-f]{32,})", cfg, re.S)
+        if port and token:
+            return f"http://127.0.0.1:{port.group(1)}/v1/chat/completions", token.group(1)
+    except OSError:
+        pass
+    return None, None
+
+
+def agent_chat(message, session_id=None, timeout=900):
+    """hermes strong-arm 에이전트(OpenAI 호환)로 한 턴 — MCP 로 SPICE 실행 가능."""
+    import json as _json
+    import urllib.request
+    url, tok = _agent_endpoint()
+    if not url:
+        return {"error": "hermes strong-arm 프로파일을 찾지 못했습니다 — "
+                          "~/.hermes/profiles/strong-arm 게이트웨이가 필요합니다."}
+    sid = session_id or ("console-" + os.urandom(8).hex())
+    body = _json.dumps({"model": "hermes-agent",
+                        "messages": [{"role": "user", "content": message}]}).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json", "Authorization": f"Bearer {tok}",
+        "X-Hermes-Session-Id": sid})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = _json.loads(r.read().decode())
+        return {"answer": d["choices"][0]["message"]["content"], "sessionId": sid}
+    except Exception as e:  # 연결 실패/타임아웃 → UI 에 그대로 안내
+        return {"error": f"에이전트 호출 실패: {e}", "sessionId": sid}
+
+
+
+# ── 오케스트레이터: 의도 라우팅 + 역할별 전문 프롬프트 ─────────────────────
+# 한 덩어리 규칙 프롬프트 대신, 서버측 라우터(정규식 — LLM 비용 0)가 요청을
+# 의도별 전문 역할로 나눠 최소 규칙만 주입한다. 프롬프트가 짧고 단일 목적이라
+# 도구 선택 오류·왕복이 줄어든다(A/B 실측은 PR 본문).
+
+_INTENT_PATTERNS = [
+    ("signoff", r"PVT|코너|corner|수율|yield|사인오프|sign.?off|몬테|공정 변동|강건"),
+    ("edit", r"넷리스트|netlist|추가해|삭제해|제거해|결선|연결을|소자를 넣|회로 구조|스위치를"),
+    ("size", r"사이징|최적화|맞춰|만들어|줄여|늘려|키워|optimize|스펙.*(만족|충족)|이하로|이상으로|빠르게|저전력"),
+    ("diagnose", r"확인|알려|얼마|왜|마진|진단|어때|괜찮|분석|보여"),
+]
+
+
+def classify_intent(text):
+    import re as _re
+    for intent, pat in _INTENT_PATTERNS:
+        if _re.search(pat, text, _re.I):
+            return intent
+    return "size"   # 모호하면 가장 보수적(검증 규율 포함)인 역할
+
+
+def _role_rules(role, domain):
+    comp = domain != "vco"
+    brief = "strongarm_design_brief" if comp else "vco_design_brief"
+    sim = "strongarm_run_sim" if comp else "vco_simulate"
+    opt = "strongarm_optimize" if comp else "vco_optimize"
+    pvt = "strongarm_pvt" if comp else "vco_pvt"
+    nlt = "strongarm_netlist" if comp else "vco_netlist"
+    common = "terminal·파일 등 다른 도구는 절대 사용하지 말라. 간결한 한국어로 답하라. "
+    if role == "diagnose":
+        return (f"[진단 전문] {brief} 를 정확히 1회 호출해 현재 상태·스펙 마진·힌트를 얻고 그대로 보고하라. "
+                f"측정 수치는 반올림 없이 도구가 준 값 그대로 표로 제시하라. "
+                f"다른 도구 호출 금지, 사이징 변경 제안 금지(요청받지 않았다). " + common)
+    if role == "signoff":
+        return (f"[사인오프 전문] {pvt} (필요시 수율 도구) 1회 호출로 코너 결과를 얻어 "
+                f"실패 코너를 표로 정리하고, 실패 시 레버(tail/ncc 보강, vdd 하한)를 제시하라. 도구 최대 2회. " + common)
+    if role == "edit":
+        vco_note = ("" if comp else
+                    "주의: VCO 덱의 per 측정은 5주기 구간(RISE=3..8)이다 — 주파수는 f = 5/per 로 환산하라. ")
+        return (f"[회로 편집 전문] ① {nlt} 로 현재 덱을 받고 ② 텍스트로 수정한 뒤 ③ spice_run_netlist 로 실행해 "
+                f"측정값을 확인하고 ④ 수정 덱 전체를 ```spice 블록으로 포함하라 — 원본의 모든 라인(.control/.end 포함)에 수정분만 더한 완전한 덱이어야 하며 생략·축약(...)은 금지다. {vco_note}도구 최대 3회. " + common)
+    # size (기본)
+    if not comp:
+        return (f"[사이징 전문] ① {brief} 1회로 마진 파악. ② 목표에서 크게 벗어나면 {opt} 에 위임하되 "
+                f"에이전트 턴 안에 끝나도록 반드시 pop=6, gens=3 인자를 함께 넘겨라(전체 탐색은 콘솔의 자동 사이징 버튼 몫). "
+                f"근소한 차이면 레시피(starve 폭·N·cload 레버)로 수정안을 만들고 {sim} 으로 1회 실측 검증 후에만 제시하라"
+                f"(미검증 제안 금지). 도구 최대 2회. 제안은 답변 끝 ```json 블록. " + common)
+    return (f"[사이징 전문] ① {brief} 1회로 마진 파악. ② 두 스펙 이상 위반이면 직접 고치지 말고 {opt} 에 위임해 "
+            f"그 결과를 제안하라. 한 스펙만 어긋나면 레시피 기반 수정안을 만들되 반드시 {sim} 으로 1회 실측 검증 후에만 "
+            f"제시하라(미검증 제안 금지 — 직관 사이징은 자주 틀린다). 도구 최대 2회. "
+            f"제안은 답변 끝 ```json {{\"devices\":{{...변경 소자만...}},\"vdd\":...}}``` 블록. " + common)
+
+
+def agent_ask(payload):
+    """오케스트레이션 진입점: 의도 분류 → 역할 규칙 + 설계 컨텍스트 조립 → 프록시.
+
+    payload: {question, context(설계 상태 JSON), domain: comparator|vco,
+              role: 명시 시 라우터 무시, sessionId}
+    """
+    q = (payload.get("question") or "").strip()
+    if not q:
+        return {"error": "question 이 비었습니다."}
+    domain = payload.get("domain") or "comparator"
+    role = payload.get("role") or classify_intent(q)
+    ctx = payload.get("context")
+    import json as _json
+    ctx_line = f"현재 {domain} 설계 상태(JSON):\n{_json.dumps(ctx, ensure_ascii=False)}\n\n" if ctx else ""
+    grid_rule = ""
+    mdl = (ctx or {}).get("model")
+    if mdl == "gaa2nm":
+        grid_rule = " 이 설계는 2nm급(gaa2nm): W 는 나노시트 스택 0.2µm 의 정수배로만 제안하라."
+    elif mdl == "asap7":
+        grid_rule = " 이 설계는 ASAP7 FinFET: W 는 핀 0.07µm 의 정수배로만 제안하라."
+    message = (ctx_line + "규칙: " + _role_rules(role, domain) + grid_rule
+               + " 도구 호출 시 params 인자에 위 설계 상태(및 변경분)를 그대로 넣어라.\n\n"
+               + f"사용자 요청: {q}")
+    out = agent_chat(message, payload.get("sessionId"))
+    out["role"] = role
+    return out
+
+
+def run_raw_netlist(netlist):
+    """임의 SPICE 덱을 ngspice -b 로 실행 — 자연어 회로 변경 루프의 검증 단계.
+
+    반환: 모든 .meas 결과(이름→값), 콘솔 로그 꼬리. `shell` 명령은 차단
+    (로컬 도구지만 ngspice control 의 셸 이스케이프는 막는다).
+    """
+    import re
+    if re.search(r"^\s*shell\b", netlist, re.M | re.I):
+        return {"error": "netlist 에 shell 명령은 허용되지 않습니다."}
+    out = run_sim._run(netlist)
+    meas = {}
+    for m in re.finditer(r"^(\w+)\s*=\s*([-+0-9.eE]+)", out, re.M):
+        try:
+            meas[m.group(1)] = float(m.group(2))
+        except ValueError:
+            pass
+    tail = "\n".join(out.strip().splitlines()[-25:])
+    return {"measures": meas, "log_tail": tail}
+
+
+def parse_netlist_text(text):
+    """SPICE 덱에서 MOS/전원/커패시터를 파싱해 소자 표 + (가능하면) 파라미터로.
+
+    이 콘솔이 내보내는 덱의 명명 규칙을 안다:
+      comparator(strongarm) — M1/M2=input, M7=tail, M3/M4=ncc, M5/M6=pcc,
+                   MS3/MS4=pre(출력), MS1/MS2=prei(내부) — 구 표기(Mt, M7~M10)도 인식
+      vco(xcpl)  — Mbp*/Mbpb*=starvep, Mp*/Mpb*=invp, Mn*/Mnb*=invn,
+                   Mbn*/Mbnb*=starven(구 덱), Mx*/Mxb*=xcplp (스테이지 번호로 N)
+    규칙 밖 넷리스트도 소자 표/노드는 반환한다(kind='unknown').
+    """
+    import re
+    mos_re = re.compile(r"^(M\S*)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(nmos|pmos)\s+W=([\d.]+)u\s+L=([\d.]+)n?\s+M=(\d+)", re.I)
+    # asap7(BSIM-CMG OSDI): NM1 d g s b nmos_lvt l=21n nfin=16 — 이름의 N 접두를
+    # 벗겨 M* 역할 매핑을 재사용, W 는 핀 수 × 0.07µ 로 환산(m=1)
+    osdi_re = re.compile(r"^N(M\S*)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(nmos|pmos)_\w+\s+l=([\d.]+)n\s+nfin=(\d+)", re.I)
+    v_re = re.compile(r"^V(\S*)\s+(\S+)\s+(\S+)\s+([\d.]+)\s*$", re.I)
+    c_re = re.compile(r"^C(\S*)\s+(\S+)\s+(\S+)\s+([\d.]+)f", re.I)
+    devices, sources, caps = [], {}, []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("*", ".")):
+            continue
+        m = mos_re.match(line)
+        if m:
+            name, d, g, s, b, kind, w, l, mult = m.groups()
+            devices.append({"name": name, "type": kind.lower(), "w_um": float(w),
+                            "l_nm": float(l), "m": int(mult), "nodes": {"d": d, "g": g, "s": s, "b": b}})
+            continue
+        mo = osdi_re.match(line)
+        if mo:
+            name, d, g, s, b, kind, l, nfin = mo.groups()
+            devices.append({"name": name, "type": kind.lower(),
+                            "w_um": round(int(nfin) * run_sim.W_FIN_UM, 3),
+                            "l_nm": float(l), "m": 1, "nodes": {"d": d, "g": g, "s": s, "b": b}})
+            continue
+        mv = v_re.match(line)
+        if mv:
+            sources[mv.group(1).lower() or mv.group(2).lower()] = float(mv.group(4))
+            continue
+        mc = c_re.match(line)
+        if mc:
+            caps.append({"name": "C" + mc.group(1), "node": mc.group(2), "ff": float(mc.group(4))})
+    names = {d["name"] for d in devices}
+    # 모델 백엔드 감지 — 이 콘솔이 내보내는 .include/.lib 헤더 기준(왕복 보존)
+    model = ("gaa2nm" if "gaa2nm_approx" in text
+             else ("asap7" if ("asap7" in text or "bsimcmg" in text) else
+                   ("sky130" if "sky130" in text.lower() else None)))
+    out = {"devices": devices, "n_mos": len(devices), "caps": caps, "sources": sources}
+    if any(n.startswith("Mx") for n in names) and any(n.startswith("Mp") for n in names):
+        # ── VCO(xcpl) ──
+        import re as _re
+        stages = [int(mm.group(1)) for n in names for mm in [_re.match(r"Mp(\d+)$", n)] if mm]
+        role_of = [("Mbpb", "starvep"), ("Mbp", "starvep"), ("Mpb", "invp"), ("Mp", "invp"),
+                   ("Mnb", "invn"), ("Mn", "invn"), ("Mbnb", "starven"), ("Mbn", "starven"),
+                   ("Mxb", "xcplp"), ("Mx", "xcplp")]   # Mrst(구 덱)는 매핑하지 않음 — 유닛에 없음
+        dev_params = {}
+        for d in devices:
+            for prefix, key in role_of:
+                if d["name"].startswith(prefix) and key not in dev_params and d["name"] not in ("Mpref", "Mnref"):
+                    dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
+                    break
+        params = {"devices": dev_params}
+        if model in ("gaa2nm", "asap7"): params["model"] = model
+        if "dd" in sources: params["vdd"] = sources["dd"]
+        if "c" in sources: params["vctrl"] = sources["c"]
+        if stages: params["n_stages"] = max(stages)
+        node_caps = [c for c in caps if c["node"].startswith("o")]
+        if node_caps: params["cload_ff"] = node_caps[0]["ff"]
+        out.update({"kind": "vco", "params": params})
+        return out
+    if ("Mt" in names or "M7" in names) and {"M1", "M3", "M5"} <= names:
+        # ── comparator (single-tail strongarm) ──
+        if "MS3" in names:   # 새 표기(new_cmp.png): M7=tail, MS3/4=pre, MS1/2=prei
+            role = {"M1": "input", "M2": "input", "M7": "tail", "M3": "ncc", "M4": "ncc",
+                    "M5": "pcc", "M6": "pcc", "MS3": "pre", "MS4": "pre", "MS1": "prei", "MS2": "prei"}
+        else:                # 구 표기(레거시 덱): Mt=tail, M7/8=pre, M9/10=prei
+            role = {"M1": "input", "M2": "input", "Mt": "tail", "M3": "ncc", "M4": "ncc",
+                    "M5": "pcc", "M6": "pcc", "M7": "pre", "M8": "pre", "M9": "prei", "M10": "prei"}
+        dev_params = {}
+        for d in devices:
+            key = role.get(d["name"])
+            if key and key not in dev_params:
+                dev_params[key] = {"w_um": d["w_um"], "l_nm": d["l_nm"], "m": d["m"]}
+        params = {"devices": dev_params}
+        if model: params["model"] = model
+        if "dd" in sources: params["vdd"] = sources["dd"]
+        out_caps = [c for c in caps if c["node"] in ("outp", "outn")]
+        if out_caps: params["cload_ff"] = out_caps[0]["ff"]
+        out.update({"kind": "comparator", "params": params})
+        return out
+    out["kind"] = "unknown"
+    return out
+
+
+def optimize_vco(base, targets, pop=12, gens=7, seed=41, search_stages=True):
     """Size the ring VCO's four device groups (log-space Differential Evolution)
     to hit a target oscillation frequency at the nominal V_ctrl while minimizing
     power — the same simulate->evaluate->optimize loop used for the comparator.
@@ -483,7 +884,7 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
     rng = random.Random(seed)
     f_t = float(targets.get("f_ghz", 1.5))
     LO, HI = math.log10(0.5), math.log10(40.0)
-    keys = vco_sim.DEV_KEYS
+    keys = vco_wicked.dev_keys(base)   # 토폴로지 인지(xcpl: 스타빙 없음)
 
     # GP surrogate on log10(cost) to pre-screen clearly-worse candidates (fewer SPICE runs)
     X_train, Y_train, gp, n_skip = [], [], {"m": None}, [0]
@@ -511,7 +912,7 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
         p = copy.deepcopy(base)
         for i, k in enumerate(keys):
             p["devices"][k]["w_um"] = round(10 ** x[i], 2)
-        return p
+        return _snap_w(p)   # gaa2nm: 시트 그리드 스냅 — 표시값 = 시뮬값
 
     cache, n_sims = {}, [0]
 
@@ -529,54 +930,142 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
 
     def evaluate_many(xs):
         res = [None] * len(xs)
-        todo = []
+        todo, seen = [], {}
         for i, x in enumerate(xs):
-            hit = cache.get(tuple(round(v, 3) for v in x))
+            key = _xkey(base, x)                 # gaa2nm: 스택 수(정수) 공간 키
+            hit = cache.get(key)
             if hit is not None:
                 res[i] = hit
+            elif key in seen:
+                res[i] = ("dup", seen[key])      # 같은 그리드 점 — 배치 내 중복
             else:
+                seen[key] = i
                 todo.append(i)
         for i, out in zip(todo, _pmap(_eval_raw, [xs[i] for i in todo])):
-            cache[tuple(round(v, 3) for v in out["x"])] = out
+            cache[_xkey(base, out["x"])] = out
             n_sims[0] += 1
             X_train.append(out["x"])
             Y_train.append(math.log10(max(out["cost"], 1e-3)))
             res[i] = out
+        for i, r in enumerate(res):
+            if isinstance(r, tuple) and r[0] == "dup":
+                res[i] = res[r[1]]
         return res
 
-    base_x = [max(LO, min(HI, math.log10(base["devices"][k]["w_um"]))) for k in keys]
-    pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in keys] for _ in range(pop - 1)]
-    pop_e = evaluate_many(pop_x)
     traj = []
 
-    def record(gen):
-        e = min(pop_e, key=lambda z: z["cost"])
-        m = e["m"]
-        traj.append({"action": f"DE gen {gen}: {m['f_osc_ghz']}GHz, {m['power_uw']}µW"
-                                + ("" if m["oscillates"] else " (no osc)"),
-                     "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
-                     "oscillates": m["oscillates"], "params": copy.deepcopy(e["p"]["devices"])})
+    # ── 단수 N 탐색(홀수 3~9) — 튜닝 파라미터에 단수 포함(사용자 요청) ──
+    # N 은 주파수의 계단 레버(f ≈ 1/(2N·t_d)): 후보별 공칭 1회 평가로 목표
+    # 최근접 N 을 고르고, W 탐색은 그 N 에서 진행한다.
+    stage_scan = None
+    if search_stages:
+        cand_n = []
+        scan = []
+        for n_try in (3, 5, 7, 9):
+            m_try = vco_sim.measure_vco({**copy.deepcopy(base), "n_stages": n_try})
+            n_sims[0] += 1
+            f_try = m_try.get("f_osc_ghz")
+            scan.append({"n": n_try, "f_ghz": f_try, "oscillates": bool(m_try.get("oscillates"))})
+            if m_try.get("oscillates") and f_try:
+                cand_n.append((abs(f_try - f_t) / f_t, n_try, f_try))
+        if cand_n:
+            cand_n.sort()
+            best_n = cand_n[0][1]
+            stage_scan = {"points": scan, "chosen_n": best_n, "target_f_ghz": f_t}
+            traj.append({"action": "stage search: "
+                                    + " · ".join(f"N={n}→{f}GHz" for _, n, f in sorted(cand_n, key=lambda x: x[1]))
+                                    + f" — N={best_n} 선택(목표 {f_t}GHz 최근접)",
+                         "f_osc_ghz": cand_n[0][2], "power_uw": None, "oscillates": True,
+                         "params": copy.deepcopy(base["devices"])})
+            base = {**copy.deepcopy(base), "n_stages": best_n}
 
-    record(0)
-    F, CR = 0.6, 0.9
-    for g in range(1, gens + 1):
-        _fit_gp()   # refit surrogate on all SPICE-evaluated points so far
-        trials = []
-        for i in range(pop):
-            a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
-            jr = rng.randrange(len(keys))
-            trial = [max(LO, min(HI, pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j]))) if (rng.random() < CR or j == jr) else pop_x[i][j]
-                     for j in range(len(keys))]
-            if _reject(trial, pop_e[i]["cost"]):
-                n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
-                continue
-            trials.append((i, trial))
-        for (i, trial), te in zip(trials, evaluate_many([t for _, t in trials])):
-            if te["cost"] <= pop_e[i]["cost"]:
-                pop_x[i], pop_e[i] = trial, te
-        record(g)
+    if run_sim.w_unit(base):
+        # ---- 그리드 모델: 정수 좌표 하강 — comparator 쪽과 같은 패턴 -------
+        s0 = run_sim.w_unit(base)
+        NMAX = int(round(10 ** HI / s0))
+        budget = pop * gens + pop
+        cur = [min(NMAX, max(1, round(base["devices"][k]["w_um"] / s0))) for k in keys]
 
-    best = min(pop_e, key=lambda z: z["cost"])
+        def x_of(ns):
+            return [math.log10(v * s0) for v in ns]
+
+        cur_e = evaluate_many([x_of(cur)])[0]
+
+        def rec(tag, e, ns):
+            m = e["m"]
+            stacks_note = " ".join(f"{k} {n}" for k, n in zip(keys, ns))
+            traj.append({"action": f"{tag}: {m['f_osc_ghz']}GHz, {m['power_uw']}µW"
+                                    + ("" if m["oscillates"] else " (no osc)") + f" · stacks {stacks_note}",
+                         "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
+                         "oscillates": m["oscillates"], "params": copy.deepcopy(e["p"]["devices"])})
+
+        rec("CD start", cur_e, cur)
+        coarse = True
+        for pass_i in range(1, 13):
+            improved = False
+            for ci in range(len(keys)):
+                b_n = cur[ci]
+                if coarse:
+                    cands = sorted({max(1, min(NMAX, round(b_n * f)))
+                                    for f in (0.5, 0.67, 0.8, 1.25, 1.5, 2.0)} - {b_n})
+                else:
+                    cands = [v for v in (b_n - 1, b_n + 1) if 1 <= v <= NMAX]
+                if not cands:
+                    continue
+                trials = []
+                for v in cands:
+                    t = list(cur)
+                    t[ci] = v
+                    trials.append(x_of(t))
+                evs = evaluate_many(trials)   # 한 좌표의 이동 후보들을 병렬 평가
+                bi2 = min(range(len(evs)), key=lambda i: evs[i]["cost"])
+                if evs[bi2]["cost"] < cur_e["cost"]:
+                    cur[ci], cur_e, improved = cands[bi2], evs[bi2], True
+                if n_sims[0] >= budget:
+                    break
+            rec(f"CD pass {pass_i} ({'coarse ×' if coarse else 'fine ±1'})", cur_e, cur)
+            if n_sims[0] >= budget:
+                break
+            if not improved:
+                if coarse:
+                    coarse = False
+                else:
+                    break
+        best = cur_e
+    else:
+        base_x = [max(LO, min(HI, math.log10(base["devices"][k]["w_um"]))) for k in keys]
+        pop_x = [base_x] + [[rng.uniform(LO, HI) for _ in keys] for _ in range(pop - 1)]
+        pop_e = evaluate_many(pop_x)
+
+        def record(gen):
+            e = min(pop_e, key=lambda z: z["cost"])
+            m = e["m"]
+            traj.append({"action": f"DE gen {gen}: {m['f_osc_ghz']}GHz, {m['power_uw']}µW"
+                                    + ("" if m["oscillates"] else " (no osc)"),
+                         "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
+                         "oscillates": m["oscillates"], "params": copy.deepcopy(e["p"]["devices"])})
+
+        record(0)
+        F, CR = 0.6, 0.9
+        for g in range(1, gens + 1):
+            _fit_gp()   # refit surrogate on all SPICE-evaluated points so far
+            trials = []
+            for i in range(pop):
+                a, b, c = rng.sample([j for j in range(pop) if j != i], 3)
+                jr = rng.randrange(len(keys))
+                trial = [max(LO, min(HI, pop_x[a][j] + F * (pop_x[b][j] - pop_x[c][j]))) if (rng.random() < CR or j == jr) else pop_x[i][j]
+                         for j in range(len(keys))]
+                if _reject(trial, pop_e[i]["cost"]):
+                    n_skip[0] += 1          # surrogate is confident it's worse — skip SPICE
+                    continue
+                trials.append((i, trial))
+            for (i, trial), te in zip(trials, evaluate_many([t for _, t in trials])):
+                if te["cost"] <= pop_e[i]["cost"]:
+                    pop_x[i], pop_e[i] = trial, te
+            record(g)
+
+        best = min(pop_e, key=lambda z: z["cost"])
+
     fin = best["p"]
     tuning = vco_sim.vco_tuning(fin)
     m = best["m"]
@@ -587,7 +1076,73 @@ def optimize_vco(base, targets, pop=12, gens=7, seed=41):
                  "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"],
                  "oscillates": m["oscillates"], "params": copy.deepcopy(fin["devices"])})
     return {"trajectory": traj, "final_params": fin, "nominal": m, "tuning": tuning,
-            "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0]}
+            "stage_scan": stage_scan,
+            "success": success, "target_f_ghz": f_t, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
+            # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
+            "final_stacks": _stacks(fin) if run_sim.w_unit(base) else None}
+
+
+
+def design_brief(params, targets=None):
+    """에이전트용 원콜 브리핑: 공칭 시뮬 + 오프셋 예측 + 스펙 마진 + 그리드
+    정보(스택/핀) + 즉답용 레버 힌트를 한 번에 — 에이전트가 상태 파악에
+    여러 툴콜을 쓰지 않도록 한다(왕복 1회 = 지연·비용 절감)."""
+    p = run_sim._full(params or {})
+    t = {"decision_time_ps": 400.0, "power_uw": 100.0, "offset_sigma_mv": 5.0, **(targets or {})}
+    nom = run_sim.run_sim(p, do_offset=False)["nominal"]
+    offp = _pred_offset_mv(p)
+    dec, pw = nom.get("decision_time_ps"), nom.get("power_uw")
+    margins = {
+        "functional": bool(nom.get("functional")),
+        "decision_time_ps": None if dec is None else round(1 - dec / t["decision_time_ps"], 4),
+        "power_uw": None if pw is None else round(1 - pw / t["power_uw"], 4),
+        "offset_sigma_mv": round(1 - offp / t["offset_sigma_mv"], 4),
+    }
+    unit = run_sim.w_unit(p)
+    hints = []
+    if not margins["functional"]:
+        hints.append("비기능: 저전압/slow-N 코너는 W 로 못 살린다(실측 ×8 전멸) — vcm_frac(동작점) 상향 또는 vdd 하한이 레버. optimize 는 corner_aware 로 자동 처리")
+    if margins["decision_time_ps"] is not None and margins["decision_time_ps"] < 0:
+        hints.append("판정시간 초과: input(gm)·tail 폭 증가가 가장 효과적, prei(S1/S2) 축소로 내부 기생 절감도 유효(실측 530→514ps)")
+    if margins["offset_sigma_mv"] < 0:
+        req_area = (math.sqrt(2) * p["avt_mv_um"] / (0.92 * t["offset_sigma_mv"])) ** 2
+        d = p["devices"]["input"]
+        hints.append(f"오프셋 초과: 입력쌍 면적 ≥ {round(req_area, 3)}µm² 필요 (현재 {round(d['w_um'] * d['l_nm'] / 1000.0 * d['m'], 3)}µm²)")
+    if margins["power_uw"] is not None and margins["power_uw"] < 0:
+        hints.append("전력 초과: tail·pcc 축소 우선(민감도상 판정시간 손해 최소 방향), 스펙 만족까지 optimize 권장")
+    return {
+        "model": p.get("model", "ptm"), "vdd": p["vdd"],
+        "w_grid_um": unit,
+        "stacks": _stacks(p) if unit else None,
+        "nominal": nom, "predicted_offset_sigma_mv": round(offp, 3),
+        "targets": t, "margins": margins, "hints": hints,
+        "devices": copy.deepcopy(p["devices"]),
+    }
+
+
+def vco_design_brief(params, targets=None):
+    """VCO 원콜 브리핑 — 공칭 발진 + 목표 f 마진 + 그리드/스택 + 레버 힌트."""
+    p = vco_sim._full(params or {})
+    f_t = float((targets or {}).get("f_ghz", 1.5))
+    m = vco_sim.measure_vco(p)
+    f = m.get("f_osc_ghz")
+    unit = run_sim.w_unit(p)
+    hints = []
+    if not m.get("oscillates"):
+        hints.append("미발진: xcplp(P1)가 과강하면 래치됨 — invp 대비 1/4 이하로; vctrl 이 너무 낮으면 starve 전류 부족")
+    elif f is not None:
+        if f < f_t * 0.9:
+            hints.append("주파수 부족: starven/starvep 폭 증가(전류↑) 또는 n_stages 축소(홀수 유지), cload 축소")
+        elif f > f_t * 1.1:
+            hints.append("주파수 과다: starve 폭 축소(전력도 절감) 또는 n_stages 증가")
+    return {
+        "model": p.get("model", "ptm"), "vdd": p["vdd"], "vctrl": p["vctrl"],
+        "n_stages": p["n_stages"], "w_grid_um": unit,
+        "stacks": _stacks(p) if unit else None,
+        "nominal": m, "target_f_ghz": f_t,
+        "f_margin": None if f is None else round(f / f_t - 1, 4),
+        "hints": hints, "devices": copy.deepcopy(p["devices"]),
+    }
 
 
 def vco_pvt(params):
@@ -595,15 +1150,16 @@ def vco_pvt(params):
     temp −40/27/125 × VDD 0.9/1.0/1.1×. Frequency + does-it-oscillate per corner."""
     p = vco_sim._full(params)
     base_vdd = float(p["vdd"])
+    _sk = 0.05 * run_sim.skew_scale(params)
     specs = []
-    for proc, ps in (("SS", 0.05), ("TT", 0.0), ("FF", -0.05)):
+    for proc, ns, ps in (("SS", _sk, _sk), ("TT", 0.0, 0.0), ("FF", -_sk, -_sk), ("SF", _sk, -_sk), ("FS", -_sk, _sk)):
         for t in (-40, 27, 125):
             for vf in (0.9, 1.0, 1.1):
-                specs.append((proc, t, vf, round(base_vdd * vf, 3), ps))
+                specs.append((proc, t, vf, round(base_vdd * vf, 3), ns, ps))
 
     def _corner(s):
-        proc, t, vf, vdd, ps = s
-        m = vco_sim.measure_vco({**params, "vdd": vdd, "temp": t, "pskew": ps})
+        proc, t, vf, vdd, ns, ps = s
+        m = vco_sim.measure_vco({**params, "vdd": vdd, "temp": t, "nskew": ns, "pskew_p": ps})
         return {"process": proc, "temp": t, "v_frac": vf, "vdd": vdd,
                 "f_osc_ghz": m["f_osc_ghz"], "oscillates": m["oscillates"], "power_uw": m["power_uw"]}
 
@@ -621,13 +1177,13 @@ def optimize_vco_pareto(base, pop=16, gens=6, seed=9):
     import random
     rng = random.Random(seed)
     LO, HI = math.log10(0.5), math.log10(40.0)
-    keys = vco_sim.DEV_KEYS
+    keys = vco_wicked.dev_keys(base)   # 토폴로지 인지(xcpl: 스타빙 없음)
 
     def make(x):
         p = copy.deepcopy(base)
         for i, k in enumerate(keys):
             p["devices"][k]["w_um"] = round(10 ** x[i], 2)
-        return p
+        return _snap_w(p)   # gaa2nm: 시트 그리드 스냅 — 표시값 = 시뮬값
 
     def ev(x):
         p = make(x)
@@ -743,14 +1299,42 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
-    def _json(self, obj, code=200):
-        body = json.dumps(obj).encode()
+    def _text(self, s, code=200):
+        body = s.encode()
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
         self._cors()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send(self, body, ctype, code=200, headers=(), precompressed=None):
+        """One exit for every response, so compression is decided in one place.
+
+        The big payloads here are highly repetitive JSON — 45 PVT corners, Pareto
+        fronts, waveform arrays — and the JS bundle. gzip cuts those ~3-8x on the
+        wire. Below the threshold the framing overhead outweighs the saving, so
+        small bodies go out as-is."""
+        enc = None
+        if len(body) >= _GZIP_MIN and "gzip" in self.headers.get("Accept-Encoding", ""):
+            if precompressed is not None:
+                body, enc = precompressed, "gzip"
+            else:
+                body, enc = gzip.compress(body, _GZIP_LEVEL), "gzip"
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self._cors()
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(body)))
+        for k, v in headers:
+            self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, obj, code=200):
+        self._send(json.dumps(obj).encode(), "application/json", code)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -760,7 +1344,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/health":
-            self._json({"ok": True, "ngspice": run_sim.NGSPICE})
+            self._json({"ok": True, "ngspice": run_sim.NGSPICE,
+                        "sim_cache": run_sim.ngspice_cache_stats()})
         elif path == "/api/defaults":
             self._json({"defaults": run_sim.DEFAULT_PARAMS, "targets": SPEC_TARGETS})
         elif path.startswith("/api/"):
@@ -781,17 +1366,33 @@ class Handler(BaseHTTPRequestHandler):
         if not os.path.isfile(target):
             target = os.path.join(DIST, "index.html")  # SPA fallback
         try:
+            st = os.stat(target)
             with open(target, "rb") as fh:
                 body = fh.read()
         except OSError:
             self._json({"error": "not found"}, 404)
             return
+        # keep the compressed bytes for the (immutable) built assets — mtime+size
+        # in the key means an edited or rebuilt file is never served stale
+        gz, gzkey = None, (target, st.st_mtime_ns, st.st_size)
+        if len(body) >= _GZIP_MIN:
+            with _static_gz_lock:
+                gz = _static_gz.get(gzkey)
+            if gz is None:
+                gz = gzip.compress(body, _GZIP_LEVEL)
+                with _static_gz_lock:
+                    if len(_static_gz) > 64:     # a build has a handful of files
+                        _static_gz.clear()
+                    _static_gz[gzkey] = gz
         ctype = mimetypes.guess_type(target)[0] or "application/octet-stream"
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        # index.html 은 절대 캐시 금지(회로 변경 후 '옛 화면' 재발 방지) —
+        # 해시된 assets/* 는 immutable 캐시 허용
+        hdrs = []
+        if target.endswith("index.html"):
+            hdrs.append(("Cache-Control", "no-cache, must-revalidate"))
+        elif "/assets/" in target.replace(os.sep, "/"):
+            hdrs.append(("Cache-Control", "public, max-age=31536000, immutable"))
+        self._send(body, ctype, 200, hdrs, precompressed=gz)
 
     def _read_json(self):
         n = int(self.headers.get("Content-Length", 0))
@@ -799,7 +1400,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path == "/api/simulate":
+            if self.path == "/api/spice/run":
+                payload = self._read_json()
+                self._json(run_raw_netlist(str(payload.get("netlist", ""))))
+            elif self.path == "/api/agent/ask":
+                payload = self._read_json()
+                self._json(agent_ask(payload))
+            elif self.path == "/api/agent/chat":
+                payload = self._read_json()
+                self._json(agent_chat(str(payload.get("message", "")),
+                                      payload.get("sessionId")))
+            elif self.path == "/api/netlist/parse":
+                payload = self._read_json()
+                self._json(parse_netlist_text(str(payload.get("netlist", ""))))
+            elif self.path == "/api/netlist":
+                # 현재 파라미터의 SPICE 덱(.sp)을 그대로 반환 — 직접 ngspice 실행용
+                payload = self._read_json()
+                base = payload.get("params", {})
+                full = copy.deepcopy(run_sim.DEFAULT_PARAMS)
+                full.update({k: v for k, v in base.items() if k != "devices"})
+                full["devices"] = run_sim.merge_devices(base.get("devices"))
+                self._text(run_sim.gen_netlist(full, vdiff=float(payload.get("vdiff", 0.01))))
+            elif self.path == "/api/simulate":
                 payload = self._read_json()
                 result = run_sim.run_sim(payload.get("params", {}),
                                          do_offset=bool(payload.get("do_offset", True)),
@@ -816,19 +1438,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(run_sim.capture_waveform(payload.get("params", {})))
             elif self.path == "/api/layout":
                 payload = self._read_json()
-                base = payload.get("params", {})
-                full = copy.deepcopy(run_sim.DEFAULT_PARAMS)
-                full["devices"] = run_sim.merge_devices(base.get("devices"))
-                self._json(layout.generate_layout(full))
+                # _full 로 model 등 비소자 파라미터까지 병합(gaa2nm 나노시트 그리드 룰 선택)
+                self._json(layout.generate_layout(run_sim._full(payload.get("params", {}))))
             elif self.path == "/api/metastability":
                 payload = self._read_json()
                 self._json(run_sim.metastability_sweep(payload.get("params", {})))
+            elif self.path == "/api/noise/probit":
+                payload = self._read_json()
+                self._json(run_sim.noise_probit(payload.get("params", {}),
+                                                n_per_point=int(payload.get("n_per_point", 24))))
             elif self.path == "/api/ber":
                 payload = self._read_json()
                 full = copy.deepcopy(run_sim.DEFAULT_PARAMS)
                 full.update({k: v for k, v in payload.get("params", {}).items() if k != "devices"})
                 full["devices"] = run_sim.merge_devices(payload.get("params", {}).get("devices"))
                 self._json(ber_curve(full))
+            elif self.path == "/api/brief":
+                payload = self._read_json()
+                self._json(design_brief(payload.get("params", {}), payload.get("targets")))
+            elif self.path == "/api/vco/brief":
+                payload = self._read_json()
+                self._json(vco_design_brief(payload.get("params", {}), payload.get("targets")))
             elif self.path == "/api/sensitivity":
                 payload = self._read_json()
                 full = copy.deepcopy(run_sim.DEFAULT_PARAMS)
@@ -897,9 +1527,67 @@ class Handler(BaseHTTPRequestHandler):
                                               wcd_samples=int(payload.get("wcd_samples", 24)),
                                               seed=int(payload.get("seed", 19)),
                                               importance_samples=int(payload.get("importance_samples", 8))))
+            elif self.path == "/api/vco/wicked/verdict":
+                payload = self._read_json()
+                self._json(vco_wicked.nominal_verdict(payload.get("params", {}), payload.get("targets")))
+            elif self.path == "/api/vco/wicked/screening":
+                payload = self._read_json()
+                self._json(vco_wicked.parameter_screening(payload.get("params", {}),
+                                                          payload.get("targets"),
+                                                          delta=float(payload.get("delta", 0.15))))
+            elif self.path == "/api/vco/wicked/wcd":
+                payload = self._read_json()
+                self._json(vco_wicked.worst_case_distance(payload.get("params", {}),
+                                                          payload.get("targets"),
+                                                          n_samples=int(payload.get("n_samples", 24)),
+                                                          seed=int(payload.get("seed", 19))))
+            elif self.path == "/api/vco/wicked/mismatch":
+                payload = self._read_json()
+                self._json(vco_wicked.mismatch_mc(payload.get("params", {}),
+                                                  n=int(payload.get("n", 16)),
+                                                  seed=int(payload.get("seed", 7))))
+            elif self.path == "/api/vco/wicked/yieldsweep":
+                payload = self._read_json()
+                self._json(vco_wicked.yield_sweep(payload.get("params", {}),
+                                                  payload.get("targets"),
+                                                  n_points=int(payload.get("n_points", 7)),
+                                                  n_mc=int(payload.get("n_mc", 6)),
+                                                  seed=int(payload.get("seed", 53))))
+            elif self.path == "/api/vco/wicked/dno":
+                payload = self._read_json()
+                self._json(vco_wicked.dno_refine(payload.get("params", {}),
+                                                 payload.get("targets"),
+                                                 iterations=int(payload.get("iterations", 4))))
+            elif self.path == "/api/vco/wicked/yop":
+                payload = self._read_json()
+                self._json(vco_wicked.yop_optimize(payload.get("params", {}),
+                                                   payload.get("targets"),
+                                                   iterations=int(payload.get("iterations", 3)),
+                                                   seed=int(payload.get("seed", 71))))
+            elif self.path == "/api/vco/wicked/postlayout":
+                payload = self._read_json()
+                self._json(vco_wicked.postlayout_wcd(payload.get("params", {}),
+                                                     payload.get("targets"),
+                                                     n_samples=int(payload.get("n_samples", 8)),
+                                                     seed=int(payload.get("seed", 91))))
+            elif self.path == "/api/vco/wicked/corners":
+                payload = self._read_json()
+                self._json(vco_wicked.worst_case_corners(payload.get("params", {}),
+                                                         payload.get("targets")))
+            elif self.path == "/api/vco/wicked/fullflow":
+                payload = self._read_json()
+                self._json(vco_wicked.wicked_flow(payload.get("params", {}),
+                                                  payload.get("targets"),
+                                                  dno_iterations=int(payload.get("dno_iterations", 4)),
+                                                  wcd_samples=int(payload.get("wcd_samples", 16)),
+                                                  mc_samples=int(payload.get("mc_samples", 8)),
+                                                  seed=int(payload.get("seed", 19))))
             elif self.path == "/api/maxfclk":
                 payload = self._read_json()
                 self._json(run_sim.max_fclk_sweep(payload.get("params", {})))
+            elif self.path == "/api/vco/netlist":
+                payload = self._read_json()
+                self._text(vco_sim.gen_vco_netlist(vco_sim._full(payload.get("params", {}))))
             elif self.path == "/api/vco/simulate":
                 payload = self._read_json()
                 self._json(vco_sim.run_vco(payload.get("params", {}),
@@ -910,7 +1598,9 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/vco/optimize":
                 payload = self._read_json()
                 base = vco_sim._full(payload.get("params", {}))
-                self._json(optimize_vco(base, payload.get("targets") or {"f_ghz": 1.5}))
+                self._json(optimize_vco(base, payload.get("targets") or {"f_ghz": 1.5},
+                                        pop=int(payload.get("pop", 12)), gens=int(payload.get("gens", 7)),
+                                        search_stages=bool(payload.get("search_stages", True))))
             elif self.path == "/api/vco/waveform":
                 payload = self._read_json()
                 self._json(vco_sim.capture_vco_waveform(payload.get("params", {})))
@@ -949,11 +1639,17 @@ class Handler(BaseHTTPRequestHandler):
                 pc = layout.extract_parasitics({**run_sim.DEFAULT_PARAMS, **prm,
                                                 "devices": run_sim.merge_devices(prm.get("devices"))})
                 plp = {**prm, "parasitic": True, "par_caps": pc}
-                sch = run_sim.run_sim({**prm, "parasitic": False}, do_offset=False)
-                pl = run_sim.run_sim(plp, do_offset=False)
+                sp = {**prm, "parasitic": False}
+                # four independent sims (nominal + waveform, schematic vs extracted)
+                sch, pl, wsch, wpl = _pmap(lambda job: job(), [
+                    lambda: run_sim.run_sim(sp, do_offset=False),
+                    lambda: run_sim.run_sim(plp, do_offset=False),
+                    lambda: run_sim.capture_waveform(sp),
+                    lambda: run_sim.capture_waveform(plp),
+                ])
                 self._json({
-                    "schematic": {"nominal": sch["nominal"], "waveform": run_sim.capture_waveform({**prm, "parasitic": False})},
-                    "postlayout": {"nominal": pl["nominal"], "waveform": run_sim.capture_waveform(plp)},
+                    "schematic": {"nominal": sch["nominal"], "waveform": wsch},
+                    "postlayout": {"nominal": pl["nominal"], "waveform": wpl},
                     "par_caps": pc,
                 })
             elif self.path == "/api/pvt":
@@ -961,13 +1657,17 @@ class Handler(BaseHTTPRequestHandler):
                 prm = payload.get("params", {})
                 base_vdd = float(prm.get("vdd", run_sim.DEFAULT_PARAMS["vdd"]))
                 sky = prm.get("model") == "sky130"
-                cmap = {"SS": "ss", "TT": "tt", "FF": "ff"}
+                cmap = {"SS": "ss", "TT": "tt", "FF": "ff", "SF": "sf", "FS": "fs"}
+                # 5개 공정 코너 — 정렬(SS/TT/FF) + 교차(SF=slow N/fast P, FS=fast N/slow P)
+                # gaa2nm(|Vth|=0.20V)은 ±25mV, 45nm 급은 ±50mV 스큐
+                _sk = 0.05 * run_sim.skew_scale(prm)
                 specs = []
-                for pl, ps in (("SS", 0.05), ("TT", 0.0), ("FF", -0.05)):
+                for pl, ns, ps in (("SS", _sk, _sk), ("TT", 0.0, 0.0), ("FF", -_sk, -_sk),
+                                   ("SF", _sk, -_sk), ("FS", -_sk, _sk)):
                     for t in (-40, 27, 125):
                         for vf in (0.9, 1.0, 1.1):
                             vdd = round(base_vdd * vf, 3)
-                            proc = {"corner": cmap[pl]} if sky else {"pskew": ps}   # real PDK corner vs Vth skew
+                            proc = {"corner": cmap[pl]} if sky else {"nskew": ns, "pskew_p": ps}   # real PDK corner vs Vth skew
                             specs.append((pl, t, vf, vdd, proc))
 
                 def _corner(s):
@@ -978,7 +1678,7 @@ class Handler(BaseHTTPRequestHandler):
                             "power_uw": nom.get("power_uw"),
                             "functional": bool(nom.get("functional"))}
 
-                corners = _pmap(_corner, specs)   # 27 independent corners, parallel
+                corners = _pmap(_corner, specs)   # 45 independent corners (5 process x 3T x 3V), parallel
                 decs = [c["decision_time_ps"] for c in corners if c["decision_time_ps"] is not None]
                 pws = [c["power_uw"] for c in corners if c["power_uw"] is not None]
                 self._json({"corners": corners, "base_vdd": base_vdd, "worst": {
@@ -1048,7 +1748,9 @@ class Handler(BaseHTTPRequestHandler):
                 full["devices"] = {**run_sim.DEFAULT_PARAMS["devices"],
                                    **base.get("devices", {})}
                 targets = payload.get("targets") or {k: s["limit"] for k, s in SPEC_TARGETS.items()}
-                self._json(optimize(full, targets))
+                self._json(optimize(full, targets,
+                                    corner_aware=bool(payload.get("corner_aware", True)),
+                                    corner_relax=float(payload.get("corner_relax", 2.5))))
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as e:  # surface errors to the UI

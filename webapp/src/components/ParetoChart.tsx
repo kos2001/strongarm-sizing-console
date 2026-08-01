@@ -3,8 +3,15 @@ import type { ParetoResult } from '../types'
 
 // Scatter of the power–decision trade-off: all evaluated designs (faint) + the
 // non-dominated Pareto front (connected teal). Target lines mark the spec box.
-export default function ParetoChart({ res, pTarget, dTarget, theme }: { res: ParetoResult; pTarget: number; dTarget: number; theme: string }) {
+// front 점을 클릭하면 onSelect(index) 로 알린다(빈 곳 클릭 = null) — 부모가
+// 소자 크기·측정값 상세 패널을 띄운다. 선택점은 링으로 하이라이트.
+export default function ParetoChart({ res, pTarget, dTarget, theme, selected, onSelect }: {
+  res: ParetoResult; pTarget: number; dTarget: number; theme: string
+  selected?: number | null; onSelect?: (idx: number | null) => void
+}) {
   const ref = useRef<HTMLCanvasElement>(null)
+  // 클릭 히트테스트용 — draw() 가 계산한 front 점들의 픽셀 좌표를 보관
+  const geom = useRef<{ x: number; y: number; idx: number }[]>([])
   useEffect(() => {
     const cv = ref.current
     if (!cv) return
@@ -45,12 +52,24 @@ export default function ParetoChart({ res, pTarget, dTarget, theme }: { res: Par
       }
       // Pareto front (connected)
       const fr = res.front.filter((p) => p.power_uw != null && p.decision_time_ps != null)
+      geom.current = fr.map((p) => ({ x: X(p.power_uw!), y: Y(p.decision_time_ps!), idx: res.front.indexOf(p) }))
       ctx.beginPath()
       fr.forEach((p, i) => { const x = X(p.power_uw!), y = Y(p.decision_time_ps!); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y) })
       ctx.strokeStyle = css('--si'); ctx.lineWidth = 1.6; ctx.stroke()
       for (const p of fr) {
         ctx.beginPath(); ctx.arc(X(p.power_uw!), Y(p.decision_time_ps!), 3.2, 0, 7)
         ctx.fillStyle = css('--si'); ctx.fill()
+      }
+      // 선택점 하이라이트(링 + 좌표 라벨)
+      if (selected != null && res.front[selected]) {
+        const p = res.front[selected]
+        if (p.power_uw != null && p.decision_time_ps != null) {
+          const x = X(p.power_uw), y = Y(p.decision_time_ps)
+          ctx.beginPath(); ctx.arc(x, y, 6.5, 0, 7)
+          ctx.strokeStyle = css('--warn'); ctx.lineWidth = 2; ctx.stroke()
+          ctx.font = '10px ui-monospace, monospace'; ctx.fillStyle = css('--warn')
+          ctx.fillText(`${p.power_uw}µW · ${p.decision_time_ps}ps`, Math.min(x + 9, W - 120), y - 8)
+        }
       }
       ctx.font = '10px ui-monospace, monospace'; ctx.fillStyle = css('--faint')
       ctx.fillText('power µW →', W - 90, H - 8)
@@ -59,6 +78,21 @@ export default function ParetoChart({ res, pTarget, dTarget, theme }: { res: Par
     draw()
     const ro = new ResizeObserver(draw); ro.observe(cv)
     return () => ro.disconnect()
-  }, [res, pTarget, dTarget, theme])
-  return <canvas ref={ref} style={{ width: '100%', height: '260px', display: 'block' }} aria-label="Power vs decision-time Pareto front" />
+  }, [res, pTarget, dTarget, theme, selected])
+
+  const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!onSelect) return
+    const r = ref.current!.getBoundingClientRect()
+    const mx = e.clientX - r.left, my = e.clientY - r.top
+    let best: { idx: number; d2: number } | null = null
+    for (const g of geom.current) {
+      const d2 = (g.x - mx) ** 2 + (g.y - my) ** 2
+      if (d2 <= 12 ** 2 && (!best || d2 < best.d2)) best = { idx: g.idx, d2 }
+    }
+    onSelect(best ? best.idx : null)
+  }
+
+  return <canvas ref={ref} onClick={handleClick}
+    style={{ width: '100%', height: '260px', display: 'block', cursor: onSelect ? 'pointer' : undefined }}
+    aria-label="Power vs decision-time Pareto front (click a front point for details)" />
 }

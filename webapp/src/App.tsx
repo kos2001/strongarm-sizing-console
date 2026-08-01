@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { BerResult, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
+import type { BerResult, ProbitResult, Device, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
 import { DEVICE_META } from './types'
 import { ber, fullflow, getDefaults, health, layout, maxfclk, metastability, optimize, pareto, postlayout, pvt, sensitivity, simulate, waveform, yieldRun } from './api'
 import BerChart from './components/BerChart'
@@ -12,6 +12,10 @@ import MonteCarloChart from './components/MonteCarloChart'
 import ParetoChart from './components/ParetoChart'
 import PageHelp from './components/PageHelp'
 import Schematic from './components/Schematic'
+import { downloadNetlist } from './netlist'
+import NetlistImport from './components/NetlistImport'
+import AgentSizing from './components/AgentSizing'
+import AgentDock from './components/AgentDock'
 import SensitivityChart from './components/SensitivityChart'
 import VcoPage from './components/VcoPage'
 import WaveformChart from './components/WaveformChart'
@@ -37,7 +41,7 @@ const SPEC_PROFILES: { id: string; label: string; note: string; targets: Targets
 ]
 
 const DEFAULTS: Params = {
-  vdd: 1.0,
+  vdd: 0.7,
   cload_ff: 15.0,
   avt_mv_um: 2.0,
   n_mc: 16,
@@ -46,7 +50,8 @@ const DEFAULTS: Params = {
     tail: { w_um: 12.0, l_nm: 45.0, m: 6 },
     ncc: { w_um: 4.0, l_nm: 45.0, m: 2 },
     pcc: { w_um: 9.0, l_nm: 45.0, m: 4 },
-    pre: { w_um: 4.0, l_nm: 45.0, m: 2 },
+    pre: { w_um: 4.0, l_nm: 45.0, m: 2 },    // S3/S4 — 출력 X·Y 프리차지
+    prei: { w_um: 4.0, l_nm: 45.0, m: 2 },   // S1/S2 — 내부 P·Q 프리차지
   },
 }
 
@@ -65,7 +70,7 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
 ]
 
 type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'wicked' | 'layout' | 'flow'
-  | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopareto' | 'vcopn' | 'vcopvt' | 'vcopushing' | 'vcolayout' | 'vcoflow'
+  | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopareto' | 'vcopn' | 'vcopvt' | 'vcoyield' | 'vcopushing' | 'vcolayout' | 'vcoflow'
 type Domain = 'comparator' | 'vco'
 const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
   { id: 'sizing', glyph: '▦' },
@@ -90,13 +95,14 @@ const NAV_VCO: { id: Page; glyph: string }[] = [
   { id: 'vcopareto', glyph: '⤢' },
   { id: 'vcopn', glyph: '⌇' },
   { id: 'vcopvt', glyph: '◫' },
+  { id: 'vcoyield', glyph: '⊞' },
   { id: 'vcopushing', glyph: '⇅' },
   { id: 'vcolayout', glyph: '▧' },
   { id: 'vcoflow', glyph: '⇉' },
 ]
 const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vcocircuit' }
-const DOMAIN_OF: Record<string, Domain> = { vcocircuit: 'vco', vco: 'vco', vcoopt: 'vco', vcopareto: 'vco', vcopn: 'vco', vcopvt: 'vco', vcopushing: 'vco', vcolayout: 'vco', vcoflow: 'vco' }
-const VCO_VIEW: Record<string, 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn'> = { vcocircuit: 'circuit', vco: 'main', vcoopt: 'opt', vcopareto: 'pareto', vcopn: 'pn', vcopvt: 'pvt', vcopushing: 'pushing', vcolayout: 'layout', vcoflow: 'flow' }
+const DOMAIN_OF: Record<string, Domain> = { vcocircuit: 'vco', vco: 'vco', vcoopt: 'vco', vcopareto: 'vco', vcopn: 'vco', vcopvt: 'vco', vcoyield: 'vco', vcopushing: 'vco', vcolayout: 'vco', vcoflow: 'vco' }
+const VCO_VIEW: Record<string, 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'> = { vcocircuit: 'circuit', vco: 'main', vcoopt: 'opt', vcopareto: 'pareto', vcopn: 'pn', vcopvt: 'pvt', vcoyield: 'yield', vcopushing: 'pushing', vcolayout: 'layout', vcoflow: 'flow' }
 const domainOf = (p: Page): Domain => DOMAIN_OF[p] ?? 'comparator'
 
 interface HistoryItem {
@@ -127,14 +133,18 @@ export default function App() {
   const [pvtRes, setPvtRes] = useState<PvtResult | null>(null)
   const [pvtLoading, setPvtLoading] = useState(false)
   const [paretoRes, setParetoRes] = useState<ParetoResult | null>(null)
+  const [paretoSel, setParetoSel] = useState<number | null>(null) // 파레토 front 선택점(상세 패널)
   const [paretoLoading, setParetoLoading] = useState(false)
   const [flowRes, setFlowRes] = useState<FlowResult | null>(null)
   const [flowLoading, setFlowLoading] = useState(false)
   const [layoutRes, setLayoutRes] = useState<LayoutResult | null>(null)
   const [layoutLoading, setLayoutLoading] = useState(false)
   const [metaRes, setMetaRes] = useState<MetastabilityResult | null>(null)
+  const [metaSel, setMetaSel] = useState<number | null>(null) // 메타안정성 선택점(상세)
   const [metaLoading, setMetaLoading] = useState(false)
   const [berRes, setBerRes] = useState<BerResult | null>(null)
+  const [probitRes, setProbitRes] = useState<ProbitResult | null>(null)
+  const [probitLoading, setProbitLoading] = useState(false)
   const [berLoading, setBerLoading] = useState(false)
   const [sensRes, setSensRes] = useState<SensitivityResult | null>(null)
   const [sensLoading, setSensLoading] = useState(false)
@@ -238,6 +248,13 @@ export default function App() {
     }
   }
 
+  const runProbit = async () => {
+    setProbitLoading(true)
+    try {
+      const r = await fetch('/api/noise/probit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
+      setProbitRes(await r.json())
+    } catch (e) { setProbitRes({ error: String(e) } as ProbitResult) } finally { setProbitLoading(false) }
+  }
   const runBer = async () => {
     setBerLoading(true)
     try {
@@ -316,7 +333,7 @@ export default function App() {
     if (berRes) lines.push(``, `## Noise / BER`, ``, `- Input-referred noise σ: ${berRes.noise_uv_rms} µV`, `- Offset σ: ${fmt(berRes.offset_sigma_mv, 'mV')}`, `- Min detectable input @ BER ${berRes.ber_target}: ${berRes.min_input_total_uv} µV (with offset), ${berRes.min_input_noise_uv} µV (noise only)`)
     if (fclkRes) lines.push(``, `## Max clock rate`, ``, `- Max f_clk: ${fclkRes.max_fclk_ghz != null ? fclkRes.max_fclk_ghz + ' GHz' : 'none'} (min period ${fmt(fclkRes.min_period_ns, 'ns')})`, `- Energy / conversion: ${fmt(fclkRes.energy_fj_at_max, 'fJ')}`)
     if (yieldRes) lines.push(``, `## Parametric yield`, ``, `- Yield: ${yieldRes.yield_pct}% (${yieldRes.pass}/${yieldRes.n}, mismatch × PVT)`, `- Fails — offset ${yieldRes.fail_breakdown.offset}, speed ${yieldRes.fail_breakdown.speed}, wrong ${yieldRes.fail_breakdown.decision_wrong}`)
-    if (pvtRes) lines.push(``, `## PVT sign-off (27 corners)`, ``, `- Worst decision: ${fmt(pvtRes.worst.decision_time_ps, 'ps')}`, `- Worst power: ${fmt(pvtRes.worst.power_uw, 'µW')}`, `- All corners resolve: ${pvtRes.worst.any_nonfunctional ? 'NO' : 'yes'}`)
+    if (pvtRes) lines.push(``, `## PVT sign-off (45 corners)`, ``, `- Worst decision: ${fmt(pvtRes.worst.decision_time_ps, 'ps')}`, `- Worst power: ${fmt(pvtRes.worst.power_uw, 'µW')}`, `- All corners resolve: ${pvtRes.worst.any_nonfunctional ? 'NO' : 'yes'}`)
     if (sensRes) lines.push(``, `## Sensitivity (±${sensRes.delta_pct}% W)`, ``, ...sensRes.devices.map((d) => `- ${DEVICE_META[d.key].name}: decision ${d.low.decision_time_ps}→${d.high.decision_time_ps} ps, offset ${d.low.offset_sigma_mv}→${d.high.offset_sigma_mv} mV`))
     if (paretoRes) lines.push(``, `## Pareto front`, ``, `- ${paretoRes.front.length} non-dominated designs (power ↔ decision-time)`)
     lines.push(``, `---`, ``, `<details><summary>Raw JSON</summary>`, ``, '```json', JSON.stringify({ params, targets, result, metaRes, berRes, sensRes, fclkRes, yieldRes, pvtRes: pvtRes?.worst, generated: ts }, null, 2), '```', ``, `</details>`, ``)
@@ -365,14 +382,14 @@ export default function App() {
       .catch(() => {})
   }, [])
 
-  const run = async () => {
+  const run = async (forceOffset = false) => {
     setRunning(true)
     setMcBefore(null) // single distribution (before/after only from optimizer)
     setElapsed(0)
     const t0 = performance.now()
     timerRef.current = window.setInterval(() => setElapsed((performance.now() - t0) / 1000), 100)
     try {
-      const res = await simulate(params, doOffset)
+      const res = await simulate(params, forceOffset || doOffset)
       setResult(res)
       if (!res.error) {
         setHistory((h) => [{ id: idRef.current++, params: structuredClone(params), result: res, doOffset }, ...h].slice(0, 8))
@@ -522,7 +539,9 @@ export default function App() {
         <div className="max-w-[1000px] mx-auto px-6 py-7 flex flex-col gap-5">
           <div className="flex items-baseline justify-between gap-4">
             <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{pageTitle}</h1>
-            <div className="mono text-[11px]" style={{ color: 'var(--faint)' }}>StrongARM latch · BSIM4 PTM 45nm</div>
+            <div className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
+              StrongARM latch · {params.model === 'gaa2nm' ? 'GAA 2nm≈ (BSIM4 근사)' : params.model === 'asap7' ? 'ASAP7 7nm FinFET (BSIM-CMG·OSDI)' : params.model === 'sky130' ? 'SKY130 (real PDK)' : 'BSIM4 PTM 45nm'}
+            </div>
           </div>
 
           {/* beginner-friendly explanation for the current page (KO/EN) */}
@@ -549,13 +568,27 @@ export default function App() {
 
           <div className="flex items-center gap-2">
             <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>Model</span>
-            {([['ptm', 'PTM 45nm', 1.0], ['sky130', 'SKY130 (real)', 1.8]] as const).map(([m, label, v]) => {
+            {([['ptm', 'PTM 45nm', 1.0], ['sky130', 'SKY130 (real)', 1.8], ['gaa2nm', 'GAA 2nm≈', 0.65], ['asap7', 'ASAP7 7nm', 0.7]] as const).map(([m, label, v]) => {
               const on = (params.model ?? 'ptm') === m
+              // 모델별 채널 길이: gaa2nm 은 Lg 14nm 급(입력쌍 20nm), 나머지는 45nm 노드 기본
+              const lmap = m === 'gaa2nm' ? { input: 20, other: 14 } : m === 'asap7' ? { input: 21, other: 21 } : { input: 80, other: 45 }
+              // asap7: 핀 수 기준 현실적 사이징(input 16 / tail 36 / ncc·pre 8 / pcc 20핀, 검증됨)
+              const wmap7: Record<DeviceKey, number> = { input: 0.28, tail: 0.42, ncc: 0.28, pcc: 0.35, pre: 0.28, prei: 0.28 }
               return (
                 <button
                   key={m}
                   disabled={busy}
-                  onClick={() => updateParams({ ...params, model: m, vdd: v })}
+                  onClick={() => updateParams({ ...params, model: m, vdd: v,
+                    // Pelgrom A_VT: GAA 2nm 급은 얇은 EOT·언도프드 채널로 매칭 우수(~1.2mV·µm)
+                    avt_mv_um: m === 'gaa2nm' ? 1.2 : m === 'asap7' ? 1.4 : 2.0,
+                    devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => {
+                      const dd = params.devices[k]
+                      const l_nm = k === 'input' ? lmap.input : lmap.other
+                      // gaa2nm: W 는 나노시트 스택 등가폭 0.2µ 의 정수배로만 존재 — 그리드에 스냅
+                      if (m === 'gaa2nm') return [k, { ...dd, l_nm, w_um: Math.max(0.2, Math.round(Math.round(dd.w_um / 0.2) * 0.2 * 1000) / 1000) }]
+                      if (m === 'asap7') return [k, { ...dd, l_nm, w_um: wmap7[k] }]
+                      return [k, { ...dd, l_nm }]
+                    })) as Record<DeviceKey, Device> })}
                   className="mono text-[11px] px-2.5 py-1 rounded-lg disabled:opacity-50"
                   style={{ color: on ? 'var(--si)' : 'var(--muted)', background: on ? 'color-mix(in srgb, var(--si) 12%, transparent)' : 'transparent', border: `1px solid ${on ? 'color-mix(in srgb, var(--si) 35%, var(--line))' : 'var(--line)'}` }}
                 >
@@ -565,6 +598,16 @@ export default function App() {
             })}
           </div>
 
+          {params.model === 'asap7' && (
+            <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5" style={{ color: 'var(--si)', background: 'color-mix(in srgb, var(--si) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--si) 30%, var(--line))' }}>
+              ASAP7 7nm FinFET — 진짜 BSIM-CMG 107 을 ngspice OSDI 로 실행(ASU 예측 PDK, LVT). W 는 핀 수로 양자화(1핀 ≈ Weff 0.07µ).
+            </p>
+          )}
+          {params.model === 'gaa2nm' && (
+            <p className="mono text-[10.5px] rounded-lg px-2.5 py-1.5" style={{ color: 'var(--warn)', background: 'color-mix(in srgb, var(--warn) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--warn) 30%, var(--line))' }}>
+              ≈ 2nm급 근사 모델(BSIM4, IRDS 목표치 스케일링) — W 는 나노시트 스택 단위(0.2µ = 3시트 스택 1개)의 정수배로 스냅됩니다. 경향 분석용이며 사인오프 불가. 실제 2nm PDK 는 파운드리 NDA 전용.
+            </p>
+          )}
           <DeviceEditor params={params} onChange={updateParams} disabled={busy} lang={lang} />
 
           <div className="grid grid-cols-3 gap-3">
@@ -595,7 +638,7 @@ export default function App() {
 
           <div className="grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
             <button
-              onClick={run}
+              onClick={() => run()}
               disabled={busy || apiUp === false}
               className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
               style={{ background: 'var(--si)', color: '#04120f' }}
@@ -704,6 +747,10 @@ export default function App() {
                   <button onClick={runPostLayout} disabled={busy || plLoading} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
                     {plLoading ? 'extracting…' : '⚡ parasitics'}
                   </button>
+                  <button onClick={() => downloadNetlist('/api/netlist', params, 'strongarm.sp').catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                    title="현재 파라미터의 SPICE 덱(.sp) 다운로드 — ngspice 로 직접 실행 가능">
+                    ⤓ netlist
+                  </button>
                 </div>
               </div>
               {play && stepNow && (
@@ -762,6 +809,7 @@ export default function App() {
                   </div>
                 </div>
               )}
+            <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'sky130' | 'gaa2nm' | 'asap7' } : {}), devices: { ...params.devices, ...pp.devices } })} />
             </div>
           )}
 
@@ -800,8 +848,19 @@ export default function App() {
                       })}
                     </ol>
                   </div>
-                  <p className="mono text-[11px] mt-3 leading-relaxed" style={{ color: 'var(--faint)' }}>
-                    Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.
+                  <p className="mono text-[11px] mt-3 leading-relaxed flex items-center justify-between gap-2" style={{ color: 'var(--faint)' }}>
+                    <span>Power minimized to <span style={{ color: 'var(--ag)' }}>{opt.final_power_uw}µW</span> (ΣW {opt.final_total_w_um}µm) by trimming tail &amp; latch, offset held by the input pair — click a step to replay it on the schematic.
+                      {opt.final_corner && (
+                        <span style={{ color: opt.final_corner.functional ? 'var(--good)' : 'var(--bad)' }}> · 최악 코너(SS/−40°C/0.9V<sub>DD</sub>): {opt.final_corner.functional ? `생존 ${opt.final_corner.decision_time_ps}ps` : '비기능'}{opt.corner_note?.includes('vcm_frac') ? ` — ${opt.corner_note.split('(')[0].replace('corner feasibility: ', 'vcm ')}` : ''}</span>
+                      )}
+                      {opt.final_stacks && (
+                        <span style={{ color: 'var(--si)' }}> · 2nm: 탐색된 것은 정수 스택 수 — {(['input', 'tail', 'ncc', 'pcc', 'pre'] as const).map((k) => `${k} ${opt.final_stacks![k]}`).join(' / ')} (×0.2µ)</span>
+                      )}
+                    </span>
+                    <button onClick={() => downloadNetlist('/api/netlist', opt.final_params, 'strongarm_opt.sp').catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full shrink-0" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                      title="최적화된 소자 크기가 반영된 SPICE 덱(.sp) 다운로드">
+                      ⤓ netlist
+                    </button>
                   </p>
                 </div>
               ) : (
@@ -837,7 +896,16 @@ export default function App() {
           )}
 
           {page === 'montecarlo' && (
-            off?.samples_mv?.length ? (
+            <div className="flex flex-col gap-4">
+            {/* MC 는 결과 뷰어였음 — 이 페이지에서 바로 돌릴 수 있게 실행 버튼 제공(오프셋 강제 on) */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Monte-Carlo · V_th mismatch → offset σ</div>
+              <button onClick={() => run(true)} disabled={busy || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}
+                title="현재 소자 크기로 n_MC회 미스매치 샘플링(ngspice)을 돌려 오프셋 분포를 측정">
+                {running ? `sampling… ${elapsed.toFixed(0)}s` : `∿ run Monte-Carlo (n=${params.n_mc})`}
+              </button>
+            </div>
+            {off?.samples_mv?.length ? (
               <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Monte-Carlo offset · {off.n_mc} samples</div>
@@ -856,8 +924,13 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <p className="text-sm" style={{ color: 'var(--muted)' }}>Enable “Measure offset (Monte-Carlo)” and run a simulation on the Sizing page to see the offset distribution here.</p>
-            )
+              <p className="text-sm" style={{ color: 'var(--muted)' }}>
+                아직 몬테카를로 결과가 없습니다 — 위의 <span className="mono" style={{ color: 'var(--ag)' }}>∿ run Monte-Carlo</span> 버튼을 누르면 현재 소자 크기로
+                V<sub>th</sub> 미스매치를 {params.n_mc}회 무작위 추출해(ngspice) <b>입력 오프셋 분포·σ</b>를 측정합니다.
+                (소자 크기 페이지에서 “오프셋 측정” 체크 후 실행해도 같은 결과가 여기 표시됩니다.)
+              </p>
+            )}
+            </div>
           )}
 
           {page === 'pvt' && (
@@ -865,7 +938,7 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>PVT · worst-case across process / voltage / temperature</div>
                 <button onClick={runPvt} disabled={busy || pvtLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
-                  {pvtLoading ? 'sweeping 27 corners…' : '◫ run PVT sweep'}
+                  {pvtLoading ? 'sweeping 45 corners…' : '◫ run PVT sweep'}
                 </button>
               </div>
               {pvtRes ? (
@@ -878,12 +951,12 @@ export default function App() {
                         return <Gauge key={k} label={`${TARGET_META[k].label} (worst corner)`} value={val} limit={lim} unit={TARGET_META[k].unit} pass={val == null ? null : val <= lim} />
                       })}
                       <div className="mono text-[11px]" style={{ color: pvtRes.worst.any_nonfunctional ? 'var(--bad)' : 'var(--good)' }}>
-                        {pvtRes.worst.any_nonfunctional ? '✗ some corner failed to resolve' : '✓ resolves to a rail in all 27 corners'}
+                        {pvtRes.worst.any_nonfunctional ? '✗ some corner failed to resolve' : '✓ resolves to a rail in all 45 corners'}
                       </div>
                     </div>
                   </div>
                   <div className="rounded-2xl p-4 overflow-x-auto" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                    {(['SS', 'TT', 'FF'] as const).map((proc) => (
+                    {(['SS', 'SF', 'TT', 'FS', 'FF'] as const).map((proc) => (
                       <div key={proc} className="flex items-center gap-1.5 mb-1.5">
                         <span className="mono text-[11px] w-7 shrink-0" style={{ color: 'var(--muted)' }}>{proc}</span>
                         {pvtRes.corners.filter((c) => c.process === proc).map((c, i) => {
@@ -897,7 +970,7 @@ export default function App() {
                       </div>
                     ))}
                     <div className="mono text-[10px] mt-1.5 leading-relaxed" style={{ color: 'var(--faint)' }}>
-                      each cell = decision (ps) at one corner; 9 cols = T(−40/27/125°C) × V(0.9/1.0/1.1×VDD); process = ±50 mV Vth skew (delvto). teal ≤ {targets.decision_time_ps} ps, red = miss. Nominal passing ≠ PVT passing.
+                      each cell = decision (ps) at one corner; 9 cols = T(−40/27/125°C) × V(0.9/1.0/1.1×VDD); process = 5 corners (SS/TT/FF + cross SF/FS, ±50 mV Vth skew per device type). teal ≤ {targets.decision_time_ps} ps, red = miss. Nominal passing ≠ PVT passing.
                     </div>
                   </div>
                 </>
@@ -917,13 +990,40 @@ export default function App() {
               </div>
               {paretoRes ? (
                 <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <ParetoChart res={paretoRes} pTarget={targets.power_uw} dTarget={targets.decision_time_ps} theme={theme} />
+                  <ParetoChart res={paretoRes} pTarget={targets.power_uw} dTarget={targets.decision_time_ps} theme={theme}
+                    selected={paretoSel} onSelect={setParetoSel} />
                   <p className="mono text-[11px] mt-2 leading-relaxed" style={{ color: 'var(--faint)' }}>
-                    <span style={{ color: 'var(--si)' }}>— front</span> = {paretoRes.front.length} non-dominated designs; faint dots = all evaluated (red = infeasible). Dashed = spec limits (≤{targets.power_uw}µW, ≤{targets.decision_time_ps}ps). Lower-left is better — click a point to load that trade-off.
+                    <span style={{ color: 'var(--si)' }}>— front</span> = {paretoRes.front.length} non-dominated designs; faint dots = all evaluated (red = infeasible). Dashed = spec limits (≤{targets.power_uw}µW, ≤{targets.decision_time_ps}ps). Lower-left is better — click a front point for details.
                   </p>
+                  {/* 선택점 상세: 측정값 + 소자 크기 + 적용/넷리스트 */}
+                  {paretoSel != null && paretoRes.front[paretoSel] && (() => {
+                    const pt = paretoRes.front[paretoSel]
+                    return (
+                      <div className="rounded-xl p-3 mt-3" style={{ background: 'color-mix(in srgb, var(--warn) 7%, var(--surface-2))', border: '1px solid color-mix(in srgb, var(--warn) 35%, var(--line))' }}>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <div className="mono text-[11px] tnum" style={{ color: 'var(--text)' }}>
+                            ◎ front #{paretoSel + 1} — <span style={{ color: 'var(--ag)' }}>{pt.power_uw}µW</span> · {pt.decision_time_ps}ps · σ(pred) {pt.offp}mV
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => updateParams({ ...params, devices: pt.devices })} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }} title="이 크기를 에디터에 로드">↧ 적용</button>
+                            <button onClick={() => downloadNetlist('/api/netlist', { ...params, devices: pt.devices }, `strongarm_front${paretoSel + 1}.sp`).catch(() => {})} className="mono text-[11px] px-2.5 py-1 rounded-full" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }} title="이 크기의 SPICE 덱 다운로드">⤓ netlist</button>
+                          </div>
+                        </div>
+                        <div className="grid gap-1.5 mt-2" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+                          {(Object.keys(pt.devices) as (keyof typeof pt.devices)[]).map((k) => (
+                            <div key={String(k)} className="mono text-[10.5px] tnum rounded-lg px-2 py-1.5" style={{ background: 'var(--surface)', border: '1px solid var(--line-soft)' }}>
+                              <span style={{ color: 'var(--si)' }}>{DEVICE_META[k]?.name ?? String(k)}</span>
+                              <span style={{ color: 'var(--muted)' }}> {pt.devices[k].w_um}µ × {pt.devices[k].m}</span>
+                              <div style={{ color: 'var(--faint)' }}>{DEVICE_META[k]?.role}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })()}
                   <div className="flex flex-col gap-1.5 mt-3">
                     {paretoRes.front.slice(0, 8).map((pt, i) => (
-                      <button key={i} onClick={() => updateParams({ ...params, devices: pt.devices })} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)', color: 'var(--muted)' }} title="Load this sizing into the editor">
+                      <button key={i} onClick={() => setParetoSel(i)} className="mono text-[11px] tnum text-left rounded-lg px-3 py-1.5" style={{ background: paretoSel === i ? 'color-mix(in srgb, var(--warn) 10%, var(--surface-2))' : 'var(--surface-2)', border: `1px solid ${paretoSel === i ? 'color-mix(in srgb, var(--warn) 40%, var(--line))' : 'var(--line-soft)'}`, color: 'var(--muted)' }} title="이 점의 상세 보기">
                         {pt.power_uw}µW · {pt.decision_time_ps}ps · σ {pt.offp}mV
                       </button>
                     ))}
@@ -945,7 +1045,35 @@ export default function App() {
               </div>
               {metaRes ? (
                 <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
-                  <MetastabilityChart res={metaRes} theme={theme} />
+                  <MetastabilityChart res={metaRes} theme={theme} selected={metaSel} onSelect={setMetaSel} />
+                  {/* 선택점 상세: 측정값 + τ-피팅 예측·잔차 */}
+                  {metaSel != null && metaRes.points[metaSel] && (() => {
+                    const pt = metaRes.points[metaSel]
+                    const mv = pt.vin_v * 1e3
+                    const vinLabel = mv >= 1 ? `${mv.toFixed(mv < 10 ? 2 : 1)} mV` : `${(mv * 1e3).toFixed(1)} µV`
+                    const fit = metaRes.tau_ps != null && metaRes.intercept_ps != null
+                      ? -metaRes.tau_ps * Math.log(10) * Math.log10(pt.vin_v) + metaRes.intercept_ps : null
+                    const resid = fit != null && pt.decision_time_ps != null ? pt.decision_time_ps - fit : null
+                    const specOk = pt.decision_time_ps != null && pt.decision_time_ps <= targets.decision_time_ps
+                    return (
+                      <div className="rounded-xl p-3 mt-3" style={{ background: 'color-mix(in srgb, var(--warn) 7%, var(--surface-2))', border: '1px solid color-mix(in srgb, var(--warn) 35%, var(--line))' }}>
+                        <div className="mono text-[11px] tnum flex items-center gap-3 flex-wrap" style={{ color: 'var(--text)' }}>
+                          <span>◎ V<sub>in</sub> = <span style={{ color: 'var(--ag)' }}>{vinLabel}</span></span>
+                          <span>판정시간 <span style={{ color: 'var(--si)' }}>{pt.decision_time_ps ?? '—'} ps</span>{pt.decision_time_ps != null && (
+                            <span style={{ color: specOk ? 'var(--good)' : 'var(--bad)' }}> ({specOk ? '스펙 내' : `스펙 ${targets.decision_time_ps}ps 초과`})</span>
+                          )}</span>
+                          <span>{pt.resolved ? '판정 완료 ✓' : '미판정(메타안정) ✗'}</span>
+                        </div>
+                        <div className="mono text-[10.5px] tnum mt-1.5 flex items-center gap-3 flex-wrap" style={{ color: 'var(--muted)' }}>
+                          {fit != null && <span>τ-피팅 예측 {fit.toFixed(1)} ps</span>}
+                          {resid != null && <span>잔차 {resid >= 0 ? '+' : ''}{resid.toFixed(1)} ps</span>}
+                          {metaRes.tau_ps != null && pt.decision_time_ps != null && metaRes.intercept_ps != null && (
+                            <span>≈ c + τ·ln(1/V): 이 점은 τ={metaRes.tau_ps}ps 재생루프가 {((pt.decision_time_ps - metaRes.intercept_ps) / metaRes.tau_ps).toFixed(1)}×τ 걸린 지점</span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })()}
                   <div className="grid grid-cols-2 gap-3 mt-3">
                     <Detail label="Regeneration τ" value={metaRes.tau_ps != null ? `${metaRes.tau_ps} ps` : '—'} />
                     <Detail label="Min resolved input" value={metaRes.min_resolved_v != null ? `${(metaRes.min_resolved_v * 1e6).toFixed(1)} µV` : '—'} />
@@ -982,10 +1110,29 @@ export default function App() {
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Noise / BER · decision error rate vs input</div>
-                <button onClick={runBer} disabled={busy || berLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
-                  {berLoading ? 'computing…' : '⊹ compute BER'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={runBer} disabled={busy || berLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
+                    {berLoading ? 'computing…' : '⊹ compute BER'}
+                  </button>
+                  <button onClick={runProbit} disabled={busy || probitLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
+                    title="프로빗(noise-counting) 실측: 준안정점 근처에서 열잡음 주입 판정을 반복해 P(+|vin)→Φ⁻¹ 피팅으로 σ 를 잰다">
+                    {probitLoading ? 'counting…' : '∿ σ 프로빗 실측'}
+                  </button>
+                </div>
               </div>
+              {probitRes && !probitRes.error && (
+                <div className="rounded-2xl p-4" style={{ background: 'var(--surface)', border: '1px solid color-mix(in srgb, var(--si) 30%, var(--line))' }}>
+                  <div className="grid grid-cols-3 gap-3">
+                    <Detail label="σ 프로빗 실측" value={`${probitRes.sigma_uv_probit} µV`} />
+                    <Detail label="σ 해석 추정" value={`${probitRes.sigma_uv_analytic} µV`} />
+                    <Detail label="실측/해석 비" value={`${probitRes.ratio}×`} />
+                  </div>
+                  <p className="mono text-[10.5px] mt-2" style={{ color: 'var(--faint)' }}>
+                    {probitRes.n_sims} 판정 · P(+|vin): {(probitRes.points ?? []).map((pt) => `${pt.vin_uv}µV→${pt.p_plus}`).join(' · ')} — Φ⁻¹(P)=vin/σ 최소자승 · n=24/점이라 σ 추정에 ±수십% 산포가 있음(경향 확인용, 정밀값은 n_per_point 상향)
+                  </p>
+                </div>
+              )}
+              {probitRes?.error && <p className="mono text-[11px]" style={{ color: 'var(--warn)' }}>{probitRes.error}</p>}
               {berRes ? (
                 <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
                   <BerChart res={berRes} theme={theme} />
@@ -1120,10 +1267,24 @@ export default function App() {
           )}
 
           <p className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
-            {ngspice ? `ngspice: ${ngspice}` : ''} · model: BSIM4 PTM 45nm bulk · offset via Monte-Carlo Vth mismatch
+            {ngspice ? `ngspice: ${ngspice}` : ''} · model: {params.model === 'gaa2nm' ? 'GAA 2nm≈ (scaled BSIM4)' : params.model === 'asap7' ? 'ASAP7 7nm (BSIM-CMG via OSDI)' : params.model === 'sky130' ? 'SKY130 PDK' : 'BSIM4 PTM 45nm bulk'} · offset via Monte-Carlo Vth mismatch
           </p>
         </div>
       </main>
+      {domain === 'comparator' && (
+        <AgentDock ko={lang === 'ko'}>
+          <AgentSizing params={params} targets={targets} ko={lang === 'ko'} disabled={busy}
+            onApply={(pr) => {
+              if (pr.targets) setTargets((tg) => ({ ...tg, ...pr.targets }))
+              updateParams({
+                ...params,
+                ...(pr.vdd != null ? { vdd: pr.vdd } : {}),
+                ...(pr.cload_ff != null ? { cload_ff: pr.cload_ff } : {}),
+                devices: Object.fromEntries((Object.keys(params.devices) as DeviceKey[]).map((k) => [k, { ...params.devices[k], ...(pr.devices?.[k] ?? {}) }])) as Record<DeviceKey, Device>,
+              })
+            }} />
+        </AgentDock>
+      )}
     </div>
   )
 }

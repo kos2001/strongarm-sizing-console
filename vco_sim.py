@@ -43,16 +43,18 @@ def _pmap(fn, items):
 VCO_DEFAULTS = {
     "vdd": 1.0,
     "vctrl": 0.6,          # nominal control voltage (V)
-    "n_stages": 5,         # odd number of ring stages
+    "n_stages": 3,         # odd number of ring stages
     "cload_ff": 3.0,       # per-stage load capacitance
+    "topology": "xcpl",    # 기본: 교차결합+리셋(xcpl). "starved" 는 레거시 호환용
     "devices": {
-        "invp":    {"w_um": 2.0, "l_nm": 45, "m": 2},   # core PMOS
-        "invn":    {"w_um": 1.0, "l_nm": 45, "m": 2},   # core NMOS
+        "invp":    {"w_um": 2.0, "l_nm": 45, "m": 2},   # core PMOS (P0)
+        "invn":    {"w_um": 1.0, "l_nm": 45, "m": 2},   # core NMOS (N0)
         "starvep": {"w_um": 2.0, "l_nm": 45, "m": 2},   # PMOS current-starve
         "starven": {"w_um": 1.0, "l_nm": 45, "m": 1},   # NMOS current-starve
+        "xcplp":   {"w_um": 1.0, "l_nm": 45, "m": 2},   # 래치 PMOS — 상보성 유지·비고착 균형(실측 재센터링)
     },
 }
-DEV_KEYS = ["invp", "invn", "starvep", "starven"]
+DEV_KEYS = ["invp", "invn", "starvep", "starven"]   # optimizer dims (starved topology)
 
 
 def _full(params):
@@ -69,36 +71,60 @@ def _dev(d, vt):
     return f"W={d['w_um']}u L={d['l_nm']}n M={d['m']} delvto={{{vt}}}"
 
 
+def _dev2(p, dd, kind):
+    """모델명을 포함한 소자 우변. asap7 은 BSIM-CMG(OSDI): NFIN 핀 양자화 +
+    delvtrand(+가 Vth ↓ — delvto 관례와 부호 반대, .param 에서 반전됨)."""
+    vt = "dvtn" if kind == "n" else "dvtp"
+    if p.get("model") == "asap7":
+        mdl = "nmos_lvt" if kind == "n" else "pmos_lvt"
+        return f"{mdl} l={dd['l_nm']}n nfin={run_sim.nfin_of(dd)} delvtrand={{{vt}}}"
+    return f"{'nmos' if kind == 'n' else 'pmos'} {_dev(dd, vt)}"
+
+
+def _mp(p):
+    """OSDI 소자(asap7)의 인스턴스 접두('N') — ngspice OSDI 소자 문자."""
+    return "N" if p.get("model") == "asap7" else ""
+
+
+def _osdi_line(p):
+    return f"pre_osdi {run_sim.ASAP7_OSDI}" if p.get("model") == "asap7" else "* no osdi"
+
+
 def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
-    d = p["devices"]
+    if p.get("topology", "starved") == "xcpl":
+        return _gen_xcpl_netlist(p, vctrl, tstop_ns, tstep_ps, wavefile)
+    d = run_sim.quantize_devices(p)   # gaa2nm: W → 시트 단위(0.5µ) × finger
     vdd = p["vdd"]
     vc = p["vctrl"] if vctrl is None else vctrl
     N = int(p["n_stages"])
     cl = p["cload_ff"]
     pskew = p.get("pskew", 0.0)             # process corner: +slow (SS), -fast (FF)
+    nskew = p.get("nskew", pskew)           # 교차 코너(SF/FS)용 독립 스큐 — 첫 글자=N, 둘째=P
+    pskew_p = p.get("pskew_p", pskew)
     hdr = run_sim._model_header(p)          # PTM .include (or sky130 .lib)
-    invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
-    sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
+    invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
+    sp_p, sn_n = _dev2(p, d["starvep"], "p"), _dev2(p, d["starven"], "n")
+    mp = _mp(p)
     wave = f"wrdata {wavefile} v(o1) v(o2)" if wavefile else ""
 
     lines = [
         "MOSFET current-starved ring VCO (generated)",
         f".option temp={p.get('temp', 27)}",
-        f".param dvtn={pskew} dvtp={-pskew}",
+        f".param dvtn={-nskew if p.get('model') == 'asap7' else nskew} dvtp={-pskew_p}",
         hdr,
         f"Vdd vdd 0 {vdd}",
         f"Vc vctrl 0 {vc}",
         "* bias: Vctrl -> tail current, mirrored to a diode PMOS -> vbp",
-        f"Mpref vbp vbp vdd vdd pmos {sp_p}",
-        f"Mnref vbp vctrl 0 0 nmos {sn_n}",
+        f"{mp}Mpref vbp vbp vdd vdd {sp_p}",
+        f"{mp}Mnref vbp vctrl 0 0 {sn_n}",
     ]
     for i in range(1, N + 1):
         prev = N if i == 1 else i - 1      # ring: in_1 = o_N
         lines += [
-            f"Mbp{i} a{i} vbp vdd vdd pmos {sp_p}",
-            f"Mp{i}  o{i} o{prev} a{i} vdd pmos {invp}",
-            f"Mn{i}  o{i} o{prev} b{i} 0 nmos {invn}",
-            f"Mbn{i} b{i} vctrl 0 0 nmos {sn_n}",
+            f"{mp}Mbp{i} a{i} vbp vdd vdd {sp_p}",
+            f"{mp}Mp{i}  o{i} o{prev} a{i} vdd {invp}",
+            f"{mp}Mn{i}  o{i} o{prev} b{i} 0 {invn}",
+            f"{mp}Mbn{i} b{i} vctrl 0 0 {sn_n}",
             f"Co{i} o{i} 0 {cl}f",
         ]
     # kick-start: alternate node initial conditions
@@ -107,10 +133,82 @@ def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
         f".ic {ic}",
         ".control",
         "set noaskquit",
+        _osdi_line(p),
         f"tran {tstep_ps}p {tstop_ns}n uic",
-        # period across 5 cycles (rise 3..8) of o1, measured after startup settles
+        # period across 5 CYCLES (rise 3..8): f_osc = 5/per — NOT 1/per
         f"meas tran per TRIG v(o1) VAL='{vdd/2.0}' RISE=3 TARG v(o1) VAL='{vdd/2.0}' RISE=8",
         "meas tran vpp PP v(o1)",
+        f"meas tran iavg AVG i(Vdd) FROM={tstop_ns*0.2}n TO={tstop_ns}n",
+        wave,
+        ".endc",
+        ".end",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
+    """Cross-coupled pseudo-differential ring VCO with a hardware reset start-up
+    (topology="xcpl"; cf. the Mansuri-style CCO cell, plus a reset PMOS).
+
+    Two current-starved inverter rings (odd N per rail: o1..oN and ob1..obN)
+    run in anti-phase, tied at every stage by a weak cross-coupled PMOS pair.
+    Per stage and rail (schematic naming):
+        N0 -> Mn*/Mnb*   core inverter NMOS
+        P0 -> Mp*/Mpb*   core inverter PMOS
+        P1 -> Mx*/Mxb*   cross-coupled PMOS (drain = own node, gate = complement)
+    Start-up is an .ic kick-start (simulator initial condition — in silicon
+    thermal noise does this); the circuit contains ONLY the unit devices
+    (2 NMOS + 4 PMOS per stage). Size P1 (Mx/Mxb) strong enough for rail
+    complementarity but weak enough not to latch (oscillates=False)."""
+    d = run_sim.quantize_devices(p)   # gaa2nm: W → 시트 단위(0.5µ) × finger
+    vdd = p["vdd"]
+    N = int(p["n_stages"])
+    cl = p["cload_ff"]
+    pskew = p.get("pskew", 0.0)
+    nskew = p.get("nskew", pskew)
+    pskew_p = p.get("pskew_p", pskew)
+    hdr = run_sim._model_header(p)
+    invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
+    xp = _dev2(p, d["xcplp"], "p")
+    mp = _mp(p)
+    wave = f"wrdata {wavefile} v(o1) v(ob1)" if wavefile else ""
+
+    # 유닛 셀 = NMOS 2 + PMOS 4, 그 외 소자 없음: 인버터 2개(Mp/Mn, Mpb/Mnb
+    # — 레일 직결) + 래치된 PMOS 2개(Mx/Mxb). 스타빙·바이어스·리셋 트랜지스터
+    # 전부 없다 — 시동은 .ic 킥스타트(실리콘에선 열잡음이 그 역할). 링 결선은
+    # 양 레일 비반전(straight). V_ctrl 노브 없음(튜닝 곡선 평탄은 설계 결과).
+    lines = [
+        "cross-coupled pseudo-differential ring VCO (unit-only, generated)",
+        f".option temp={p.get('temp', 27)}",
+        f".param dvtn={-nskew if p.get('model') == 'asap7' else nskew} dvtp={-pskew_p}",
+        hdr,
+        f"Vdd vdd 0 {vdd}",
+    ]
+    for i in range(1, N + 1):
+        prev = N if i == 1 else i - 1      # ring: in_1 = o_N (both rails, straight)
+        lines += [
+            f"* stage {i}: unit = 2 inverters (2N+2P, rails direct) + latched PMOS pair",
+            f"{mp}Mp{i}   o{i} o{prev} vdd vdd {invp}",
+            f"{mp}Mn{i}   o{i} o{prev} 0 0 {invn}",
+            f"{mp}Mpb{i}  ob{i} ob{prev} vdd vdd {invp}",
+            f"{mp}Mnb{i}  ob{i} ob{prev} 0 0 {invn}",
+            f"{mp}Mx{i}   o{i} ob{i} vdd vdd {xp}",
+            f"{mp}Mxb{i}  ob{i} o{i} vdd vdd {xp}",
+            f"Co{i}  o{i} 0 {cl}f",
+            f"Cob{i} ob{i} 0 {cl}f",
+        ]
+    # 킥스타트: 레일별 상보 초기조건(o_i 교대, ob_i 반대 위상)
+    ic_o = " ".join(f"v(o{i})={vdd if i % 2 else 0}" for i in range(1, N + 1))
+    ic_ob = " ".join(f"v(ob{i})={0 if i % 2 else vdd}" for i in range(1, N + 1))
+    lines += [
+        f".ic {ic_o} {ic_ob}",
+        ".control",
+        "set noaskquit",
+        _osdi_line(p),
+        f"tran {tstep_ps}p {tstop_ns}n uic",
+        # RISE=3..8 spans 5 CYCLES of settled oscillation: f_osc = 5/per — NOT 1/per
+        f"meas tran per TRIG v(o1) VAL='{vdd/2.0}' RISE=3 TARG v(o1) VAL='{vdd/2.0}' RISE=8",
+        f"meas tran vpp PP v(o1) FROM={tstop_ns*0.3}n",
         f"meas tran iavg AVG i(Vdd) FROM={tstop_ns*0.2}n TO={tstop_ns}n",
         wave,
         ".endc",
@@ -172,8 +270,9 @@ def vco_tuning(params, points=9):
 
 
 def capture_vco_waveform(params, npoints=400, tstop_ns=8.0):
-    """Real transient of two ring nodes (o1, o2) so the UI can plot the actual
-    oscillation. Returns downsampled t_ns / o1 / o2 arrays + measured period."""
+    """Real transient of two ring nodes so the UI can plot the actual
+    oscillation (starved: o1/o2; xcpl: the complementary pair o1/ob1, returned
+    under the same o1/o2 keys). Returns downsampled arrays + measured period."""
     import os
     import tempfile as _tf
     p = _full(params)
@@ -281,14 +380,20 @@ def phase_noise(params, offsets_hz=None, measured=True, flicker_corner_hz=1e5):
 
 
 def _ring_gm(p):
-    """Finite-difference gm (S) of the core inverter NMOS at mid-transition."""
+    """Finite-difference gm (S) of the core inverter NMOS at mid-transition.
+    모델 인지: ptm/gaa2nm 은 .model nmos, asap7 은 BSIM-CMG OSDI 소자."""
     d = p["devices"]["invn"]
     vdd = p["vdd"]
+    osdi = f"pre_osdi {run_sim.ASAP7_OSDI}\n" if p.get("model") == "asap7" else ""
+    if p.get("model") == "asap7":
+        dev = f'NM1 d g 0 0 nmos_lvt l={d["l_nm"]}n nfin={run_sim.nfin_of(d)}'
+    else:
+        dev = f'M1 d g 0 0 nmos W={d["w_um"]}u L={d["l_nm"]}n M={d["m"]}'
 
     def idn(vg):
-        out = run_sim._run(f'.include "{run_sim.MODEL_PATH}"\nVd d 0 {vdd/2.0}\nVg g 0 {vg}\n'
-                           f'M1 d g 0 0 nmos W={d["w_um"]}u L={d["l_nm"]}n M={d["m"]}\n'
-                           '.control\nop\nprint i(Vd)\n.endc\n.end\n')
+        out = run_sim._run(f'{run_sim._model_header(p)}\nVd d 0 {vdd/2.0}\nVg g 0 {vg}\n'
+                           f'{dev}\n'
+                           f'.control\n{osdi}op\nprint i(Vd)\n.endc\n.end\n')
         m = re.search(r"i\(vd\)\s*=\s*([-\d.eE+]+)", out, re.IGNORECASE)
         return abs(float(m.group(1))) if m else None
 
@@ -299,7 +404,7 @@ def _ring_gm(p):
 def _gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wavefile):
     """Ring VCO netlist with a per-stage input-referred trnoise voltage source
     (amplitude `na`) in series with each inverter gate — for measured jitter."""
-    d = p["devices"]
+    d = run_sim.quantize_devices(p)   # gaa2nm: W → 시트 단위(0.5µ) × finger
     vdd, N = p["vdd"], int(p["n_stages"])
     invp, invn = _dev(d["invp"], "dvtp"), _dev(d["invn"], "dvtn")
     sp_p, sn_n = _dev(d["starvep"], "dvtp"), _dev(d["starven"], "dvtn")
@@ -321,13 +426,46 @@ def _gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wavefile):
     return "\n".join(lines) + "\n"
 
 
+def _gen_noisy_xcpl(p, na, tstop_ns, ntstep_ps, seed, wavefile):
+    """xcpl 링(유닛 소자만)에 스테이지·레일별 입력환산 trnoise 를 주입한
+    넷리스트 — 지터 실측용. 시동은 .ic 킥스타트."""
+    d = run_sim.quantize_devices(p)
+    vdd, N = p["vdd"], int(p["n_stages"])
+    invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
+    xp = _dev2(p, d["xcplp"], "p")
+    mp = _mp(p)
+    lines = ["xcpl ring VCO + per-stage/rail input-referred trnoise",
+             f".option temp={p.get('temp', 27)}", ".param dvtn=0 dvtp=0",
+             run_sim._model_header(p), f"Vdd vdd 0 {vdd}"]
+    for i in range(1, N + 1):
+        prev = N if i == 1 else i - 1
+        lines += [
+            f"Vnp{i} og{i} o{prev} 0 trnoise({na} {ntstep_ps}p 0 0)",
+            f"Vnb{i} obg{i} ob{prev} 0 trnoise({na} {ntstep_ps}p 0 0)",
+            f"{mp}Mp{i}   o{i} og{i} vdd vdd {invp}",
+            f"{mp}Mn{i}   o{i} og{i} 0 0 {invn}",
+            f"{mp}Mpb{i}  ob{i} obg{i} vdd vdd {invp}",
+            f"{mp}Mnb{i}  ob{i} obg{i} 0 0 {invn}",
+            f"{mp}Mx{i}   o{i} ob{i} vdd vdd {xp}",
+            f"{mp}Mxb{i}  ob{i} o{i} vdd vdd {xp}",
+            f"Co{i}  o{i} 0 {p['cload_ff']}f",
+            f"Cob{i} ob{i} 0 {p['cload_ff']}f"]
+    ic_o = " ".join(f"v(o{i})={vdd if i % 2 else 0}" for i in range(1, N + 1))
+    ic_ob = " ".join(f"v(ob{i})={0 if i % 2 else vdd}" for i in range(1, N + 1))
+    lines += [f".ic {ic_o} {ic_ob}",
+              ".control", "set noaskquit", _osdi_line(p), f"setseed {seed}",
+              f"tran {ntstep_ps}p {tstop_ns}n uic", f"wrdata {wavefile} v(o1)", ".endc", ".end"]
+    return "\n".join(lines) + "\n"
+
+
 def _measure_jitter_once(p, na, tstop_ns, ntstep_ps, seed):
     """One noisy transient → (f0, period-jitter σ_T) or None."""
     vdd = p["vdd"]
     fd, wf = tempfile.mkstemp(suffix=".txt")
     os.close(fd)
     try:
-        run_sim._run(_gen_noisy_ring(p, na, tstop_ns, ntstep_ps, seed, wf))
+        gen = _gen_noisy_xcpl if p.get("topology", "starved") == "xcpl" else _gen_noisy_ring
+        run_sim._run(gen(p, na, tstop_ns, ntstep_ps, seed, wf))
         ts, vs = [], []
         with open(wf) as fh:
             for line in fh:
@@ -374,7 +512,7 @@ def phase_noise_measured(params, tstop_ns=60.0, ntstep_ps=2.0, seeds=(1, 2, 3, 4
     trnoise) and measure the period jitter directly. Averaged over several noise
     seeds (run in parallel) to tame the stochastic spread. A real cross-check of
     the analytic estimate — the circuit converts the injected noise through its
-    actual switching."""
+    actual switching. starved 와 xcpl(기본) 토폴로지 모두 지원."""
     p = _full(params)
     gm = _ring_gm(p)
     if not gm:
