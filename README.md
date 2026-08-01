@@ -100,7 +100,7 @@ Params schema (units are in the key names):
   "cload_ff": 15.0,
   "avt_mv_um": 2.0,
   "devices": {
-    "input": {"w_um": 8.0, "l_nm": 80.0, "m": 4},
+    "input": {"w_um": 8.0, "l_nm": 80.0, "m": 4, "vt": "svt"},
     "tail":  {"w_um": 12.0,"l_nm": 40.0, "m": 6},
     "ncc":   {"w_um": 4.0, "l_nm": 40.0, "m": 2},
     "pcc":   {"w_um": 9.0, "l_nm": 40.0, "m": 4},
@@ -111,6 +111,39 @@ Params schema (units are in the key names):
 
 `input` = differential pair · `tail` = tail switch · `ncc`/`pcc` = cross-coupled
 NMOS/PMOS latch · `pre` = precharge PMOS.
+
+### `vt` — threshold voltage as a searched variable
+
+Each device also takes `"vt": "lvt" | "svt" | "hvt"` (lower Vth / standard /
+higher Vth; **`svt` is the default and reproduces the pre-`vt` netlist exactly**).
+Vth is a real per-device knob on a comparator, not only a corner perturbation,
+and `strongarm_optimize` searches it after the widths converge — pass
+`optimize_vt: false` to skip that pass.
+
+The level maps onto whatever the backend really has:
+
+| backend | how `vt` is realized |
+|---|---|
+| `asap7` | real ASAP7 flavors already in the cards: `slvt` / `lvt` / `rvt` |
+| `sky130` | real PDK devices: `nfet_01v8_lvt` · `pfet_01v8_lvt` · `pfet_01v8_hvt`. **No `nfet_01v8_hvt` exists** — an NMOS asked for hvt falls back to svt, reported in `final_vt.fallbacks`. And `pfet_01v8_lvt` is only characterized from **L = 0.345 µm**, so choosing it forces L up; reported in `final_vt.l_clamps` |
+| `ptm45`, `gaa2nm` | single generic BSIM4 card with no flavors, so the level becomes a `delvto` implant **proxy** that composes with the corner skew. It shifts Vth only — it does not carry the mobility/leakage differences of a real implant |
+
+Measured effect (why it is worth searching rather than prescribing):
+
+- **asap7** — all devices `lvt`→`hvt`: 35.3→51.0 ps for 12.2→9.2 µW. `tail`
+  alone to `lvt`: 35.3→**34.0 ps at unchanged power**.
+- **sky130** — NMOS `lvt` is 16% faster (160.6→135.3 ps), but PMOS `lvt` is
+  *slower* (189.9 ps) because the PDK forces its L from 45 nm to 350 nm. The
+  naive "LVT everywhere" is worse than the baseline.
+- In `optimize` (minimize power subject to speed/offset/corner): ptm45
+  26.7→24.2 µW, asap7 0.025→0.018 µW, sky130 **1.145→0.043 µW** (PMOS hvt on
+  the precharge), for +25 SPICE evals.
+
+**Limitation:** per-flavor `A_VT` is not modelled — `avt_mv_um` is one number for
+the whole design, so a flavor change affects offset only through the simulated
+Vth and through W·L·M, never through a different mismatch coefficient. Speed and
+power effects are simulated; the offset effect is partial. An offset-critical
+flavor decision needs the foundry's per-flavor Pelgrom data.
 
 ## How agents close the loop
 

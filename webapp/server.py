@@ -155,7 +155,7 @@ def _xkey(base, x):
 
 
 def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
-             corner_aware=True, corner_relax=2.5):
+             corner_aware=True, corner_relax=2.5, optimize_vt=True):
     """Global sizing via log-space **Differential Evolution**.
 
     Minimizes power subject to offset + decision-time + functional constraints
@@ -164,7 +164,15 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
     spread). Offset is the analytic Pelgrom prediction (free); decision, power,
     and functionality come from one fast ngspice transient per candidate. The
     best-of-generation history is returned as the trajectory so the UI can
-    replay the search. `evaluate_hook` lets a surrogate pre-screen candidates."""
+    replay the search. `evaluate_hook` lets a surrogate pre-screen candidates.
+
+    With `optimize_vt`, a discrete pass afterwards also picks each group's
+    **threshold-voltage level** (lvt/svt/hvt). Vth is a real per-device knob on a
+    comparator, not only a corner perturbation, and it reaches operating points W
+    alone cannot: on asap7, `tail` at the low-Vth flavor buys 35.3->34.0 ps at
+    unchanged power, while on sky130 LVT PMOS is *slower* because the PDK only
+    characterizes it from L=0.35 µm. The right choice differs per backend and per
+    group, which is exactly why it is searched instead of prescribed."""
     import random
     rng = random.Random(seed)
     off_t = targets["offset_sigma_mv"]
@@ -217,9 +225,10 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
               "temp": -40, "vdd": round(p["vdd"] * 0.9, 4)}
         return run_sim.run_sim(wp, do_offset=False)["nominal"]
 
-    def _eval_raw(x):
-        # pure: runs one ngspice sim, touches no shared state (thread-safe)
-        p = make(x)
+    def _score(p, x=None):
+        """Cost of one fully-formed sizing. Pure: runs ngspice, touches no shared
+        state (thread-safe). Split out from _eval_raw so the Vt pass can score a
+        params dict directly — Vt is not a coordinate of the W vector."""
         offp = _pred_offset_mv(p)
         nom = run_sim.run_sim(p, do_offset=False)["nominal"]
         dec = nom.get("decision_time_ps")
@@ -241,7 +250,11 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
                 cost += 5e5                            # 최악 코너 비기능 — 배제급
             elif wdec > corner_relax * dec_t:
                 cost += 3000.0 * (wdec / (corner_relax * dec_t) - 1.0)
-        return {"cost": cost, "x": list(x), "p": p, "nom": nom, "offp": offp, "wc": wc}
+        return {"cost": cost, "x": list(x) if x is not None else None,
+                "p": p, "nom": nom, "offp": offp, "wc": wc}
+
+    def _eval_raw(x):
+        return _score(make(x), x)
 
     def _merge(out):
         # single-thread bookkeeping after a (possibly parallel) evaluation
@@ -400,6 +413,49 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
 
         bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
         best = pop_e[bi]["p"]
+
+    # ── Vt pass: discrete coordinate descent over the threshold level ──────────
+    # W is converged; now walk each device group through lvt/svt/hvt under the
+    # same cost function. Discrete and low-dimensional (6 groups x 3 levels), and
+    # the deck memo cache makes the incumbent's re-evaluation free, so two sweeps
+    # cost well under the DE that preceded them.
+    vt_note, vt_before = None, {k: run_sim.vt_of(d) for k, d in best["devices"].items()}
+    if optimize_vt:
+        def _cost_of(p):
+            e = _score(p)
+            n_sims[0] += 1
+            return e
+
+        cur = copy.deepcopy(best)
+        cur_e = _cost_of(cur)
+        improved_any = False
+        for sweep in range(2):
+            moved = False
+            for dv in DEV_KEYS:
+                now = run_sim.vt_of(cur["devices"][dv])
+                cands = [lv for lv in run_sim.VT_LEVELS if lv != now]
+                trials = []
+                for lv in cands:
+                    t = copy.deepcopy(cur)
+                    t["devices"][dv]["vt"] = lv
+                    trials.append((lv, t))
+                outs = _pmap(lambda it: _cost_of(it[1]), trials)
+                for (lv, t), e in zip(trials, outs):
+                    if e["cost"] < cur_e["cost"] - 1e-9:
+                        cur, cur_e, moved, improved_any = t, e, True, True
+                        now = lv
+            if not moved:
+                break
+        if improved_any:
+            best = cur
+            after = {k: run_sim.vt_of(d) for k, d in best["devices"].items()}
+            changed = [f"{k} {vt_before[k]}→{after[k]}" for k in DEV_KEYS if after[k] != vt_before[k]]
+            vt_note = "Vt search: " + (", ".join(changed) if changed else "no change")
+        else:
+            vt_note = "Vt search: the incumbent levels were already best"
+        traj.append({"action": vt_note, "measured": {}, "verdicts": {},
+                     "total_w_um": _total_w(best), "params": copy.deepcopy(best["devices"])})
+
     r = run_sim.run_sim(best, do_offset=True, with_noise=True)   # confirm the winner's offset (MC) + report noise
     meas, v = _verdicts(r["nominal"], r.get("offset"), targets)
     surrogate_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
@@ -413,6 +469,10 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
             # 대표 최악 코너(slow-N/-40°C/0.9VDD) 확인 결과 — 코너 인지 사이징의 증빙
             "final_corner": (_worst_corner(best) if corner_aware else None),
             "corner_aware": corner_aware, "corner_note": corner_note,
+            # what the Vt search settled on, plus anything the backend could not
+            # honour (sky130 has no nfet hvt) or had to clamp (pfet_01v8_lvt min L)
+            "vt_searched": bool(optimize_vt), "vt_note": vt_note,
+            "final_vt": run_sim.vt_plan(best),
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
             "final_stacks": _stacks(best) if run_sim.w_unit(base) else None}
 
@@ -1750,7 +1810,8 @@ class Handler(BaseHTTPRequestHandler):
                 targets = payload.get("targets") or {k: s["limit"] for k, s in SPEC_TARGETS.items()}
                 self._json(optimize(full, targets,
                                     corner_aware=bool(payload.get("corner_aware", True)),
-                                    corner_relax=float(payload.get("corner_relax", 2.5))))
+                                    corner_relax=float(payload.get("corner_relax", 2.5)),
+                                    optimize_vt=bool(payload.get("optimize_vt", True))))
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as e:  # surface errors to the UI
