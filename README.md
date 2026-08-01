@@ -190,6 +190,55 @@ Two bugs this surfaced, both fixed:
    optimizer paid an offset penalty against that phantom. All area math now goes
    through `run_sim.effective_l_nm` / `gate_area_um2`.
 
+## Sizing corners: one worst case, or all 45?
+
+Measured, because the answer is two-sided and easy to over-claim. Sampled 24
+random sizings x 45 corners on ptm45, against the corner the optimizer sizes
+against (slow-N / -40 C / 0.9 x VDD):
+
+**Functionality — one worst corner is enough.** No sizing passed that corner and
+then failed a different one (0 / 24), and the failing corner sets are *nested*, so
+it really is the hardest. Dropping the guard is not free: nominal-only sizing left
+**5 / 45 corners non-functional**, while the guarded sizing left 0.
+
+**Timing — a subset is not enough.** The slowest *resolving* corner landed on
+**16 different corners** across those 24 sizings and was **never** the assumed
+one. The three most frequent worst corners still under-estimate worst-case
+decision time by up to **73%**.
+
+Physically: failing to resolve is limited by insufficient regeneration, which is
+monotone in slow-N + cold + low overdrive, so it has a single hardest corner.
+Decision *time* among the corners that do resolve is a competition between tail
+current, latch strength and load whose balance shifts with sizing — so its argmax
+wanders.
+
+So the split this tool already uses is the right one, and its guarantee has a
+boundary worth stating: **size with one corner, sign off with all 45.** `optimize`
+returns `corner_guarantee` saying exactly that, because `final_corner` otherwise
+looks like a timing result. In one measured run the guarded design's worst corner
+came in at 983 ps against a 1000 ps relaxed budget — 1.7% margin, and only because
+the constraint had made that corner binding, not because it was predictable.
+
+## Reading a Pareto front as a sizing decision
+
+`/api/pareto` returns `sizing_relation` alongside the front: how far each device
+group's width travels along it, and a rank correlation against each objective, so
+"move right on the curve" becomes "widen this device". On the comparator's
+power↔speed front:
+
+| device | W span | corr(power) |
+|---|---|---|
+| `tail` | 80x | +0.98 |
+| `input` | 31x | +0.97 |
+| `pcc` | 14x | +0.95 |
+| `prei` | 12x | +0.32 |
+| `pre` | 21x | **−0.15** |
+
+The trade-off is bought almost entirely with `tail` and `input`. `pre` barely
+participates — it only conducts during reset, so it is not on this curve. Note the
+two objectives' correlations are exact negatives on a 2-objective front by
+construction: that is one finding per device, not two.
+
 ## How agents close the loop
 
 - **This session:** agents call `python3 run_sim.py <file>` via Bash. The

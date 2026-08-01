@@ -119,6 +119,90 @@ def _verdicts(nominal, offset, targets):
 DEV_KEYS = ["input", "tail", "ncc", "pcc", "pre", "prei"]
 
 
+def _spearman(xs, ys):
+    """Rank correlation, ties averaged. Rank-based because the front's spacing is
+    not uniform — we want "does this width move with the objective", not a linear
+    fit through unevenly sampled points. Returns None when it is undefined."""
+    n = len(xs)
+    if n < 3:
+        return None
+
+    def ranks(v):
+        order = sorted(range(n), key=lambda i: v[i])
+        r = [0.0] * n
+        i = 0
+        while i < n:
+            j = i
+            while j + 1 < n and v[order[j + 1]] == v[order[i]]:
+                j += 1
+            avg = (i + j) / 2.0 + 1.0
+            for k in range(i, j + 1):
+                r[order[k]] = avg
+            i = j + 1
+        return r
+
+    rx, ry = ranks(xs), ranks(ys)
+    mx, my = sum(rx) / n, sum(ry) / n
+    num = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
+    dx = math.sqrt(sum((a - mx) ** 2 for a in rx))
+    dy = math.sqrt(sum((b - my) ** 2 for b in ry))
+    if dx == 0 or dy == 0:      # a width that never moves has no correlation
+        return None
+    return round(num / (dx * dy), 3)
+
+
+def front_sizing_relation(front, axes):
+    """Turn a Pareto front into a **sizing** statement.
+
+    The front already carries each point's devices, but a curve plus a table of
+    widths does not say *which device buys which axis*. For every device group
+    this reports how far its width travels along the front and how its width
+    ranks against each objective, then names the groups that actually drive the
+    trade-off — so "move right on this curve" becomes "widen the tail".
+
+    `axes` maps an objective name to the key holding it on each point.
+    Devices whose width never changes are reported as fixed, which is itself the
+    useful answer: they are not part of this trade-off."""
+    pts = [p for p in front if p.get("devices")]
+    if len(pts) < 3:
+        return {"n_points": len(pts), "note": "front too small to relate sizing to the axes"}
+    devs = sorted(pts[0]["devices"])
+    series = {k: [float(v) for v in (pt[k] for pt in pts)] for k in axes.values()
+              if all(pt.get(k) is not None for pt in pts)}
+    out, fixed = {}, []
+    for dv in devs:
+        ws = [float(pt["devices"][dv]["w_um"]) for pt in pts]
+        lo, hi = min(ws), max(ws)
+        if hi - lo < 1e-9:
+            fixed.append(dv)
+            continue
+        out[dv] = {"w_um_min": round(lo, 3), "w_um_max": round(hi, 3),
+                   "span_ratio": round(hi / lo, 2) if lo else None,
+                   "corr": {name: _spearman(ws, series[key])
+                            for name, key in axes.items() if key in series}}
+    # rank drivers by how strongly the width tracks any objective
+    def strength(e):
+        cs = [abs(c) for c in e[1]["corr"].values() if c is not None]
+        return max(cs) if cs else 0.0
+    drivers = [k for k, _ in sorted(out.items(), key=strength, reverse=True)]
+    ends = {}
+    for name, key in axes.items():
+        if key in series:
+            lo_i = min(range(len(pts)), key=lambda i: series[key][i])
+            hi_i = max(range(len(pts)), key=lambda i: series[key][i])
+            ends[name] = {"min_at": {d: pts[lo_i]["devices"][d]["w_um"] for d in devs},
+                          "max_at": {d: pts[hi_i]["devices"][d]["w_um"] for d in devs}}
+    return {"n_points": len(pts), "devices": out, "fixed_along_front": fixed,
+            "drivers": drivers, "endpoints": ends,
+            "reading": ("`drivers` is ordered by how strongly a group's width tracks an "
+                        "objective along the front; `corr` is a rank correlation, so +1 "
+                        "means widening that device always moves with that axis. Groups in "
+                        "`fixed_along_front` do not participate in this trade-off. Note the "
+                        "two objectives' correlations are exact negatives of each other: on "
+                        "a 2-objective front the axes are perfectly rank-anticorrelated by "
+                        "construction, so that is one finding per device, not two.")}
+
+
 def _pred_offset_mv(p):
     # effective L, not the requested one — see run_sim.effective_l_nm
     area = run_sim.gate_area_um2(p, "input")
@@ -524,8 +608,19 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
     return {"trajectory": traj, "final_params": best, "final_result": r, "verdicts": v,
             "success": success, "targets": targets, "n_sims": n_sims[0], "n_surrogate_skips": n_skip[0],
             "final_power_uw": r["nominal"].get("power_uw"), "final_total_w_um": _total_w(best),
-            # 대표 최악 코너(slow-N/-40°C/0.9VDD) 확인 결과 — 코너 인지 사이징의 증빙
+            # 대표 최악 코너(slow-N/-40°C/0.9VDD) 확인 결과 — 코너 인지 사이징의 증빙.
+            # NOTE this guard bounds *functionality*, not timing — see corner_guarantee.
             "final_corner": (_worst_corner(best) if corner_aware else None),
+            "corner_guarantee": (
+                "slow-N/-40C/0.9VDD is the hardest corner for FUNCTIONALITY: across 24 "
+                "random sizings no design passed it and failed another corner, and the "
+                "failing sets are nested. It does NOT bound decision time — the slowest "
+                "corner moved across 16 different corners in those 24 sizings and was "
+                "never this one, and a 3-corner subset under-estimates worst-case delay "
+                "by up to 73%. Timing closure requires the full 45-corner PVT run."
+                if corner_aware else
+                "no corner guard was applied — nominal-only sizing measured 5/45 "
+                "non-functional corners on this circuit"),
             "corner_aware": corner_aware, "corner_note": corner_note,
             # what the Vt search settled on, plus anything the backend could not
             # honour (sky130 has no nfet hvt) or had to clamp (pfet_01v8_lvt min L)
@@ -630,7 +725,9 @@ def optimize_pareto(base, targets, pop=16, gens=6, seed=7):
             "offp": round(e["offp"], 3), "devices": copy.deepcopy(e["p"]["devices"])} for e in front]
     allpts = [{"power_uw": e["nom"].get("power_uw"), "decision_time_ps": e["nom"].get("decision_time_ps"),
                "feasible": e["cv"] == 0.0} for e in pop_e]
-    return {"front": pts, "all": allpts, "targets": targets}
+    return {"front": pts, "all": allpts, "targets": targets,
+            "sizing_relation": front_sizing_relation(
+                pts, {"power_uw": "power_uw", "decision_time_ps": "decision_time_ps"})}
 
 
 def ber_curve(params, ber_target=1e-3):
@@ -1379,7 +1476,9 @@ def optimize_vco_pareto(base, pop=16, gens=6, seed=9):
     pts = [{"power_uw": e["m"]["power_uw"], "f_osc_ghz": e["m"]["f_osc_ghz"],
             "devices": copy.deepcopy(e["p"]["devices"])} for e in front]
     allpts = [{"power_uw": e["m"]["power_uw"], "f_osc_ghz": e["m"]["f_osc_ghz"], "feasible": e["cv"] == 0.0} for e in pop_e]
-    return {"front": pts, "all": allpts}
+    return {"front": pts, "all": allpts,
+            "sizing_relation": front_sizing_relation(
+                pts, {"power_uw": "power_uw", "f_osc_ghz": "f_osc_ghz"})}
 
 
 def vco_fullflow(base, targets):
