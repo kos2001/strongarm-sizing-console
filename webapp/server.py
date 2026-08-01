@@ -1781,6 +1781,18 @@ class Handler(BaseHTTPRequestHandler):
                     rs_ohm=float(payload.get("rs_ohm", 2000.0)),
                     cs_ff=float(payload.get("cs_ff", 50.0)),
                     vdiff=float(payload.get("vdiff", 0.005))))
+            elif self.path == "/api/hysteresis":
+                # previous-decision memory: needs two decisions in one transient
+                payload = self._read_json()
+                self._json(run_sim.measure_hysteresis(
+                    payload.get("params", {}),
+                    prime_v=float(payload.get("prime_v", 0.2)),
+                    clk_period_ns=float(payload.get("clk_period_ns", 1.0))))
+            elif self.path == "/api/clockedge":
+                # max f_clk vs clock edge rate — where edge quality actually costs
+                payload = self._read_json()
+                self._json(run_sim.clock_edge_sweep(payload.get("params", {}),
+                                                    trf_ps=payload.get("trf_ps")))
             elif self.path == "/api/cmrange":
                 # input common-mode range: where it works and what the operating point costs
                 payload = self._read_json()

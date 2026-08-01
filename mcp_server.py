@@ -192,6 +192,27 @@ TOOLS = [
                         "vdiff": {"type": "number"}}},
     },
     {
+        "name": "strongarm_hysteresis",
+        "description": "MEASURE decision-to-decision memory: primes the latch one way, then finds the "
+                       "input threshold on the NEXT clock cycle, and compares against priming the other "
+                       "way. The gap is input-referred hysteresis, which does NOT calibrate out because "
+                       "it tracks the data. Zero at a relaxed clock; measured 3.3 mV at 0.6 ns period and "
+                       "17.3 mV at 0.45 ns. Also returns the differential reset residue — the absolute "
+                       "reset check that max_fclk uses passes while 31 mV of differential memory survives.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA,
+                        "prime_v": {"type": "number"}, "clk_period_ns": {"type": "number"}}},
+    },
+    {
+        "name": "strongarm_clockedge",
+        "description": "Max f_clk vs clock edge rate (clk_trf_ps). Decision time is nearly flat in edge "
+                       "rate (it is timed from the clock's own VDD/2 crossing), so the cost shows up in "
+                       "max f_clk instead. Only matters when the design is near its limit: 1.0x spread at "
+                       "the default operating point, 2.0x at a fast one. Single-clock topology, so there "
+                       "is no clk/clkb skew to sweep.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA,
+                        "trf_ps": {"type": "array", "items": {"type": "number"}}}},
+    },
+    {
         "name": "strongarm_cmrange",
         "description": "Input common-mode range: sweeps vcm_frac and reports where the comparator "
                        "resolves at all (a HARD bound, not a slow corner), plus decision time and power "
@@ -387,6 +408,8 @@ _TOOL_ENDPOINT = {
     "strongarm_ber": "/api/ber",
     "strongarm_noise_probit": "/api/noise/probit",
     "strongarm_kickback": "/api/kickback",
+    "strongarm_hysteresis": "/api/hysteresis",
+    "strongarm_clockedge": "/api/clockedge",
     "strongarm_cmrange": "/api/cmrange",
     "strongarm_offset_budget": "/api/offset/budget",
     "strongarm_sensitivity": "/api/sensitivity",

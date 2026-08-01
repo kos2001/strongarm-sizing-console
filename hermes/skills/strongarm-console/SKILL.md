@@ -108,6 +108,34 @@ On the seed sizing it is **27.6 mV differential — 14.9× the offset σ (1.85 m
   offset by widening the input pair, mention the kickback cost. Cutting kickback
   instead wants a bigger sampling cap or a stiffer driver — system changes.
 
+## Hysteresis: the error that does not calibrate out
+
+`strongarm_hysteresis` primes the latch one way, then finds the input threshold on
+the **next** cycle, and compares against the other priming polarity. Measured on the
+seed sizing: 0 at a 4 ns period, **3.3 mV at 0.6 ns, 17.3 mV at 0.45 ns** (~9× the
+offset σ).
+
+- Unlike offset, hysteresis **tracks the data**, so it does not trim out. If a user
+  is running near max f_clk, check it before quoting an error budget.
+- **`max_fclk`'s reset check alone is not sufficient.** It now reports
+  `reset_absolute_ok`, `reset_balanced` and `reset_residue_mv` separately, because
+  the outputs can both return near the rail while tens of mV of *differential*
+  memory survives. If `reset_balanced` is false, the period is not usable however
+  good the absolute levels look.
+- The measurement reports `resolution_mv` and `resolved`; do not quote a hysteresis
+  at or below the bisection step as a measurement.
+
+## Clock edge rate: only matters near the limit
+
+`strongarm_clockedge` sweeps `clk_trf_ps` and reports **max f_clk**, not decision
+time — decision time is nearly flat in edge rate (timed from the clock's own VDD/2
+crossing). Measured: 1.0× spread at the default operating point, **2.0× at a fast
+one** (2.0 GHz at 12 ps → 1.0 GHz at 200 ps).
+
+So: a design with headroom does not care about clock quality; one at its limit sets
+a clock-tree spec. Run it at the operating point the user actually intends. And do
+not offer a clk/clkb skew analysis — this topology is single-clock.
+
 ## The operating point is nearly-free speed
 
 `strongarm_cmrange` sweeps `vcm_frac`. Two things to use it for:

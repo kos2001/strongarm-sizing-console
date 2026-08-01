@@ -302,6 +302,63 @@ conflict is the honest signal that kickback wants a *system* fix — a bigger he
 sampling capacitance or a stiffer driver, both of which live in `cs_ff`/`rs_ohm`
 rather than in any device width.
 
+### Hysteresis — and the reset check it corrected
+
+A StrongARM's nodes must return to the rails during precharge, or the previous
+decision biases the next: a data-dependent offset that in a SAR ADC correlates with
+the code and therefore **does not calibrate out**. The deck evaluated once, so this
+was invisible. `/api/hysteresis` (`strongarm_hysteresis`) runs two decisions in one
+transient — prime the latch, then bisect the *next* cycle's threshold — and compares
+the two priming polarities:
+
+| clk period | hysteresis | differential reset residue | absolute reset check |
+|---|---|---|---|
+| 4.0 ns | 0.0 mV (below resolution) | 0.00 mV | passes |
+| 1.0 ns | ≤0.47 mV (below resolution) | −0.24 mV | passes |
+| 0.6 ns | **3.28 mV** | −8.87 mV | passes |
+| 0.45 ns | **17.34 mV** | −30.81 mV | passes |
+
+At 0.45 ns the hysteresis is ~9× the offset σ — and unlike offset it tracks the data.
+The measurement reports its own bisection resolution so the values at relaxed clocks
+are not read as measurements.
+
+**That last column is a defect this uncovered.** `max_fclk_sweep`'s reset criterion
+tested *absolute* output levels only. At 0.45 ns the outputs come back to 0.681 and
+0.712 V, so ">0.9·VDD" passes on both while 31 mV of **differential** memory survives
+into the next decision. Fixed: the criterion now also requires the residue to be
+within 1% of VDD (`reset_residue_limit`), and each period reports
+`reset_absolute_ok` / `reset_balanced` / `reset_residue_mv` separately.
+
+Effect on the headline number — at a fast operating point (vcm_frac 0.95),
+**max f_clk drops 2.0 → 1.25 GHz**: the 0.6 and 0.5 ns periods resolve and pass the
+absolute check but leave −9.96 and −23.7 mV of residue. The previous figure was
+overstated by 1.6×. At the default operating point nothing changes, because
+resolution binds before reset does — the fix does not penalise designs that were
+already honest.
+
+### Clock edge rate
+
+`clk_trf_ps` was hardcoded at 12 ps (`/api/clockedge`, `strongarm_clockedge`).
+Reported as **max f_clk vs edge rate**, not decision time vs edge rate, because
+decision time is nearly flat in it — 1.6% across 5–200 ps, since `tdec` is timed from
+the clock's own VDD/2 crossing, so a slower edge moves the trigger along with the
+response.
+
+The cost shows up as headroom, and **only when the design is near its limit**:
+
+| operating point | max f_clk at 12 ps | at 200 ps | spread |
+|---|---|---|---|
+| default (vcm_frac 0.62) | 0.667 GHz | 0.667 GHz | **1.0×** |
+| fast (vcm_frac 0.95) | 2.0 GHz | 1.0 GHz | **2.0×** |
+
+So a comparator with headroom does not care about clock quality; one running at its
+limit sets a clock-tree spec. Run the sweep at the operating point you intend.
+
+**There is no clk/clkb skew to sweep** — this topology is single-clock, with the tail
+switch and the precharge PMOS both driven from `clk`, so the race is between those two
+devices on one edge rather than between two clock phases. (`clkb_line` was dead code
+and is gone.)
+
 ## Merging related sidebar pages
 
 The console has 24 pages (14 comparator + 10 VCO), several of which are views of
