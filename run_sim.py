@@ -407,7 +407,17 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
             return (f"{label} {nodes} {'nmos' if kind == 'n' else 'pmos'} "
                     f"{_dev(d[dk], 'dvtn' if kind == 'n' else 'dvtp', vt_offset_v(d[dk], p, kind))}")
 
-    clkb_line = ""
+    # Clock edge rate. Was hardcoded at 12 ps. It barely moves the decision time at
+    # a relaxed clock (1.3% across 2..200 ps, since tdec is referenced to the clk
+    # mid-point) but it substantially lowers the maximum usable clock rate — at
+    # 2.22 GHz a 12 ps edge resolves and a 50 ps edge does not — and a slow edge
+    # breaks the *reset* before it breaks resolution, which is the mechanism behind
+    # decision-to-decision hysteresis. Default 12 keeps the deck unchanged.
+    #
+    # There is no clk/clkb skew to parameterise: this topology is single-clock, with
+    # the tail switch and the precharge PMOS both driven from `clk`, so the race is
+    # between those two devices on one edge rather than between two clock phases.
+    clk_trf = float(p.get("clk_trf_ps", 12.0))
     # Mismatch beyond the input pair. The input pair has always had its Vth
     # mismatch injected as series gate sources (Vos1/Vos2), which works on every
     # backend because it needs no model parameter. The latch and precharge pairs
@@ -501,13 +511,43 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
     else:
         src_block = (f"Vinp inpx 0 {vcm + vdiff / 2.0}\n"
                      f"Vinn innx 0 {vcm - vdiff / 2.0}")
+
+    # --- two-decision sequence, for hysteresis --------------------------------
+    # A StrongARM must fully reset between decisions or the previous outcome biases
+    # the next one — a data-dependent offset, which in a SAR shows up as bit errors
+    # correlated with the code. The default deck evaluates once, so it cannot see
+    # this at all. `prime_v` makes the input a two-step PWL: a large priming
+    # differential for the first evaluate, then `vdiff` for the second, and the
+    # decision is measured on the *second* one.
+    prime = p.get("prime_v")
+    if prime is not None:
+        pr = float(prime)
+        # cycle 1 evaluates at 200p..(200p+hi); the input switches during the
+        # intervening precharge so the priming edge itself is not what is measured
+        t_sw = 0.2 + clk_hi + 0.02          # ns, just after cycle 1's evaluate ends
+        rise = 0.01                          # ns, input settling — fast vs the cycle
+        vp1, vn1 = vcm + pr / 2.0, vcm - pr / 2.0
+        vp2, vn2 = vcm + vdiff / 2.0, vcm - vdiff / 2.0
+        src_block = (
+            f"* two decisions: cycle 1 primed with {pr:g} V, cycle 2 measured\n"
+            f"Vinp inpx 0 PWL(0 {vp1:.9g} {t_sw:g}n {vp1:.9g} "
+            f"{t_sw + rise:g}n {vp2:.9g} 100n {vp2:.9g})\n"
+            f"Vinn innx 0 PWL(0 {vn1:.9g} {t_sw:g}n {vn1:.9g} "
+            f"{t_sw + rise:g}n {vn2:.9g} 100n {vn2:.9g})")
+        # second evaluate begins one clock period after the first
+        t2 = 0.2 + clk_per
+        seq = (f"meas tran fdiff2 FIND v(outdiff) AT={t2 + clk_hi - 0.02:g}n\n"
+               f"meas tran fdiff1 FIND v(outdiff) AT={0.2 + clk_hi - 0.02:g}n\n"
+               f"meas tran vrst1p FIND v(outp) AT={t2 - 0.02:g}n\n"
+               f"meas tran vrst1n FIND v(outn) AT={t2 - 0.02:g}n")
+        reset_lines = f"{reset_lines}\n{seq}" if reset_lines else seq
     return f"""StrongARM latch comparator (generated)
 .option temp={temp}
 {param_line}
 {model_header}
 Vdd vdd 0 {vdd}
 * clock: precharge (clk=0) for 200ps, then evaluate
-Vclk clk 0 PULSE(0 {vdd} 200p 12p 12p {clk_hi}n {clk_per}n)\n{clkb_line}
+Vclk clk 0 PULSE(0 {vdd} 200p {clk_trf:g}p {clk_trf:g}p {clk_hi}n {clk_per}n)
 * differential input around common mode
 {src_block}
 * per-device Vth mismatch injected as series gate offsets (input pair)
@@ -961,6 +1001,156 @@ def _offset_of_pair(p, group, sigma_v, n_mc, seed):
             "offset_mean_mv": round(mean * 1e3, 4), "n_mc": len(vals)}
 
 
+def clock_edge_sweep(params, trf_ps=None):
+    """How much clock quality this comparator needs.
+
+    Reported as **max f_clk vs edge rate**, not decision time vs edge rate, because
+    the latter is nearly flat and would say "edge rate does not matter". It looks
+    flat for a measurement reason: `tdec` is timed from the clock's own VDD/2
+    crossing, so a slower edge shifts the trigger along with the response. Measured,
+    decision time moves 1.3% across a 100x edge-rate range.
+
+    What the edge rate really costs is headroom. The tail switch turns on and the
+    precharge PMOS turns off from the *same* edge, so a slow edge has them both
+    partly conducting — wasting the start of the evaluate phase.
+
+    **It only matters when the design is near its own limit**, so run this at the
+    operating point you intend. Measured on the seed sizing: at the default
+    vcm_frac 0.62 (max 0.667 GHz) the edge rate changes nothing at all — 1.0x across
+    5..200 ps. At vcm_frac 0.95 (max 2.0 GHz) it costs 2.0x: 2.0 GHz up to a 50 ps
+    edge, 1.25 GHz at 100 ps, 1.0 GHz at 200 ps. A comparator with headroom does not
+    care about clock quality; one running at its limit sets a clock-tree spec.
+
+    (No clk/clkb skew here: single-clock topology, so the race is between two
+    devices on one edge, not between two clock phases.)"""
+    p0 = _full(params)
+    if trf_ps is None:
+        trf_ps = [5, 12, 25, 50, 100, 200]
+    trf_ps = sorted({float(t) for t in trf_ps} | {float(p0.get("clk_trf_ps", 12.0))})
+
+    def one(trf):
+        p = {**p0, "clk_trf_ps": trf}
+        mf = max_fclk_sweep(p)
+        nom = run_sim(p, do_offset=False)["nominal"]
+        return {"clk_trf_ps": trf,
+                "max_fclk_ghz": mf.get("max_fclk_ghz"),
+                "energy_fj_at_max": mf.get("energy_fj_at_max"),
+                "decision_time_ps": nom.get("decision_time_ps"),
+                "power_uw": nom.get("power_uw")}
+
+    pts = pmap(one, trf_ps)
+    ok = [r for r in pts if r["max_fclk_ghz"]]
+    best = max(ok, key=lambda r: r["max_fclk_ghz"]) if ok else None
+    worst = min(ok, key=lambda r: r["max_fclk_ghz"]) if ok else None
+    ts = [r["decision_time_ps"] for r in pts if r["decision_time_ps"]]
+    return {
+        "points": pts,
+        "best": best, "worst": worst,
+        "fclk_spread": (round(best["max_fclk_ghz"] / worst["max_fclk_ghz"], 3)
+                        if best and worst and worst["max_fclk_ghz"] else None),
+        "decision_time_spread": (round(max(ts) / min(ts), 3) if len(ts) > 1 else None),
+        "at_current_trf": next((r for r in pts
+                                if r["clk_trf_ps"] == float(p0.get("clk_trf_ps", 12.0))), None),
+        "no_clkb_note": ("single-clock topology — the tail switch and the precharge "
+                         "PMOS share `clk`, so there is no clk/clkb skew to sweep"),
+        "note": ("decision time is nearly flat in edge rate because it is timed from "
+                 "the clock's own VDD/2 crossing; max f_clk is where the cost shows "
+                 "up, since a slow edge overlaps tail turn-on with precharge "
+                 "turn-off and eats the evaluate window."),
+    }
+
+
+def _decide_after_prime(p, prime_v, vdiff):
+    """Polarity of the SECOND decision, given the first was forced by `prime_v`."""
+    out = _run(gen_netlist({**p, "prime_v": prime_v}, vdiff=vdiff))
+    f2 = _parse(out, "fdiff2")
+    return f2
+
+
+def measure_hysteresis(params, prime_v=0.2, clk_period_ns=1.0, n_iter=8):
+    """Decision-to-decision memory: does the previous result bias the next one?
+
+    A StrongARM's internal nodes must return to the rails during precharge. If they
+    do not, the state left over from the last decision adds to the next one — a
+    data-dependent offset. In a SAR ADC that is worse than a static offset because
+    it correlates with the code being converted, so it does not calibrate out.
+
+    The default deck evaluates once and cannot see this. Here the input is a
+    two-step PWL: a large priming differential decides cycle 1, then the input moves
+    to the value under test and **cycle 2 is what is measured**. Bisecting cycle 2's
+    threshold for each priming polarity gives two thresholds; the gap between them is
+    the input-referred hysteresis.
+
+    `clk_period_ns` matters: with a long period the latch has ample precharge time
+    and the hysteresis should vanish. Squeeze the period and it appears. That is the
+    knob this exists to explore, so it is an argument rather than a fixed value."""
+    p = _full(params)
+    hi = clk_period_ns / 2.0
+    p = {**p, "clk_period_ns": clk_period_ns, "clk_high_ns": hi,
+         # two full cycles plus settling, and measure late in each evaluate
+         "tstop_ns": round(0.2 + 2 * clk_period_ns + 0.05, 4),
+         "iavg_to_ns": round(0.2 + clk_period_ns, 4)}
+
+    def threshold(prime):
+        """Bisect the cycle-2 input that flips the cycle-2 decision."""
+        lo, hi_ = -0.06, 0.06
+        s_lo = _decide_after_prime(p, prime, lo)
+        s_hi = _decide_after_prime(p, prime, hi_)
+        if s_lo is None or s_hi is None:
+            return None
+        if (s_lo > 0) == (s_hi > 0):
+            return None                     # never flips in range — not usable
+        for _ in range(n_iter):
+            mid = 0.5 * (lo + hi_)
+            s_mid = _decide_after_prime(p, prime, mid)
+            if s_mid is None:
+                return None
+            if (s_mid > 0) == (s_lo > 0):
+                lo, s_lo = mid, s_mid
+            else:
+                hi_, s_hi = mid, s_mid
+        return 0.5 * (lo + hi_)
+
+    th_pos, th_neg = pmap(threshold, [abs(prime_v), -abs(prime_v)])
+    if th_pos is None or th_neg is None:
+        return {"error": "cycle-2 threshold did not bracket a flip — try a longer "
+                         "clk_period_ns or a smaller prime_v",
+                "clk_period_ns": clk_period_ns, "prime_v": prime_v}
+    hyst = th_pos - th_neg
+    # The mechanism, probed at the end of cycle 1's precharge. What matters is the
+    # DIFFERENTIAL residue, not the absolute levels: at 0.45 ns the outputs sit at
+    # 0.681 and 0.712 V, so an absolute ">0.9·VDD" check passes on both while 31 mV
+    # of differential memory survives. That is exactly the blind spot in
+    # max_fclk_sweep's `reset_ok`, which uses the absolute criterion.
+    out = _run(gen_netlist({**p, "prime_v": abs(prime_v)}, vdiff=0.0))
+    vrp, vrn = _parse(out, "vrst1p"), _parse(out, "vrst1n")
+    resid = (vrp - vrn) if (vrp is not None and vrn is not None) else None
+    # bisection resolution: a hysteresis at or below one step is not resolved
+    step = 0.12 / (2 ** n_iter)
+    return {
+        "clk_period_ns": clk_period_ns, "prime_v": prime_v,
+        "threshold_after_pos_mv": round(th_pos * 1e3, 4),
+        "threshold_after_neg_mv": round(th_neg * 1e3, 4),
+        "hysteresis_mv": round(abs(hyst) * 1e3, 4),
+        "resolution_mv": round(step * 1e3, 4),
+        "resolved": abs(hyst) > 1.5 * step,
+        "sign": ("previous decision attracts the next (incomplete reset leaves the "
+                 "latch leaning the same way)" if hyst < 0 else
+                 "previous decision repels the next"),
+        "reset_v": {"outp": vrp, "outn": vrn},
+        "reset_residue_mv": round(resid * 1e3, 4) if resid is not None else None,
+        "reset_absolute_ok": (vrp is not None and vrn is not None
+                              and vrp > 0.9 * p["vdd"] and vrn > 0.9 * p["vdd"]),
+        "note": ("measured on the SECOND of two decisions; the gap between the two "
+                 "priming polarities is the input-referred memory. Compare against "
+                 "the offset σ — hysteresis does not calibrate out, because it "
+                 "tracks the data. `reset_absolute_ok` can be true while "
+                 "`reset_residue_mv` is large: the absolute level check that "
+                 "max_fclk uses is necessary but not sufficient, because the memory "
+                 "is differential."),
+    }
+
+
 def cm_range_sweep(params, vcm_fracs=None, with_offset=False, n_mc=8):
     """Input common-mode range: where the comparator works, and what the operating
     point costs.
@@ -1274,10 +1464,13 @@ def _fit_tau(points):
     return (round(slope, 2), round(intercept, 2))
 
 
-def max_fclk_sweep(params, periods_ns=None):
+def max_fclk_sweep(params, periods_ns=None, reset_residue_limit=0.01):
     """Maximum clock rate: sweep the clock period and find the shortest one where
     the comparator both (a) resolves within the evaluate phase and (b) precharges
-    back to the rails within the reset phase. Reports max f_clk and the energy per
+    back to the rails within the reset phase — *balanced*, not merely high, since a
+    differential residue is remembered by the next decision (`reset_residue_limit`
+    is the allowed |outp−outn| as a fraction of VDD; see measure_hysteresis).
+    Reports max f_clk and the energy per
     conversion (avg power × period) at that rate — the comparator FoM."""
     p = _full(params)
     vdd = p["vdd"]
@@ -1295,10 +1488,24 @@ def max_fclk_sweep(params, periods_ns=None):
         fdiff, iavg = _parse(out, "fdiff"), _parse(out, "iavg")
         vrp, vrn = _parse(out, "vrstp"), _parse(out, "vrstn")
         resolved = fdiff is not None and abs(fdiff) > 0.7 * vdd
-        reset_ok = vrp is not None and vrn is not None and vrp > 0.9 * vdd and vrn > 0.9 * vdd
+        have_rst = vrp is not None and vrn is not None
+        # Absolute level: did both outputs get back up near the rail?
+        reset_abs = have_rst and vrp > 0.9 * vdd and vrn > 0.9 * vdd
+        # DIFFERENTIAL residue: did they get back to the *same* place? This check was
+        # missing, and it is the one that matters — measured at a 0.45 ns period the
+        # outputs sit at 0.681 and 0.712 V, so the absolute test passes on both while
+        # 31 mV of differential memory survives into the next decision and shows up
+        # as 17 mV of input-referred hysteresis. Declaring that period usable
+        # overstates max f_clk. Budget: 1% of VDD, well above the ~0.3 mV numerical
+        # floor seen at relaxed periods.
+        resid = (vrp - vrn) if have_rst else None
+        reset_bal = have_rst and abs(resid) <= reset_residue_limit * vdd
+        reset_ok = reset_abs and reset_bal
         pw = abs(iavg) * vdd * 1e6 if iavg is not None else None
         return {"period_ns": T, "fclk_ghz": round(1.0 / T, 3), "functional": bool(resolved),
                 "reset_ok": bool(reset_ok), "ok": bool(resolved and reset_ok),
+                "reset_absolute_ok": bool(reset_abs), "reset_balanced": bool(reset_bal),
+                "reset_residue_mv": round(resid * 1e3, 4) if resid is not None else None,
                 "power_uw": round(pw, 3) if pw is not None else None,
                 "energy_fj": round(pw * T, 2) if pw is not None else None}
 
