@@ -157,7 +157,7 @@ def _xkey(base, x):
 
 
 def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
-             corner_aware=True, corner_relax=2.5, optimize_vt=True, optimize_l=True):
+             corner_aware=True, corner_relax=2.5, optimize_vt=True, optimize_l=False):
     """Global sizing via log-space **Differential Evolution**.
 
     Minimizes power subject to offset + decision-time + functional constraints
@@ -176,11 +176,16 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
     characterizes it from L=0.35 µm. The right choice differs per backend and per
     group, which is exactly why it is searched instead of prescribed.
 
-    With `optimize_l`, a pass before that also searches each group's **channel
-    length**. W and L are not interchangeable — at equal gate area (equal Pelgrom
-    offset) the W/L split still moves decision time by 1.5x — and L is
-    non-monotonic in speed, so the optimum is interior and a rule cannot reach
-    it. Bounds come from `run_sim.L_RANGE_NM`, which is measured per backend."""
+    **L is fixed, not searched** (`optimize_l=False` by default). Channel length
+    is a methodology choice, not a per-device free variable: drawing the latch's
+    groups at different L breaks the symmetry the comparator's matching depends on
+    and complicates the layout, and the PDK's Vt binning and corner
+    characterization are cleanest at a chosen L. The sizing knobs are W and M.
+
+    The pass exists behind `optimize_l=True` for deliberate exploration only — it
+    tells you what a *different fixed* L would buy, which is a seed-selection
+    question, not something to leave a search free to vary. `run_sim.L_RANGE_NM`
+    is still used to validate whatever fixed L the caller sets."""
     import random
     rng = random.Random(seed)
     off_t = targets["offset_sigma_mv"]
@@ -526,9 +531,12 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
             # honour (sky130 has no nfet hvt) or had to clamp (pfet_01v8_lvt min L)
             "vt_searched": bool(optimize_vt), "vt_note": vt_note,
             "final_vt": run_sim.vt_plan(best),
+            # L is fixed by methodology (see the docstring); reported and
+            # validated rather than searched
             "l_searched": bool(optimize_l), "l_note": l_note,
             "final_l_nm": {k: d["l_nm"] for k, d in best["devices"].items()},
             "l_range_nm": list(run_sim.l_range_nm(best)),
+            "l_report": run_sim.l_report(best),
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
             "final_stacks": _stacks(best) if run_sim.w_unit(base) else None}
 
@@ -1868,7 +1876,7 @@ class Handler(BaseHTTPRequestHandler):
                                     corner_aware=bool(payload.get("corner_aware", True)),
                                     corner_relax=float(payload.get("corner_relax", 2.5)),
                                     optimize_vt=bool(payload.get("optimize_vt", True)),
-                                    optimize_l=bool(payload.get("optimize_l", True))))
+                                    optimize_l=bool(payload.get("optimize_l", False))))
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as e:  # surface errors to the UI

@@ -186,7 +186,48 @@ def test_w_and_l_are_not_interchangeable():
     assert abs(tw - tl) / tw > 0.2, (tw, tl)
 
 
-def test_optimizer_reports_and_bounds_its_l_choice():
+def test_l_is_fixed_by_default():
+    """L is a methodology choice, not a searched variable: drawing the latch's
+    groups at different lengths breaks the symmetry its matching depends on. The
+    optimizer must leave every L exactly where the caller fixed it."""
+    import server
+    base = run_sim._full({"model": "ptm45"})
+    r = server.optimize(base, TARGETS)
+    assert r["l_searched"] is False and r["l_note"] is None
+    for dev in ALL_DEVICES:
+        assert r["final_l_nm"][dev] == base["devices"][dev]["l_nm"]
+        assert r["final_params"]["devices"][dev]["l_nm"] == base["devices"][dev]["l_nm"]
+
+
+def test_a_wrongly_fixed_l_is_reported():
+    """With L fixed, a bad fixed value is the one thing that can silently go
+    wrong — below range the deck errors and reads as 'non-functional' rather
+    than 'bad input'."""
+    lo, hi = run_sim.l_range_nm({"model": "ptm45"})
+    low = run_sim._full({"model": "ptm45", "devices": {"input": {"l_nm": lo - 15}}})
+    assert "input" in run_sim.l_report(low)["out_of_range"]
+    high = run_sim._full({"model": "ptm45", "devices": {"input": {"l_nm": hi + 100}}})
+    assert "input" in run_sim.l_report(high)["out_of_range"]
+    ok = run_sim._full({"model": "ptm45"})
+    assert run_sim.l_report(ok)["out_of_range"] == {}
+
+
+@needs_sky
+def test_pdk_raised_l_is_reported_but_not_an_error():
+    """sky130 below the bin floor is raised and is fine; the same request on a
+    backend with nothing to raise it is an error. Judged on the built device."""
+    p = run_sim._full({"model": "sky130", "vdd": 1.8,
+                       "devices": {k: {"l_nm": 45.0} for k in ALL_DEVICES}})
+    rep = run_sim.l_report(p)
+    assert rep["out_of_range"] == {}
+    assert "input" in rep["raised_by_pdk"]
+    assert rep["effective_nm"]["input"] == 150.0
+    assert all("→" in v for v in rep["raised_by_pdk"].values())
+
+
+def test_opt_in_l_exploration_still_works():
+    """Kept behind an explicit flag: it answers "what would a different *fixed* L
+    buy", which is a seed-selection question."""
     import server
     base = run_sim._full({"model": "ptm45"})
     r = server.optimize(base, TARGETS, optimize_l=True, optimize_vt=False)
@@ -196,15 +237,6 @@ def test_optimizer_reports_and_bounds_its_l_choice():
     for dev, L in r["final_l_nm"].items():
         assert lo <= L <= hi, f"{dev} L={L} outside [{lo}, {hi}]"
         assert r["final_params"]["devices"][dev]["l_nm"] == L
-
-
-def test_l_search_can_be_turned_off():
-    import server
-    base = run_sim._full({"model": "ptm45"})
-    r = server.optimize(base, TARGETS, optimize_l=False, optimize_vt=False)
-    assert r["l_searched"] is False and r["l_note"] is None
-    for dev in ALL_DEVICES:
-        assert r["final_l_nm"][dev] == base["devices"][dev]["l_nm"]
 
 
 def test_l_search_does_not_worsen_the_objective():
