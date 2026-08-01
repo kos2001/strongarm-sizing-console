@@ -7,7 +7,7 @@ license: MIT
 metadata:
   hermes:
     tags: [semiconductor, eda, analog, strongarm, comparator, vco, ngspice, mcp, sizing]
-    related_skills: [analog-ic-robustness-optimization]
+    related_skills: [analog-ic-robustness-optimization, strongarm-fast-loop]
 ---
 
 # StrongARM Console — agent driving guide
@@ -48,6 +48,10 @@ On `asap7`/`gaa2nm` the optimizer runs integer coordinate descent and returns
 Never present `gaa2nm` numbers as sign-off quality; it is a trend-study card.
 
 ## Tool-call discipline
+
+**Which** tool to reach for, and what each one costs in SPICE seconds, is in
+`strongarm-fast-loop` — read that before the first call of a sizing turn. The
+rules here are about the shape of a turn; that skill is about its cost.
 
 These flows were tuned so one agent turn ≈ one minute:
 
