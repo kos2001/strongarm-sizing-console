@@ -76,9 +76,11 @@ SPEC_TARGETS = {
 
 def _predict_offset_mv(params):
     """Analytic input-referred offset from Pelgrom (no simulation needed).
-    Matches run_sim: per-device sigma_vth = AVT/sqrt(W*L*M); pair ~ sqrt(2)x."""
-    d = params["devices"]["input"]
-    area = d["w_um"] * (d["l_nm"] / 1000.0) * d["m"]
+    Matches run_sim: per-device sigma_vth = AVT/sqrt(W*L*M); pair ~ sqrt(2)x.
+    Uses the *effective* L — on sky130 the PDK raises L to the device's bin
+    floor, and computing offset from the requested L instead reports a device
+    that was never built."""
+    area = run_sim.gate_area_um2(params, "input")
     sigma_vth = params["avt_mv_um"] / math.sqrt(max(area, 1e-9))
     return math.sqrt(2) * sigma_vth
 
@@ -118,8 +120,8 @@ DEV_KEYS = ["input", "tail", "ncc", "pcc", "pre", "prei"]
 
 
 def _pred_offset_mv(p):
-    d = p["devices"]["input"]
-    area = d["w_um"] * (d["l_nm"] / 1000.0) * d["m"]
+    # effective L, not the requested one — see run_sim.effective_l_nm
+    area = run_sim.gate_area_um2(p, "input")
     return math.sqrt(2) * p["avt_mv_um"] / math.sqrt(max(area, 1e-9))
 
 
@@ -155,7 +157,7 @@ def _xkey(base, x):
 
 
 def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
-             corner_aware=True, corner_relax=2.5, optimize_vt=True):
+             corner_aware=True, corner_relax=2.5, optimize_vt=True, optimize_l=True):
     """Global sizing via log-space **Differential Evolution**.
 
     Minimizes power subject to offset + decision-time + functional constraints
@@ -169,10 +171,16 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
     With `optimize_vt`, a discrete pass afterwards also picks each group's
     **threshold-voltage level** (lvt/svt/hvt). Vth is a real per-device knob on a
     comparator, not only a corner perturbation, and it reaches operating points W
-    alone cannot: on asap7, `tail` at the low-Vth flavor buys 35.3->34.0 ps at
-    unchanged power, while on sky130 LVT PMOS is *slower* because the PDK only
+    alone cannot: on asap7, `tail` at the low-Vth flavor buys 18.1->16.8 ps for 4%
+    more power, while on sky130 LVT PMOS is *slower* because the PDK only
     characterizes it from L=0.35 µm. The right choice differs per backend and per
-    group, which is exactly why it is searched instead of prescribed."""
+    group, which is exactly why it is searched instead of prescribed.
+
+    With `optimize_l`, a pass before that also searches each group's **channel
+    length**. W and L are not interchangeable — at equal gate area (equal Pelgrom
+    offset) the W/L split still moves decision time by 1.5x — and L is
+    non-monotonic in speed, so the optimum is interior and a rule cannot reach
+    it. Bounds come from `run_sim.L_RANGE_NM`, which is measured per backend."""
     import random
     rng = random.Random(seed)
     off_t = targets["offset_sigma_mv"]
@@ -414,6 +422,55 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
         bi = min(range(len(pop_e)), key=lambda i: pop_e[i]["cost"])
         best = pop_e[bi]["p"]
 
+    def _cost_of(p):
+        e = _score(p)
+        n_sims[0] += 1
+        return e
+
+    # ── L pass: coordinate descent over channel length ────────────────────────
+    # W and L are not interchangeable: at identical gate area (so identical
+    # Pelgrom offset) input 8.0µ×80n resolves in 530 ps while 4.0µ×160n takes
+    # 800 ps. And L is non-monotonic in speed — on ptm45 the input pair is
+    # *faster* at 160 nm (452 ps) than at the hand-picked 80 nm (530 ps), with
+    # better matching too (1.39 vs 1.85 mV σ). That interior optimum is what a
+    # rule-of-thumb misses and a search finds. Multiplicative ladder, clamped to
+    # the backend's measured usable range.
+    l_note, l_before = None, {k: d["l_nm"] for k, d in best["devices"].items()}
+    if optimize_l:
+        lo_l, hi_l = run_sim.l_range_nm(best)
+        cur = copy.deepcopy(best)
+        cur_e = _cost_of(cur)
+        improved = False
+        for _ in range(2):
+            moved = False
+            for dv in DEV_KEYS:
+                now = cur["devices"][dv]["l_nm"]
+                cands, seen_l = [], {round(now, 2)}
+                for f in (0.7, 0.85, 1.2, 1.5, 2.0):
+                    cand = round(max(lo_l, min(hi_l, now * f)), 2)
+                    if cand in seen_l:
+                        continue          # clamped onto the incumbent — no new deck
+                    seen_l.add(cand)
+                    t = copy.deepcopy(cur)
+                    t["devices"][dv]["l_nm"] = cand
+                    cands.append((cand, t))
+                if not cands:
+                    continue
+                for (cand, t), e in zip(cands, _pmap(lambda it: _cost_of(it[1]), cands)):
+                    if e["cost"] < cur_e["cost"] - 1e-9:
+                        cur, cur_e, moved, improved = t, e, True, True
+            if not moved:
+                break
+        if improved:
+            best = cur
+            after = {k: d["l_nm"] for k, d in best["devices"].items()}
+            ch = [f"{k} {l_before[k]:g}→{after[k]:g}nm" for k in DEV_KEYS if after[k] != l_before[k]]
+            l_note = "L search: " + ", ".join(ch)
+        else:
+            l_note = "L search: the incumbent lengths were already best"
+        traj.append({"action": l_note, "measured": {}, "verdicts": {},
+                     "total_w_um": _total_w(best), "params": copy.deepcopy(best["devices"])})
+
     # ── Vt pass: discrete coordinate descent over the threshold level ──────────
     # W is converged; now walk each device group through lvt/svt/hvt under the
     # same cost function. Discrete and low-dimensional (6 groups x 3 levels), and
@@ -421,10 +478,6 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
     # cost well under the DE that preceded them.
     vt_note, vt_before = None, {k: run_sim.vt_of(d) for k, d in best["devices"].items()}
     if optimize_vt:
-        def _cost_of(p):
-            e = _score(p)
-            n_sims[0] += 1
-            return e
 
         cur = copy.deepcopy(best)
         cur_e = _cost_of(cur)
@@ -473,6 +526,9 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
             # honour (sky130 has no nfet hvt) or had to clamp (pfet_01v8_lvt min L)
             "vt_searched": bool(optimize_vt), "vt_note": vt_note,
             "final_vt": run_sim.vt_plan(best),
+            "l_searched": bool(optimize_l), "l_note": l_note,
+            "final_l_nm": {k: d["l_nm"] for k, d in best["devices"].items()},
+            "l_range_nm": list(run_sim.l_range_nm(best)),
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
             "final_stacks": _stacks(best) if run_sim.w_unit(base) else None}
 
@@ -1811,7 +1867,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(optimize(full, targets,
                                     corner_aware=bool(payload.get("corner_aware", True)),
                                     corner_relax=float(payload.get("corner_relax", 2.5)),
-                                    optimize_vt=bool(payload.get("optimize_vt", True))))
+                                    optimize_vt=bool(payload.get("optimize_vt", True)),
+                                    optimize_l=bool(payload.get("optimize_l", True))))
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as e:  # surface errors to the UI

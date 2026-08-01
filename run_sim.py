@@ -131,9 +131,9 @@ PMOS_DEVICES = ("pcc", "pre", "prei")
 
 # --- threshold-voltage flavor as a design variable -----------------------------
 # Vth is a real per-device knob on a comparator, not just a corner perturbation:
-# measured on asap7, moving every device lvt->rvt trades 35.3->51.0 ps for
-# 12.2->9.2 uW, and `tail` alone to the low-Vth flavor buys 35.3->34.0 ps at
-# essentially unchanged power. Mixed assignments are not dominated by uniform
+# measured on asap7 at the node's L=21nm, raising every device one level trades
+# 18.1->24.9 ps for 10.9->7.82 uW, and `tail` alone to the low-Vth flavor buys
+# 18.1->16.8 ps for 4% more power. Mixed assignments are not dominated by uniform
 # ones, so it is worth searching rather than prescribing.
 #
 # Devices carry a backend-neutral level; each backend maps it to what it really
@@ -191,6 +191,73 @@ def sky130_min_l_um(sub):
 # would. Scaled by skew_scale for the same reason the corner skew is: 50 mV is
 # too coarse against gaa2nm's |Vth0| = 0.20 V.
 _VT_PROXY_V = {"lvt": -0.05, "svt": 0.0, "hvt": +0.05}
+
+
+# --- channel length: per-model usable range and the node's nominal --------------
+# L was previously taken from the params verbatim on every backend, and the only
+# per-model L knowledge lived in the web UI's model buttons. So an API/MCP caller
+# asking for `{"model": "asap7"}` got L = 80/45 nm on a 7 nm card — 4x the node's
+# gate length — while the same request through the UI got 21 nm. This table is now
+# the single source of truth for both.
+#
+# `min`/`max` are measured, not assumed (sweep in tests/test_l_search.py):
+#   ptm45  — the PTM card has no model below 45 nm; the deck errors out. Above
+#            ~200 nm the latch stops resolving.
+#   sky130 — the per-device bin floor (see _SKY_MIN_L_UM) is the real minimum;
+#            beyond ~500 nm it stops resolving.
+#   asap7  — BSIM-CMG runs continuously well outside the node, but 21 nm is the
+#            characterized gate length, so the search does not go below it.
+#   gaa2nm — fails to resolve at 8 nm; non-monotonic above (20 nm is faster than
+#            14 nm), which is why the input pair's nominal is 20.
+L_RANGE_NM = {
+    "ptm45":  {"min": 45.0,  "max": 200.0, "input": 80.0,  "other": 45.0},
+    "sky130": {"min": 150.0, "max": 500.0, "input": 150.0, "other": 150.0},
+    "asap7":  {"min": 21.0,  "max": 200.0, "input": 21.0,  "other": 21.0},
+    "gaa2nm": {"min": 10.0,  "max": 120.0, "input": 20.0,  "other": 14.0},
+}
+_L_RANGE_DEFAULT = L_RANGE_NM["ptm45"]
+
+
+def l_range_nm(p):
+    """(min, max) usable channel length for this backend."""
+    r = L_RANGE_NM.get(p.get("model") or "ptm45", _L_RANGE_DEFAULT)
+    return r["min"], r["max"]
+
+
+def l_nominal_nm(p, dev):
+    """The node's nominal L for one device group — the input pair is routinely
+    drawn longer than the rest for matching, so it has its own entry."""
+    r = L_RANGE_NM.get(p.get("model") or "ptm45", _L_RANGE_DEFAULT)
+    return r["input" if dev == "input" else "other"]
+
+
+def clamp_l_nm(p, dev, l_nm):
+    lo, hi = l_range_nm(p)
+    return max(lo, min(hi, float(l_nm)))
+
+
+def effective_l_nm(p, dev):
+    """The L the device is actually **built with**, which is not always the L in
+    the params: on sky130 the netlist raises L to the device's bin floor (0.15 µm,
+    or 0.345 µm for pfet_01v8_lvt).
+
+    Every area calculation must use this. They used to read `l_nm` directly, so
+    asking for L = 45 nm on sky130 simulated a 150 nm device while the Pelgrom
+    offset was computed for a 45 nm one — an offset 1.83x worse than the geometry
+    actually drawn, which the optimizer then paid a penalty against."""
+    d = p["devices"][dev]
+    l_nm = float(d["l_nm"])
+    if p.get("model") == "sky130":
+        tbl = _VT_SKY130_N if dev in NMOS_DEVICES else _VT_SKY130_P
+        sub = tbl.get(vt_of(d)) or tbl["svt"]
+        l_nm = max(l_nm, sky130_min_l_um(sub) * 1000.0)
+    return l_nm
+
+
+def gate_area_um2(p, dev):
+    """W · L_effective · M in µm² — the area Pelgrom matching scales with."""
+    d = p["devices"][dev]
+    return d["w_um"] * (effective_l_nm(p, dev) / 1000.0) * d["m"]
 
 
 def vt_of(d):
@@ -725,8 +792,9 @@ def measure_offset(p, rng):
     the sample. Sigma over samples is the reported offset. (Input-pair
     mismatch is the dominant term; latch/tail mismatch is a documented
     extension point.)"""
-    d = p["devices"]["input"]
-    area_um2 = d["w_um"] * (d["l_nm"] / 1000.0) * d["m"]
+    # effective L: on sky130 the netlist raises L to the device's bin floor, and
+    # injecting mismatch for the requested L would model a device never built
+    area_um2 = max(gate_area_um2(p, "input"), 1e-12)
     sigma_vth = (p["avt_mv_um"] / math.sqrt(area_um2)) / 1000.0  # volts, per device
     # pre-draw all mismatch pairs in-order (keeps the RNG sequence / reproducibility
     # identical to the serial version), then bisect each sample in parallel — the
@@ -861,6 +929,14 @@ def _full(params):
     # EOT·언도프드 채널로 매칭이 좋아 ~1.2mV·µm (45nm급 기본 2.0)
     if p.get("model") == "gaa2nm" and "avt_mv_um" not in params:
         p["avt_mv_um"] = 1.2
+    # Channel length: DEFAULT_PARAMS carries the 45 nm-class seed (80/45 nm), which
+    # is wrong for a 7 nm or 2 nm-class card. If the caller did not name an L for a
+    # device, use that backend's nominal. Only fills in what was omitted — an
+    # explicit l_nm is always honoured, so this cannot override a real request.
+    ov = params.get("devices") or {}
+    for dev, d in p["devices"].items():
+        if "l_nm" not in (ov.get(dev) or {}):
+            d["l_nm"] = l_nominal_nm(p, dev)
     return p
 
 

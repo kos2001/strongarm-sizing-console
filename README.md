@@ -130,8 +130,8 @@ The level maps onto whatever the backend really has:
 
 Measured effect (why it is worth searching rather than prescribing):
 
-- **asap7** — all devices `lvt`→`hvt`: 35.3→51.0 ps for 12.2→9.2 µW. `tail`
-  alone to `lvt`: 35.3→**34.0 ps at unchanged power**.
+- **asap7** (at the node's L = 21 nm) — all devices one level up: 18.1→24.9 ps for
+  10.9→7.82 µW. `tail` alone to `lvt`: 18.1→**16.8 ps for 4% more power**.
 - **sky130** — NMOS `lvt` is 16% faster (160.6→135.3 ps), but PMOS `lvt` is
   *slower* (189.9 ps) because the PDK forces its L from 45 nm to 350 nm. The
   naive "LVT everywhere" is worse than the baseline.
@@ -144,6 +144,47 @@ the whole design, so a flavor change affects offset only through the simulated
 Vth and through W·L·M, never through a different mismatch coefficient. Speed and
 power effects are simulated; the offset effect is partial. An offset-critical
 flavor decision needs the foundry's per-flavor Pelgrom data.
+
+### `l_nm` — L is searched too, with per-backend bounds
+
+`strongarm_optimize` searches channel length as well (`optimize_l`, default on),
+reporting `final_l_nm`, `l_note` and `l_range_nm`. **Omit `l_nm` and you get that
+node's nominal L** — the backend now knows it:
+
+| backend | usable L | nominal (input / other) |
+|---|---|---|
+| `ptm45` | 45–200 nm | 80 / 45 nm |
+| `sky130` | 150–500 nm | 150 / 150 nm (per-device bin floor) |
+| `asap7` | 21–200 nm | 21 / 21 nm |
+| `gaa2nm` | 10–120 nm | 20 / 14 nm |
+
+Bounds are measured, not assumed: below 45 nm the PTM card has no model and the
+deck **errors out**; gaa2nm stops resolving at 8 nm and sky130 beyond ~500 nm.
+
+Why it needs searching rather than a rule:
+
+- **W and L are not interchangeable.** At identical gate area — identical Pelgrom
+  offset — input 8.0 µm × 80 nm resolves in 530 ps while 4.0 µm × 160 nm takes
+  800 ps.
+- **L is non-monotonic in speed.** On ptm45 the input pair is *faster* at 160 nm
+  (452 ps) than at the hand-picked 80 nm (530 ps) **and** matches better (1.39 vs
+  1.85 mV σ) — the seed sizing's L was strictly dominated. The optimum is interior.
+- In `optimize`: ptm45 26.7→**16.9 µW** from the L pass alone (→15.4 with Vt),
+  gaa2nm 18.7→17.5 µW. sky130/asap7 already sit at their L floor, so the pass
+  reports "already best" and costs only the sweep.
+
+Two bugs this surfaced, both fixed:
+
+1. **The API and the UI disagreed on L.** Per-model L lived only in the web UI's
+   model buttons, so an API/MCP caller asking for `{"model": "asap7"}` got the
+   45 nm-class seed (80/45 nm) on a 7 nm card — 4x the node's gate length. The
+   backend is now the single source of truth (`run_sim.L_RANGE_NM`).
+2. **Offset was computed for a device that was never built.** On sky130 the
+   netlist raises L to the PDK bin floor, but every area calculation read `l_nm`
+   directly — so asking for 45 nm simulated a 150 nm device while reporting the
+   offset of a 45 nm one, **1.83x worse than the real geometry**, and the
+   optimizer paid an offset penalty against that phantom. All area math now goes
+   through `run_sim.effective_l_nm` / `gate_area_um2`.
 
 ## How agents close the loop
 
