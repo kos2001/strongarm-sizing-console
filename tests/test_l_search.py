@@ -57,6 +57,26 @@ def test_api_gets_the_node_length_not_the_45nm_seed():
     assert run_sim._full({"model": "ptm45"})["devices"]["input"]["l_nm"] == 80.0
 
 
+@pytest.mark.parametrize("model,input_l,other_l", [("asap7", 21.0, 21.0),
+                                                   ("gaa2nm", 20.0, 14.0),
+                                                   ("ptm45", 80.0, 45.0)])
+def test_node_length_reaches_the_public_entry_points(model, input_l, other_l):
+    """Not just `_full`. `run_sim()` and `capture_waveform()` each carried their
+    own copy of the params merge, so a default added to `_full` did not apply to
+    the calls the API and MCP tools actually make — the first live check of this
+    feature still showed asap7 at 80/45 nm. They now share one merge."""
+    got = run_sim.run_sim({"model": model}, do_offset=False)["params"]["devices"]
+    assert got["input"]["l_nm"] == input_l
+    assert got["tail"]["l_nm"] == other_l
+
+
+def test_waveform_capture_uses_the_same_merge():
+    """capture_waveform's copy was also a *shallow* device merge, so a partial
+    device dict lost its other fields."""
+    w = run_sim.capture_waveform({"model": "ptm45", "devices": {"input": {"w_um": 9.0}}})
+    assert w.get("n", 0) > 0, w        # would KeyError on l_nm under a shallow merge
+
+
 def test_an_explicit_length_is_never_overridden():
     p = run_sim._full({"model": "asap7", "devices": {"input": {"l_nm": 45.0}}})
     assert p["devices"]["input"]["l_nm"] == 45.0     # honoured
