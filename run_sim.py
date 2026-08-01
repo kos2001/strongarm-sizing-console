@@ -408,6 +408,31 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
                     f"{_dev(d[dk], 'dvtn' if kind == 'n' else 'dvtp', vt_offset_v(d[dk], p, kind))}")
 
     clkb_line = ""
+    # Mismatch beyond the input pair. The input pair has always had its Vth
+    # mismatch injected as series gate sources (Vos1/Vos2), which works on every
+    # backend because it needs no model parameter. The latch and precharge pairs
+    # are matched pairs too and their Vth mismatch adds directly to a StrongARM's
+    # offset — the cross-coupled pair especially, since it acts right when the
+    # regeneration decides. Same mechanism, applied per requested group: +δ/2 on
+    # one device of the pair, −δ/2 on the other.
+    #
+    # Only emitted for groups named in `mismatch_v`, so an unset call produces the
+    # original deck unchanged. `tail` is deliberately absent: it is a single device
+    # with no differential partner, so its mismatch is common-mode.
+    mm = {k: float(v) for k, v in (p.get("mismatch_v") or {}).items() if v}
+
+    def pair(g, la, lb, na, nb, kind, gate_a, gate_b):
+        """Two devices of a matched pair, with optional series-gate mismatch."""
+        d = mm.get(g)
+        if not d:
+            return [dline(la, na.format(g=gate_a), g, kind),
+                    dline(lb, nb.format(g=gate_b), g, kind)]
+        ga, gb = f"gm{la}", f"gm{lb}"
+        return [dline(la, na.format(g=ga), g, kind),
+                dline(lb, nb.format(g=gb), g, kind),
+                f"Vmm{la} {ga} {gate_a} {d / 2.0:.9g}",
+                f"Vmm{lb} {gb} {gate_b} {-d / 2.0:.9g}"]
+
     dev_block = "\n".join([
         "* --- input differential pair ---",
         dline("M1", "nX g1 tail 0", "input", "n"),
@@ -415,16 +440,13 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
         "* --- tail switch ---",
         dline("M7", "tail clk 0 0", "tail", "n"),     # 그림 표기: 테일 = M7
         "* --- cross-coupled NMOS latch ---",
-        dline("M3", "outp outn nX 0", "ncc", "n"),
-        dline("M4", "outn outp nY 0", "ncc", "n"),
+        *pair("ncc", "M3", "M4", "outp {g} nX 0", "outn {g} nY 0", "n", "outn", "outp"),
         "* --- cross-coupled PMOS latch ---",
-        dline("M5", "outp outn vdd vdd", "pcc", "p"),
-        dline("M6", "outn outp vdd vdd", "pcc", "p"),
+        *pair("pcc", "M5", "M6", "outp {g} vdd vdd", "outn {g} vdd vdd", "p", "outn", "outp"),
         "* --- precharge PMOS (on when clk low) ---",
-        dline("MS3", "outp clk vdd vdd", "pre", "p"),   # S3/S4 — 출력 X/Y 프리차지
-        dline("MS4", "outn clk vdd vdd", "pre", "p"),
-        dline("MS1", "nX clk vdd vdd", "prei", "p"),    # S1/S2 — 내부 P/Q 프리차지
-        dline("MS2", "nY clk vdd vdd", "prei", "p"),
+        # S3/S4 — 출력 X/Y 프리차지, S1/S2 — 내부 P/Q 프리차지
+        *pair("pre", "MS3", "MS4", "outp {g} vdd vdd", "outn {g} vdd vdd", "p", "clk", "clk"),
+        *pair("prei", "MS1", "MS2", "nX {g} vdd vdd", "nY {g} vdd vdd", "p", "clk", "clk"),
     ])
     # clock timing (defaults reproduce the original 200p/3n-high/6n-period run)
     clk_hi = p.get("clk_high_ns", 3.0)
@@ -438,6 +460,47 @@ def gen_netlist(p, vdiff, dvth1=0.0, dvth2=0.0, wavefile=None):
     reset_at = p.get("reset_at_ns")          # optional: probe outputs during 2nd precharge
     reset_lines = (f"meas tran vrstp FIND v(outp) AT={reset_at}n\n"
                    f"meas tran vrstn FIND v(outn) AT={reset_at}n") if reset_at else ""
+
+    # --- input drive network: what makes kickback observable at all -------------
+    # With ideal sources on the gates (rs_ohm = 0, the default) the input nodes are
+    # held rigid, so the charge the input pair pushes back through Cgd when the
+    # outputs slew produces exactly zero disturbance — kickback is unmeasurable by
+    # construction, not merely unmeasured. A real SAR comparator is driven by the
+    # DAC's finite output impedance into its own sampling capacitance, and that
+    # held node is what kickback corrupts.
+    #
+    # rs_ohm > 0 inserts that network and enables the kickback measurements. The
+    # DC operating point is unchanged (no gate current), so this only affects the
+    # transient disturbance — and rs_ohm = 0 emits the original deck verbatim.
+    rs = float(p.get("rs_ohm", 0.0) or 0.0)
+    cs_ff = float(p.get("cs_ff", 0.0) or 0.0)
+    # (kickback measurements are appended to reset_lines below)
+    if rs > 0:
+        cs_line = (f"Csp inpx 0 {cs_ff}f\nCsn innx 0 {cs_ff}f\n" if cs_ff > 0 else "")
+        src_block = (f"Vinp srcp 0 {vcm + vdiff / 2.0}\n"
+                     f"Vinn srcn 0 {vcm - vdiff / 2.0}\n"
+                     f"* DAC/driver output impedance + held sampling cap\n"
+                     f"Rsp srcp inpx {rs}\nRsn srcn innx {rs}\n"
+                     f"{cs_line}"
+                     f"Bkdiff kdiff 0 V=V(inpx)-V(innx)")
+        # peak excursion of each held node and of the differential, over the
+        # evaluate window; plus where the differential lands by the end, which is
+        # the part that corrupts the next comparison
+        kb_from, kb_to = 0.2, min(iavg_to, tstop)
+        kick = (
+            f"meas tran kbp_max MAX v(inpx) FROM={kb_from}n TO={kb_to}n\n"
+            f"meas tran kbp_min MIN v(inpx) FROM={kb_from}n TO={kb_to}n\n"
+            f"meas tran kbn_max MAX v(innx) FROM={kb_from}n TO={kb_to}n\n"
+            f"meas tran kbn_min MIN v(innx) FROM={kb_from}n TO={kb_to}n\n"
+            f"meas tran kbd_max MAX v(kdiff) FROM={kb_from}n TO={kb_to}n\n"
+            f"meas tran kbd_min MIN v(kdiff) FROM={kb_from}n TO={kb_to}n\n"
+            f"meas tran kbd_end FIND v(kdiff) AT={kb_to}n")
+        # appended to reset_lines rather than given its own template slot, so the
+        # default (rs_ohm = 0) deck stays byte-identical to before this feature
+        reset_lines = f"{reset_lines}\n{kick}" if reset_lines else kick
+    else:
+        src_block = (f"Vinp inpx 0 {vcm + vdiff / 2.0}\n"
+                     f"Vinn innx 0 {vcm - vdiff / 2.0}")
     return f"""StrongARM latch comparator (generated)
 .option temp={temp}
 {param_line}
@@ -446,8 +509,7 @@ Vdd vdd 0 {vdd}
 * clock: precharge (clk=0) for 200ps, then evaluate
 Vclk clk 0 PULSE(0 {vdd} 200p 12p 12p {clk_hi}n {clk_per}n)\n{clkb_line}
 * differential input around common mode
-Vinp inpx 0 {vcm + vdiff/2.0}
-Vinn innx 0 {vcm - vdiff/2.0}
+{src_block}
 * per-device Vth mismatch injected as series gate offsets (input pair)
 Vos1 g1 inpx {dvth1}
 Vos2 g2 innx {dvth2}
@@ -812,6 +874,141 @@ def _offset_sample(p, dvth1, dvth2):
         else:
             hi, s_hi = mid, s_mid
     return 0.5 * (lo + hi)
+
+
+#: Matched pairs whose Vth mismatch shows up as input-referred offset. `tail` is
+#: excluded on purpose — one device, no differential partner, so its mismatch is
+#: common-mode. The input pair keeps its own dedicated injection path.
+OFFSET_PAIRS = ("input", "ncc", "pcc", "pre", "prei")
+
+
+def pelgrom_sigma_v(p, dev):
+    """Per-device Vth mismatch σ (volts) from that group's own area — Pelgrom
+    σ_Vth = A_VT / √(W·L·M). Uses the effective L, so a PDK-raised length is
+    credited."""
+    area = max(gate_area_um2(p, dev), 1e-12)
+    return (p["avt_mv_um"] / math.sqrt(area)) / 1000.0
+
+
+def offset_budget(params, n_mc=12, seed=4242, groups=OFFSET_PAIRS):
+    """Which devices the offset is actually made of.
+
+    `measure_offset` models the input pair only — the code called latch and tail
+    mismatch "a documented extension point", and for a StrongARM that omission
+    matters: the cross-coupled pair fires exactly when regeneration is deciding, so
+    its Vth mismatch steers the outcome, and the precharge pair leaves the outputs
+    at unequal starting points. A real offset budget names the contributors.
+
+    Each group is perturbed by its **own** Pelgrom σ (from its own W·L·M), one
+    group at a time, and the resulting input-referred offset σ is measured the same
+    way as the input pair's: bisect the differential input to the decision-flip
+    point per Monte-Carlo draw. Reporting them separately is the point — it says
+    which device to grow."""
+    p = _full(params)
+    p = {**p, "n_mc": n_mc}
+    per = {}
+    for g in groups:
+        sig = pelgrom_sigma_v(p, g)
+        if g == "input":
+            # existing dedicated path (series sources already in the deck)
+            import random
+            per[g] = {"pelgrom_sigma_vth_mv": round(sig * 1e3, 4),
+                      **{k: v for k, v in measure_offset(p, random.Random(seed)).items()
+                         if k in ("offset_sigma_mv", "offset_mean_mv", "n_mc")}}
+            continue
+        per[g] = _offset_of_pair(p, g, sig, n_mc, seed)
+    # RSS of the per-group contributions — independent devices, so σ's add in
+    # quadrature. Reported next to the input-pair-only figure it replaces.
+    contrib = [v["offset_sigma_mv"] for v in per.values()
+               if v.get("offset_sigma_mv") is not None]
+    total = math.sqrt(sum(c * c for c in contrib)) if contrib else None
+    ranked = sorted((k for k in per if per[k].get("offset_sigma_mv") is not None),
+                    key=lambda k: -per[k]["offset_sigma_mv"])
+    return {
+        "per_device": per,
+        "total_sigma_mv": round(total, 4) if total is not None else None,
+        "input_only_sigma_mv": per.get("input", {}).get("offset_sigma_mv"),
+        "dominant": ranked,
+        "excluded": {"tail": "single device, no differential partner — its mismatch "
+                             "is common-mode, not offset"},
+        "note": ("each group perturbed by its own Pelgrom σ from its own W·L·M, one "
+                 "at a time; total is the RSS over independent contributors. Grow "
+                 "the area of whatever leads `dominant` — growing anything else "
+                 "buys proportionally less."),
+    }
+
+
+def _offset_of_pair(p, group, sigma_v, n_mc, seed):
+    """Input-referred offset σ from one matched pair's Vth mismatch, by the same
+    bisection the input pair uses."""
+    import random
+    rng = random.Random(seed + hash(group) % 10000)
+    draws = [rng.gauss(0.0, sigma_v * math.sqrt(2)) for _ in range(n_mc)]
+
+    def one(d):
+        q = {**p, "mismatch_v": {**(p.get("mismatch_v") or {}), group: d}}
+        return _offset_sample(q, 0.0, 0.0)
+
+    vals = [v for v in pmap(one, draws) if v is not None]
+    if len(vals) < 2:
+        return {"pelgrom_sigma_vth_mv": round(sigma_v * 1e3, 4),
+                "offset_sigma_mv": None, "n_mc": len(vals),
+                "error": "not enough usable samples"}
+    mean = sum(vals) / len(vals)
+    var = sum((v - mean) ** 2 for v in vals) / max(len(vals) - 1, 1)
+    return {"pelgrom_sigma_vth_mv": round(sigma_v * 1e3, 4),
+            "offset_sigma_mv": round(math.sqrt(var) * 1e3, 4),
+            "offset_mean_mv": round(mean * 1e3, 4), "n_mc": len(vals)}
+
+
+def measure_kickback(params, rs_ohm=2000.0, cs_ff=50.0, vdiff=0.005):
+    """Input-referred kickback: how much the comparator disturbs the voltage it is
+    supposed to be measuring.
+
+    When the outputs slew during regeneration, the input pair pushes charge back
+    through Cgd into whatever is driving the gates. In a SAR ADC that is the DAC's
+    held sample, so the disturbance corrupts the very value being compared — and
+    every later bit decision in that conversion. It is a standard comparator spec
+    and one the ideal-source deck cannot show at all: with `rs_ohm = 0` the source
+    holds the gate rigid and the measured kickback is exactly zero, by construction.
+
+    `rs_ohm` is the driver's output impedance and `cs_ff` the held sampling
+    capacitance; both are properties of the *system around* the comparator, so they
+    are inputs, not circuit parameters. Defaults are a plausible SAR front end
+    (2 kΩ, 50 fF) — set them to your DAC's real values before believing the number.
+
+    Reports the peak single-ended excursion, the peak differential excursion (the
+    part that survives a differential DAC and directly adds to offset), and where
+    the differential lands by the end of the evaluate phase (residual, which is
+    what the next comparison inherits)."""
+    p = _full(params)
+    p = {**p, "rs_ohm": float(rs_ohm), "cs_ff": float(cs_ff)}
+    out = _run(gen_netlist(p, vdiff=vdiff))
+    g = {k: _parse(out, k) for k in ("kbp_max", "kbp_min", "kbn_max", "kbn_min",
+                                     "kbd_max", "kbd_min", "kbd_end", "tdec", "fdiff")}
+    if g["kbp_max"] is None or g["kbd_max"] is None:
+        return {"error": "kickback measurement failed (comparator did not resolve?)",
+                "rs_ohm": rs_ohm, "cs_ff": cs_ff}
+    vcm = p["vcm_frac"] * p["vdd"]
+    rest_p, rest_n = vcm + vdiff / 2.0, vcm - vdiff / 2.0
+    # peak deviation from the resting value, whichever direction it went
+    se_p = max(abs(g["kbp_max"] - rest_p), abs(g["kbp_min"] - rest_p))
+    se_n = max(abs(g["kbn_max"] - rest_n), abs(g["kbn_min"] - rest_n))
+    d_rest = vdiff
+    d_pk = max(abs(g["kbd_max"] - d_rest), abs(g["kbd_min"] - d_rest))
+    return {
+        "rs_ohm": rs_ohm, "cs_ff": cs_ff, "vdiff_v": vdiff,
+        "kickback_se_mv": round(max(se_p, se_n) * 1e3, 4),
+        "kickback_diff_mv": round(d_pk * 1e3, 4),
+        "residual_diff_mv": round((g["kbd_end"] - d_rest) * 1e3, 4)
+        if g["kbd_end"] is not None else None,
+        "decision_time_ps": round(g["tdec"] * 1e12, 2) if g["tdec"] else None,
+        "functional": g["fdiff"] is not None and abs(g["fdiff"]) > 0.7 * p["vdd"],
+        "note": ("differential kickback is the part that adds to offset; the "
+                 "single-ended figure also matters for a single-ended DAC. "
+                 "rs_ohm/cs_ff describe the driver, not the comparator — set them "
+                 "to the real front end before using the number."),
+    }
 
 
 def measure_offset(p, rng):

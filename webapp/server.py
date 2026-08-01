@@ -1753,6 +1753,19 @@ class Handler(BaseHTTPRequestHandler):
                 full.update({k: v for k, v in payload.get("params", {}).items() if k != "devices"})
                 full["devices"] = run_sim.merge_devices(payload.get("params", {}).get("devices"))
                 self._json(ber_curve(full))
+            elif self.path == "/api/kickback":
+                # input-referred kickback — needs a non-ideal driver to exist at all
+                payload = self._read_json()
+                self._json(run_sim.measure_kickback(
+                    payload.get("params", {}),
+                    rs_ohm=float(payload.get("rs_ohm", 2000.0)),
+                    cs_ff=float(payload.get("cs_ff", 50.0)),
+                    vdiff=float(payload.get("vdiff", 0.005))))
+            elif self.path == "/api/offset/budget":
+                # offset per matched pair, not input-pair only
+                payload = self._read_json()
+                self._json(run_sim.offset_budget(payload.get("params", {}),
+                                                 n_mc=int(payload.get("n_mc", 12))))
             elif self.path == "/api/resolution":
                 # metastability + offset MC + BER on one amplitude axis, one call
                 payload = self._read_json()

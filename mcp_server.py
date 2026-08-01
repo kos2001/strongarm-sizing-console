@@ -179,6 +179,29 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
     },
     {
+        "name": "strongarm_kickback",
+        "description": "MEASURE input-referred kickback: how much the comparator disturbs the voltage "
+                       "it is measuring, when the outputs slew charge back through Cgd into the driver. "
+                       "Needs a non-ideal driver to exist at all (rs_ohm/cs_ff describe the DAC, not the "
+                       "comparator) — with an ideal source it is zero by construction. Reports peak "
+                       "single-ended and differential disturbance plus the residual the next comparison "
+                       "inherits. Typically LARGER than the offset sigma, so check it before claiming a "
+                       "resolution.",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA,
+                        "rs_ohm": {"type": "number"}, "cs_ff": {"type": "number"},
+                        "vdiff": {"type": "number"}}},
+    },
+    {
+        "name": "strongarm_offset_budget",
+        "description": "Offset sigma broken down PER MATCHED PAIR (input, ncc, pcc, pre, prei), each "
+                       "perturbed by its own Pelgrom sigma from its own W*L*M, plus the RSS total. The "
+                       "plain offset number models the input pair only and understates the total; this "
+                       "says which device to grow. `tail` is excluded (single device, so its mismatch is "
+                       "common-mode, not offset).",
+        "inputSchema": {"type": "object", "properties": {"params": _PARAMS_SCHEMA,
+                        "n_mc": {"type": "integer"}}},
+    },
+    {
         "name": "strongarm_sensitivity",
         "description": "Per-device sensitivity: which W is the lever for decision time / power / offset (finite differences, real sims).",
         "inputSchema": {"type": "object", "properties": {"params": {"type": "object"}}},
@@ -351,6 +374,8 @@ _TOOL_ENDPOINT = {
     "strongarm_metastability": "/api/metastability",
     "strongarm_ber": "/api/ber",
     "strongarm_noise_probit": "/api/noise/probit",
+    "strongarm_kickback": "/api/kickback",
+    "strongarm_offset_budget": "/api/offset/budget",
     "strongarm_sensitivity": "/api/sensitivity",
     "strongarm_maxfclk": "/api/maxfclk",
     "strongarm_yield": "/api/yield",
