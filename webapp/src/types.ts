@@ -138,6 +138,31 @@ export interface BerResult {
   error?: string
 }
 
+export interface ResolutionPoint {
+  vin_v: number
+  decision_time_ps: number | null
+  resolved: boolean
+  ber_noise: number
+  ber_total: number
+}
+export interface ResolutionResult {
+  points: ResolutionPoint[]
+  tau_ps: number | null
+  intercept_ps: number | null
+  min_resolved_v: number | null
+  sigma: { noise_uv: number; offset_mv: number | null; total_uv: number }
+  markers_uv: {
+    sigma_noise: number
+    sigma_offset: number
+    sigma_total: number
+    min_input_noise: number
+    min_input_total: number
+  }
+  ber_target: number
+  reading: string
+  error?: string
+}
+
 export interface FclkPoint { period_ns: number; fclk_ghz: number; functional: boolean; reset_ok: boolean; ok: boolean; power_uw: number | null; energy_fj: number | null }
 export interface MaxFclkResult {
   points: FclkPoint[]

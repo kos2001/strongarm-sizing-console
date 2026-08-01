@@ -9,6 +9,7 @@ export const NAV_LABELS: Record<string, Bi> = {
   sizing: { ko: '소자 크기', en: 'Sizing' },
   circuit: { ko: '회로 · 파형', en: 'Circuit' },
   metastability: { ko: '메타안정성', en: 'Metastability' },
+  resolution: { ko: '입력 해상도 (통합)', en: 'Resolution (merged)' },
   maxfclk: { ko: '최대 클럭', en: 'Max f_clk' },
   optimizer: { ko: '자동 최적화', en: 'Optimizer' },
   sensitivity: { ko: '민감도', en: 'Sensitivity' },
@@ -35,6 +36,7 @@ export const NAV_SUBS: Record<string, Bi> = {
   sizing: { ko: '소자 · 실행 · 스펙', en: 'devices · run · spec' },
   circuit: { ko: '회로도 · 트랜지언트', en: 'schematic · transient' },
   metastability: { ko: '판정시간 vs 입력 · τ', en: 'resolve time vs Vin · τ' },
+  resolution: { ko: '한 축에 τ · 오프셋 · BER', en: 'τ · offset · BER on one axis' },
   maxfclk: { ko: '클럭 속도 · 변환당 에너지', en: 'clock rate · energy/conv' },
   optimizer: { ko: '차분진화 + 대리모델', en: 'DE + GP surrogate' },
   sensitivity: { ko: '어느 소자가 지렛대인가', en: 'device levers' },
@@ -79,6 +81,16 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
     read: {
       ko: '클럭(clk)이 올라가면 두 출력(outp/outn)이 전원 양쪽으로 갈라집니다 — 이 갈라짐이 "판정"이에요. "⚡ 기생" 버튼은 레이아웃 배선 용량을 더해 실제로 얼마나 느려지는지 보여줍니다.',
       en: 'When the clock (clk) rises, the two outputs (outp/outn) split toward opposite rails — that split is the "decision". The "⚡ parasitics" button adds layout wiring capacitance to show how much slower the real chip is.',
+    },
+  },
+  resolution: {
+    what: {
+      ko: '메타안정성 · 오프셋 · BER 세 페이지를 한 축에 겹쳐 놓은 화면입니다. 가로축은 두 입력의 전압 차이 하나뿐이고, 왼쪽은 판정에 걸리는 시간, 오른쪽은 그 판정이 틀릴 확률입니다.',
+      en: 'The metastability, offset and BER views overlaid on one axis. The horizontal axis is a single variable — the differential input — with decision time on the left and the probability that decision is wrong on the right.',
+    },
+    read: {
+      ko: '따로 보면 놓치는 것이 보입니다: 아주 작은 입력에서도 래치는 레일까지 갑니다("판정됨") — 그런데 답은 동전 던지기입니다(BER 0.5). 붉은 영역(σtot 왼쪽)은 아무리 기다려도 찍는 구간, 초록 영역(min Δ 오른쪽)은 빠르고 정확한 구간입니다. σn(노이즈)과 σtot(노이즈+오프셋) 사이 거리가 곧 오프셋이 해상도를 얼마나 잡아먹는지입니다 — 보통 노이즈가 아니라 오프셋이 한계를 정합니다.',
+      en: 'Apart, these hide the thing that matters: at very small inputs the latch still resolves to a rail ("resolved") while the answer is a coin flip (BER 0.5). The red region left of σtot is where it is guessing however long you wait; the green region right of "min Δ" is fast and correct. The gap between σn (noise) and σtot (noise + offset) is how much of your resolution offset costs you — and offset, not noise, usually sets the limit.',
     },
   },
   metastability: {

@@ -1,4 +1,4 @@
-import type { BerResult, VcoWickedMismatch, VcoWickedVerdict, VcoWickedWcd, VcoWickedYieldSweep, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, WcdResult, WickedCornersResult, WickedFlowResult, WickedImportanceResult, YieldResult } from './types'
+import type { ResolutionResult, BerResult, VcoWickedMismatch, VcoWickedVerdict, VcoWickedWcd, VcoWickedYieldSweep, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, WcdResult, WickedCornersResult, WickedFlowResult, WickedImportanceResult, YieldResult } from './types'
 
 async function post<T>(path: string, params: Params): Promise<T> {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
@@ -8,6 +8,8 @@ export const metastability = (params: Params) => post<MetastabilityResult>('/api
 export const ber = (params: Params) => post<BerResult>('/api/ber', params)
 export const sensitivity = (params: Params) => post<SensitivityResult>('/api/sensitivity', params)
 export const maxfclk = (params: Params) => post<MaxFclkResult>('/api/maxfclk', params)
+// metastability + offset MC + BER on one amplitude axis, in one call
+export const resolution = (params: Params) => post<ResolutionResult>('/api/resolution', params)
 
 export async function vcoSimulate(params: VcoParams, doTuning = false): Promise<VcoResult> {
   const r = await fetch('/api/vco/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, do_tuning: doTuning }) })

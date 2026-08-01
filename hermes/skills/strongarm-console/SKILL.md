@@ -89,6 +89,20 @@ leaves L where the user fixed it (`optimize_l` defaults to false) and reports
   question, and worth mentioning that on ptm45 the input pair at 160 nm beats the
   seed's 80 nm on both speed (452 vs 530 ps) and matching (1.39 vs 1.85 mV σ).
 
+## Input resolution: one call, not three
+
+`/api/resolution` (`strongarm_run_sim`'s console sibling) returns the τ sweep, the
+Monte-Carlo offset σ, the noise σ and the BER curve **on one amplitude axis**.
+Prefer it over asking for metastability, offset and BER separately — they are three
+faces of one measurement, and two facts only show up together:
+
+- **`resolved: true` does not mean correct.** At 10 µV the latch reaches a rail
+  after 993 ps with BER 0.498. Never report "resolves down to X µV" from the
+  metastability sweep alone; quote `markers_uv.min_input_total`.
+- **Offset sets the floor, not noise.** Measured 165 µV noise-only vs 5719 µV with
+  chip-to-chip offset — 35x. So when a user wants better resolution, the answer is
+  **input-pair area (W·L·M)**, not more tail current.
+
 ## Corners: what one corner does and does not prove
 
 `strongarm_optimize` sizes against a single corner (slow-N / −40 °C / 0.9·VDD) and

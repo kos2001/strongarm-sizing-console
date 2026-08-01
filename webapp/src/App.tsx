@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import type { BerResult, ProbitResult, Device, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
+import type { ResolutionResult, BerResult, ProbitResult, Device, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
 import { DEVICE_META } from './types'
-import { ber, fullflow, getDefaults, health, layout, maxfclk, metastability, optimize, pareto, postlayout, pvt, sensitivity, simulate, waveform, yieldRun } from './api'
+import { ber, fullflow, getDefaults, health, layout, maxfclk, metastability, resolution as apiResolution, optimize, pareto, postlayout, pvt, sensitivity, simulate, waveform, yieldRun } from './api'
 import BerChart from './components/BerChart'
 import DeviceEditor from './components/DeviceEditor'
 import FclkChart from './components/FclkChart'
 import Gauge from './components/Gauge'
 import LayoutView from './components/LayoutView'
 import MetastabilityChart from './components/MetastabilityChart'
+import ResolutionChart from './components/ResolutionChart'
 import MonteCarloChart from './components/MonteCarloChart'
 import ParetoChart from './components/ParetoChart'
 import PageHelp from './components/PageHelp'
@@ -69,12 +70,13 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
   },
 ]
 
-type Page = 'sizing' | 'circuit' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'wicked' | 'layout' | 'flow'
+type Page = 'sizing' | 'circuit' | 'resolution' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'wicked' | 'layout' | 'flow'
   | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopareto' | 'vcopn' | 'vcopvt' | 'vcoyield' | 'vcopushing' | 'vcolayout' | 'vcoflow'
 type Domain = 'comparator' | 'vco'
 const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
   { id: 'sizing', glyph: '▦' },
   { id: 'circuit', glyph: '⎓' },
+  { id: 'resolution', glyph: '◎' },
   { id: 'metastability', glyph: '⧗' },
   { id: 'maxfclk', glyph: '⎍' },
   { id: 'optimizer', glyph: '◴' },
@@ -140,6 +142,8 @@ export default function App() {
   const [layoutRes, setLayoutRes] = useState<LayoutResult | null>(null)
   const [layoutLoading, setLayoutLoading] = useState(false)
   const [metaRes, setMetaRes] = useState<MetastabilityResult | null>(null)
+  const [resRes, setResRes] = useState<ResolutionResult | null>(null)
+  const [resLoading, setResLoading] = useState(false)
   const [metaSel, setMetaSel] = useState<number | null>(null) // 메타안정성 선택점(상세)
   const [metaLoading, setMetaLoading] = useState(false)
   const [berRes, setBerRes] = useState<BerResult | null>(null)
@@ -233,6 +237,20 @@ export default function App() {
       /* ignore */
     } finally {
       setLayoutLoading(false)
+    }
+  }
+
+  // one call: the tau sweep and the noise+offset measurement, merged on the
+  // shared amplitude axis (see server.resolution_view)
+  const runResolution = async () => {
+    setResLoading(true)
+    try {
+      const r = await apiResolution(params)
+      if (!r.error) setResRes(r)
+    } catch {
+      /* ignore */
+    } finally {
+      setResLoading(false)
     }
   }
 
@@ -1035,6 +1053,58 @@ export default function App() {
             </div>
           )}
 
+          {page === 'resolution' && (
+            <div className="flex flex-col gap-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>
+                  Resolution · decision time and error rate vs one input axis
+                </div>
+                <button onClick={runResolution} disabled={busy || resLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
+                  {resLoading ? 'measuring…' : '◎ run'}
+                </button>
+              </div>
+              {resRes ? (
+                <>
+                  <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
+                    <ResolutionChart res={resRes} theme={theme} />
+                  </div>
+                  {/* the three former pages' headline numbers, on one row, because
+                      they are three faces of one measurement */}
+                  <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
+                    {([
+                      ['τ (regeneration)', resRes.tau_ps != null ? `${resRes.tau_ps} ps` : '—', 'metastability'],
+                      ['σ noise', `${resRes.sigma.noise_uv} µV`, 'noise'],
+                      ['σ offset (MC)', resRes.sigma.offset_mv != null ? `${resRes.sigma.offset_mv} mV` : '—', 'Monte-Carlo'],
+                      ['σ total', `${resRes.sigma.total_uv} µV`, 'noise ⊕ offset'],
+                      [`min Δ @ BER ${resRes.ber_target}`, `${resRes.markers_uv.min_input_total} µV`, 'with offset'],
+                      ['min Δ, noise only', `${resRes.markers_uv.min_input_noise} µV`, 'offset-free bound'],
+                    ] as const).map(([label, value, note]) => (
+                      <div key={label} className="rounded-xl p-3" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                        <div className="mono text-[10px] uppercase tracking-[0.14em]" style={{ color: 'var(--faint)' }}>{label}</div>
+                        <div className="mono tnum text-[15px] mt-1" style={{ color: 'var(--text)' }}>{value}</div>
+                        <div className="mono text-[10px] mt-0.5" style={{ color: 'var(--faint)' }}>{note}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* offset vs noise: which one actually limits resolution */}
+                  {resRes.markers_uv.min_input_noise > 0 && (
+                    <div className="rounded-xl p-3" style={{ background: 'color-mix(in srgb, var(--warn) 7%, var(--surface-2))', border: '1px solid color-mix(in srgb, var(--warn) 35%, var(--line))' }}>
+                      <div className="mono text-[11px] tnum" style={{ color: 'var(--text)' }}>
+                        offset costs {(resRes.markers_uv.min_input_total / resRes.markers_uv.min_input_noise).toFixed(1)}× resolution
+                        {' — '}min input {resRes.markers_uv.min_input_noise} µV noise-only vs {resRes.markers_uv.min_input_total} µV with chip-to-chip offset.
+                        {' '}Grow input-pair area (W·L·M) to close that gap; more tail current will not.
+                      </div>
+                    </div>
+                  )}
+                  <div className="mono text-[11px] leading-relaxed" style={{ color: 'var(--muted)' }}>{resRes.reading}</div>
+                </>
+              ) : (
+                <div className="rounded-2xl p-5 mono text-[12px]" style={{ background: 'var(--surface)', border: '1px solid var(--line)', color: 'var(--muted)' }}>
+                  Metastability (τ), Monte-Carlo offset and BER answer one question about one variable — how small an input this comparator can be given. Run once to see all three on a shared amplitude axis.
+                </div>
+              )}
+            </div>
+          )}
           {page === 'metastability' && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3">
