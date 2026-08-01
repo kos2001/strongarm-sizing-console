@@ -730,6 +730,83 @@ def optimize_pareto(base, targets, pop=16, gens=6, seed=7):
                 pts, {"power_uw": "power_uw", "decision_time_ps": "decision_time_ps"})}
 
 
+def _ber_at(v, sigma):
+    """P(wrong decision) at differential input v for a balanced comparator."""
+    return 0.5 * math.erfc(v / (sigma * math.sqrt(2))) if sigma > 0 else 0.0
+
+
+def _input_sigmas(params):
+    """The two input-referred error sources, both measured: per-decision noise
+    (gm-based, SPICE) and chip-to-chip offset σ (Monte-Carlo Vth mismatch).
+    One `run_sim` call produces both — which is why the noise, offset and BER
+    views are three faces of a single measurement rather than three analyses."""
+    r = run_sim.run_sim(params, do_offset=True, with_noise=True)
+    nz_uv = r["nominal"].get("noise_uv_rms")
+    off = r.get("offset") or {}
+    os_mv = off.get("offset_sigma_mv")
+    if not nz_uv:
+        return None
+    sig_vn = nz_uv * 1e-6
+    sig_os = (os_mv or 0.0) * 1e-3
+    return {"nominal": r["nominal"], "offset": off,
+            "noise_uv_rms": nz_uv, "offset_sigma_mv": os_mv,
+            "sigma_noise_v": sig_vn, "sigma_offset_v": sig_os,
+            "sigma_total_v": math.sqrt(sig_vn ** 2 + sig_os ** 2)}
+
+
+def resolution_view(params, ber_target=1e-3):
+    """**One axis, one story.** The metastability, Monte-Carlo offset and BER views
+    all answer the same question about the same variable — given a differential
+    input of amplitude Vin, how long does the decision take, and how often is it
+    wrong — so they are reported together on a shared amplitude axis.
+
+    They were not merely adjacent: `ber_curve` already ran the Monte-Carlo offset
+    that the offset view displays, and both sweeps used the same 10 µV..100 mV log
+    axis. Here the SPICE work happens once — the τ sweep and one noise+offset
+    measurement, in parallel — and BER is evaluated analytically at the sweep's own
+    amplitudes, so the curves land on identical x values with no extra simulation.
+
+    The three regimes this makes visible at a glance:
+      * below σ_total the decision is a coin flip however long you wait;
+      * around it, t_dec diverges as τ·ln(V_logic/Vin) — slow *and* unreliable;
+      * above `min_input_total_uv`, resolution is fast and the error rate is set
+        by the spec, not the circuit."""
+    meta, sig = _pmap(lambda f: f(), [lambda: run_sim.metastability_sweep(params),
+                                      lambda: _input_sigmas(params)])
+    if sig is None:
+        return {"error": "input-referred noise unavailable (comparator did not resolve)"}
+    st, sn = sig["sigma_total_v"], sig["sigma_noise_v"]
+    pts = []
+    for pt in meta["points"]:
+        v = pt["vin_v"]
+        pts.append({"vin_v": v,
+                    "decision_time_ps": pt["decision_time_ps"],
+                    "resolved": pt["resolved"],
+                    "ber_noise": _ber_at(v, sn),
+                    "ber_total": _ber_at(v, st)})
+    k = _erfcinv(2 * ber_target) * math.sqrt(2)
+    return {
+        "points": pts,
+        "tau_ps": meta["tau_ps"], "intercept_ps": meta["intercept_ps"],
+        "min_resolved_v": meta["min_resolved_v"],
+        "nominal": sig["nominal"], "offset": sig["offset"],
+        "sigma": {"noise_uv": sig["noise_uv_rms"],
+                  "offset_mv": sig["offset_sigma_mv"],
+                  "total_uv": round(st * 1e6, 1)},
+        "markers_uv": {"sigma_noise": round(sn * 1e6, 2),
+                       "sigma_offset": round(sig["sigma_offset_v"] * 1e6, 2),
+                       "sigma_total": round(st * 1e6, 1),
+                       "min_input_noise": round(sn * k * 1e6, 2),
+                       "min_input_total": round(st * k * 1e6, 2)},
+        "ber_target": ber_target,
+        "reading": ("One amplitude axis. Left: measured decision time (τ·ln(1/Vin) "
+                    "regeneration). Right: error probability from the same run's "
+                    "noise and offset σ. `min_input_total` is the smallest input "
+                    "that meets the BER target once chip-to-chip offset is "
+                    "included — offset, not noise, usually sets it."),
+    }
+
+
 def ber_curve(params, ber_target=1e-3):
     """Decision error-rate vs input amplitude, from the SPICE-measured
     input-referred noise (gm-based) and offset σ (Monte-Carlo). For a balanced
@@ -1676,6 +1753,11 @@ class Handler(BaseHTTPRequestHandler):
                 full.update({k: v for k, v in payload.get("params", {}).items() if k != "devices"})
                 full["devices"] = run_sim.merge_devices(payload.get("params", {}).get("devices"))
                 self._json(ber_curve(full))
+            elif self.path == "/api/resolution":
+                # metastability + offset MC + BER on one amplitude axis, one call
+                payload = self._read_json()
+                self._json(resolution_view(run_sim._full(payload.get("params", {})),
+                                           float(payload.get("ber_target", 1e-3))))
             elif self.path == "/api/brief":
                 payload = self._read_json()
                 self._json(design_brief(payload.get("params", {}), payload.get("targets")))

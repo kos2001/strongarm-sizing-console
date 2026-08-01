@@ -190,6 +190,42 @@ Two bugs this surfaced, both fixed:
    optimizer paid an offset penalty against that phantom. All area math now goes
    through `run_sim.effective_l_nm` / `gate_area_um2`.
 
+## Merging related sidebar pages
+
+The console has 24 pages (14 comparator + 10 VCO), several of which are views of
+one underlying measurement rather than separate analyses. The overlap is in the
+code, not just the visual design:
+
+**Built — `Resolution (merged)`, replacing three pages' worth of reading.**
+Metastability, Monte-Carlo offset and BER all answer one question about one
+variable: how small a differential input this comparator can be given. `ber_curve`
+was already running the offset Monte-Carlo that the Monte-Carlo page displays, and
+both sweeps used the same 10 µV..100 mV log axis. `/api/resolution` measures once —
+the τ sweep and one noise+offset run, in parallel — and evaluates BER analytically
+at the sweep's own amplitudes, so both curves land on identical x values.
+
+What the merge buys is not speed (it is the same 158 simulations either way; the
+deck cache already deduplicated the repeated offset MC across the three separate
+calls). It is that two things only visible together:
+
+- **"Resolved" does not mean "correct."** At 10 µV the latch reaches a rail — the
+  metastability view reports `resolved: true` — while BER is 0.498. A coin flip
+  that took 993 ps.
+- **Offset, not noise, sets the floor.** Minimum usable input is 165 µV on noise
+  alone but 5719 µV once chip-to-chip offset is included: a 35x difference. The
+  fix is input-pair area, not tail current — and the page says so.
+
+**Not built, but the same argument applies** (recorded here rather than acted on):
+
+| candidate merge | why they are one story |
+|---|---|
+| `pvt` + `yield` + `wicked` | all statistical sign-off; the WiCkeD flows already run corner and yield sweeps internally |
+| `optimizer` + `pareto` + `sensitivity` | one sizing decision; `pareto` now returns `sizing_relation`, which is exactly the bridge |
+| `layout` + `flow` | `flow` already runs layout + DRC as one of its stages |
+| `vcopn` + `vcopushing` | both are supply/spectral sensitivity of the same oscillator |
+| `vcopvt` + `vcoyield` | the VCO half of the robustness cluster |
+| comparator vs VCO `pvt`/`layout`/`pareto`/`flow` | identical views over a different circuit — candidates for one page with a domain toggle rather than parallel trees |
+
 ## Sizing corners: one worst case, or all 45?
 
 Measured, because the answer is two-sided and easy to over-claim. Sampled 24
