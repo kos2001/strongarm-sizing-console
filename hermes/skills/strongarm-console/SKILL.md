@@ -63,10 +63,25 @@ verbatim when they appear:
   it forces L up ~2.3x, which is why LVT PMOS measures *slower* there (189.9 ps vs
   160.6 ps svt). Do not tell a user "LVT is faster" on sky130 PMOS.
 
-Vth genuinely moves the metrics (asap7: 35.3→51.0 ps and 12.2→9.2 µW across the
-flavors), and mixed assignments are not dominated by uniform ones — so let the
-search decide rather than prescribing a flavor. Offset caveat: per-flavor `A_VT`
-is not modelled, so flavor affects offset only through the simulated Vth.
+Vth genuinely moves the metrics (asap7 at L=21nm: 18.1→24.9 ps and 10.9→7.82 µW
+across the flavors), and mixed assignments are not dominated by uniform ones — so
+let the search decide rather than prescribing a flavor. Offset caveat: per-flavor
+`A_VT` is not modelled, so flavor affects offset only through the simulated Vth.
+
+### `l_nm` — L is searched too, and its bounds are per backend
+
+`strongarm_optimize` also searches channel length (`optimize_l`, default on) and
+reports `final_l_nm` + `l_note` + `l_range_nm`. Two things to know:
+
+- **W and L are not interchangeable.** At equal gate area — so equal Pelgrom
+  offset — input 8.0µ×80n resolves in 530 ps but 4.0µ×160n takes 800 ps. And L is
+  non-monotonic in speed: on ptm45 the input pair is *faster* at 160 nm (452 ps)
+  than at 80 nm (530 ps) **and** matches better (1.39 vs 1.85 mV σ). Do not size L
+  by rule; the optimum is interior.
+- **Each backend's L is different and the backend now enforces it.** ptm45
+  45–200 nm (below 45 the card has no model and the deck errors), sky130
+  150–500 nm (per-device bin floor), asap7 21–200 nm, gaa2nm 10–120 nm. If you
+  omit `l_nm`, you get that node's nominal — you no longer have to send it.
 
 ## Tool-call discipline
 

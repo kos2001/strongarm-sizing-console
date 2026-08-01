@@ -46,7 +46,7 @@ offset MC ≈ 10x a plain sim, `optimize` ≈ 35x, `vco_optimize` ≈ 100x, sky1
 | `strongarm_wicked_corners` | 0.39s | ~0.00s | |
 | `strongarm_run_sim` (**+offset MC**) | 0.99s | ~0.00s | **10x the no-offset call** |
 | `strongarm_pareto` (NSGA-II) | 1.04s | ~0.01s | |
-| `strongarm_optimize` (DE+GP, 108 sims) | 3.51s | ~0.02s | |
+| `strongarm_optimize` (DE+GP, then L and Vt passes) | 5.51s | ~0.02s | `optimize_l: false, optimize_vt: false` → 3.52s |
 | `strongarm_fullflow` | 3.34s | ~0.02s | optimize + post-layout + PVT + DRC |
 | `vco_simulate` | 0.24s | ~0.00s | |
 | `vco_tuning` | 0.38s | ~0.00s | |
@@ -60,10 +60,15 @@ Same endpoint, different `params.model` — this is the biggest lever you contro
 
 | backend | `run_sim` | `pvt` 45 | `optimize` | vs ptm45 |
 |---|---|---|---|---|
-| `gaa2nm` | 0.07s | 0.39s | 3.24s | 0.9x |
-| `ptm45` (default) | 0.10s | 0.45s | 3.56s | 1.0x |
-| `asap7` | 0.53s | 0.70s | 5.43s | ~1.5x |
-| `sky130` | 0.43s | 1.72s | **15.58s** | **~4.4x** |
+| `gaa2nm` | 0.07s | 0.39s | 5.43s (3.20s W-only) | 0.9x |
+| `ptm45` (default) | 0.10s | 0.45s | 5.51s (3.52s W-only) | 1.0x |
+| `asap7` | 0.53s | 0.70s | 7.60s (5.24s W-only) | ~1.4x |
+| `sky130` | 0.43s | 1.72s | **27.0s** (22.5s W-only) | **~4.9x** |
+
+`optimize` searches W, then L, then Vt. The L and Vt passes are what the
+parenthesised W-only figure drops; they typically pay for themselves (ptm45
+26.7→15.4 µW, sky130 1.145→0.043 µW), so **do not turn them off to save a few
+seconds** — turn them off only when the user has fixed L or the Vt flavor by hand.
 
 ## Routing rules
 
