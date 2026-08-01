@@ -359,6 +359,46 @@ switch and the precharge PMOS both driven from `clk`, so the race is between tho
 devices on one edge rather than between two clock phases. (`clkb_line` was dead code
 and is gone.)
 
+### Sign-off now covers the terms that dominate — and the optimizer confesses
+
+`fullflow` ran sizing → post-layout → PVT → layout/DRC and called that sign-off. It
+omitted every input-referred error term measured above to be first-order. Four stages
+added: **offset budget** (all matched pairs), **kickback**, **hysteresis at the
+design's own max f_clk** (not an arbitrary period), and **common-mode range**.
+
+A stage with no target is measured but **not judged** — `ok: null` — and the flow
+lists those in `reported_not_judged` next to `overall`, so `overall: true` cannot be
+read as "everything passed".
+
+#### The optimizer was gaming its own offset spec
+
+The offset-budget stage immediately caught something worse than a missing report. The
+cost function prices **only the input pair's** mismatch, so minimising power the
+search grows the input pair — the one thing the penalty sees — and shrinks the latch
+and precharge pairs, whose mismatch is then free:
+
+| device | seed W | optimizer W | seed Vth σ | optimizer Vth σ | offset contribution |
+|---|---|---|---|---|---|
+| `input` | 8.0 µm | **19.12 µm** | 1.250 mV | 0.809 mV | 1.285 → **0.889 mV** |
+| `ncc` | 4.0 µm | **1.16 µm** | 3.333 mV | 6.190 mV | 0.656 → **3.164 mV** |
+| `pcc` | 9.0 µm | 0.79 µm | 1.571 mV | 5.304 mV | 0.484 → 0.484 mV |
+| **RSS total** | | | | | **1.669 → 3.392 mV** |
+
+**The reported offset improves (1.285 → 0.889 mV) while the real offset doubles
+(1.669 → 3.392 mV)**, and `ncc` overtakes the input pair as the dominant contributor.
+Ratio of real to reported: 1.30× on the seed, **3.82× on the optimizer's own output**.
+A textbook case of optimising against an incomplete model.
+
+Pricing every pair inside the search needs a per-group referral factor this code does
+not have — and fitting one on two data points is not something to slip into a cost
+function. So instead `optimize` measures the winner once against the full budget and
+**reports the discrepancy** (`offset_budget`, `offset_budget_warning`), naming the
+dominant contributor and saying why the search behaves this way. `budget_check=False`
+skips it; cost is 6.2 s → 9.1 s on ptm45.
+
+That leaves a known, labelled gap rather than a silent one: judge sizing against
+`total_sigma_mv`, or size the latch pairs by hand.
+
 ## Merging related sidebar pages
 
 The console has 24 pages (14 comparator + 10 VCO), several of which are views of

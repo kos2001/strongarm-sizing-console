@@ -241,7 +241,8 @@ def _xkey(base, x):
 
 
 def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
-             corner_aware=True, corner_relax=2.5, optimize_vt=True, optimize_l=False):
+             corner_aware=True, corner_relax=2.5, optimize_vt=True, optimize_l=False,
+             budget_check=True, budget_n_mc=8):
     """Global sizing via log-space **Differential Evolution**.
 
     Minimizes power subject to offset + decision-time + functional constraints
@@ -616,6 +617,33 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
                      "total_w_um": _total_w(best), "params": copy.deepcopy(best["devices"])})
 
     r = run_sim.run_sim(best, do_offset=True, with_noise=True)   # confirm the winner's offset (MC) + report noise
+
+    # The cost function's offset term is the input pair alone, and the search exploits
+    # that: minimising power, it grows the input pair (the only thing the penalty
+    # sees) while shrinking the latch and precharge pairs, whose mismatch is then
+    # unpriced. Measured on ptm45 — input 8.0→19.12 µm, ncc 4.0→1.16 µm — the reported
+    # offset σ improves 1.285→0.889 mV while the real budget goes 1.669→3.392 mV, with
+    # ncc becoming dominant. The reported number gets better as the actual offset gets
+    # twice as bad.
+    #
+    # Fixing this properly means pricing every pair inside the cost function, which
+    # needs a per-group referral factor this code does not have. Until then the winner
+    # is measured once against the full budget and the discrepancy is reported, so a
+    # 3.8x-optimistic offset cannot leave here unlabelled. `budget_check=False` skips
+    # it if the extra time matters more than knowing.
+    budget = run_sim.offset_budget(best, n_mc=budget_n_mc) if budget_check else None
+    budget_warning = None
+    if budget:
+        io, tot = budget.get("input_only_sigma_mv"), budget.get("total_sigma_mv")
+        if io and tot and tot > 1.25 * io:
+            budget_warning = (
+                f"input-pair-only offset σ ({io}mV, re-measured here at "
+                f"n_mc={budget_n_mc}) understates the full budget ({tot}mV, RSS over "
+                f"all matched pairs) by {tot / io:.2f}x — "
+                f"dominant contributor: {budget.get('dominant', ['?'])[0]}. The cost "
+                f"function does not price latch/precharge mismatch, so the search "
+                f"shrinks those devices for power. Size them by hand or judge against "
+                f"total_sigma_mv.")
     meas, v = _verdicts(r["nominal"], r.get("offset"), targets)
     surrogate_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
     traj.append({"action": f"confirm best (Monte-Carlo offset) · {n_sims[0]} SPICE evals{surrogate_note}",
@@ -650,6 +678,9 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
             "l_range_nm": list(run_sim.l_range_nm(best)),
             "l_report": run_sim.l_report(best),
             # kickback, if it was part of the constraint set
+            # full offset budget of the winner + a loud flag if the cost function's
+            # input-pair-only offset term is optimistic (it usually is — see above)
+            "offset_budget": budget, "offset_budget_warning": budget_warning,
             "kickback_target_mv": kb_t,
             "final_kickback": (run_sim.measure_kickback(best, **kb_drive) if kb_t else None),
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
@@ -2094,8 +2125,73 @@ class Handler(BaseHTTPRequestHandler):
                 lay_ok = bool(lay["drc"]["clean"])
                 stages.append({"name": "Layout + DRC (GDSII)", "ok": lay_ok,
                                "detail": f"cell {lay['area_um2']}µm², {'DRC clean' if lay_ok else str(lay['drc']['n_violations']) + ' DRC violations'}, GDS written"})
+
+                # 5) the input-referred error budget the earlier stages leave out.
+                # Stage 1's offset σ is the input pair alone, and nothing above looks
+                # at kickback — which measures well above that σ — so a flow that
+                # stopped at stage 4 called a design signed off while its largest
+                # input-referred term was unmeasured. These run in parallel; each is
+                # judged only if a target for it exists, and otherwise reported.
+                mf, budget, kb, cmr = _pmap(lambda f: f(), [
+                    lambda: run_sim.max_fclk_sweep(fin),
+                    lambda: run_sim.offset_budget(fin, n_mc=10),
+                    lambda: run_sim.measure_kickback(fin,
+                                                     rs_ohm=float(fin.get("rs_ohm") or 2000.0),
+                                                     cs_ff=float(fin.get("cs_ff") or 50.0)),
+                    lambda: run_sim.cm_range_sweep(fin),
+                ])
+                tot = budget.get("total_sigma_mv")
+                budget_ok = tot is not None and tot <= targets["offset_sigma_mv"]
+                stages.append({
+                    "name": "Offset budget (all matched pairs)", "ok": budget_ok,
+                    "detail": (f"RSS {tot}mV vs input-pair-only "
+                               f"{budget.get('input_only_sigma_mv')}mV; dominant "
+                               f"{', '.join(budget.get('dominant', [])[:2])}")})
+
+                kb_t = targets.get("kickback_diff_mv")
+                kb_d = kb.get("kickback_diff_mv")
+                stages.append({
+                    "name": "Kickback (input disturbance)",
+                    "ok": (None if kb_t is None else (kb_d is not None and kb_d <= kb_t)),
+                    "detail": (f"{kb_d}mV differential, {kb.get('kickback_se_mv')}mV "
+                               f"single-ended (Rs {kb.get('rs_ohm')}Ω, Cs {kb.get('cs_ff')}fF)"
+                               + (f" vs target {kb_t}mV" if kb_t else
+                                  " — no target set, reported only"))})
+
+                # Hysteresis at the period this design will actually run at, not an
+                # arbitrary one: measured at its own max f_clk it is the memory the
+                # circuit really has to live with.
+                hy_period = (1.0 / mf["max_fclk_ghz"]) if mf.get("max_fclk_ghz") else 1.0
+                hy = run_sim.measure_hysteresis(fin, clk_period_ns=round(hy_period, 4))
+                hy_mv = hy.get("hysteresis_mv")
+                hy_ok = (None if hy_mv is None else hy_mv <= targets["offset_sigma_mv"])
+                stages.append({
+                    "name": "Hysteresis at max f_clk",
+                    "ok": hy_ok,
+                    "detail": (f"{hy_mv}mV at {hy.get('clk_period_ns')}ns "
+                               f"({mf.get('max_fclk_ghz')}GHz), residue "
+                               f"{hy.get('reset_residue_mv')}mV"
+                               if hy_mv is not None else hy.get("error", "not measurable"))})
+
+                cm_ok = cmr.get("usable_vcm_frac") is not None and \
+                    cmr.get("at_current_vcm", {}).get("functional") is True
+                stages.append({
+                    "name": "Common-mode range", "ok": cm_ok,
+                    "detail": (f"usable vcm_frac {cmr.get('usable_vcm_frac')}, "
+                               f"{cmr.get('speed_spread')}× speed spread; current point "
+                               f"{(cmr.get('at_current_vcm') or {}).get('decision_time_ps')}ps "
+                               f"vs best {(cmr.get('fastest') or {}).get('decision_time_ps')}ps")})
+                # A stage with ok=None was measured but not judged, because no target
+                # for it was supplied. Counting None as a failure would make every
+                # flow fail the moment a spec is merely *reported*, so the overall
+                # verdict is over the judged stages only, and the unjudged ones are
+                # named so "overall: true" cannot be mistaken for "everything passed".
+                judged = [s["ok"] for s in stages if s["ok"] is not None]
                 self._json({"stages": stages, "final_params": fin, "verdicts": opt["verdicts"],
-                            "overall": all(s["ok"] for s in stages), "pvt": pvt_c,
+                            "overall": (all(judged) if judged else None), "pvt": pvt_c,
+                            "reported_not_judged": [s["name"] for s in stages if s["ok"] is None],
+                            "offset_budget": budget, "kickback": kb,
+                            "hysteresis": hy, "cm_range": cmr, "max_fclk": mf,
                             "final_power_uw": opt["final_power_uw"], "layout": lay})
             elif self.path == "/api/optimize":
                 payload = self._read_json()
@@ -2110,7 +2206,8 @@ class Handler(BaseHTTPRequestHandler):
                                     corner_aware=bool(payload.get("corner_aware", True)),
                                     corner_relax=float(payload.get("corner_relax", 2.5)),
                                     optimize_vt=bool(payload.get("optimize_vt", True)),
-                                    optimize_l=bool(payload.get("optimize_l", False))))
+                                    optimize_l=bool(payload.get("optimize_l", False)),
+                                    budget_check=bool(payload.get("budget_check", True))))
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as e:  # surface errors to the UI
