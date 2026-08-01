@@ -68,42 +68,26 @@ across the flavors), and mixed assignments are not dominated by uniform ones —
 let the search decide rather than prescribing a flavor. Offset caveat: per-flavor
 `A_VT` is not modelled, so flavor affects offset only through the simulated Vth.
 
-### `l_nm` — L is searched too, and its bounds are per backend
+### `l_nm` — L is **fixed**; W and M are the sizing knobs
 
-`strongarm_optimize` also searches channel length (`optimize_l`, default on) and
-reports `final_l_nm` + `l_note` + `l_range_nm`. Two things to know:
+Channel length is a methodology choice, not a searched variable — different L per
+latch group breaks the symmetry the comparator's matching relies on. `optimize`
+leaves L where the user fixed it (`optimize_l` defaults to false) and reports
+`final_l_nm` + `l_report`.
 
-- **W and L are not interchangeable.** At equal gate area — so equal Pelgrom
-  offset — input 8.0µ×80n resolves in 530 ps but 4.0µ×160n takes 800 ps. And L is
-  non-monotonic in speed: on ptm45 the input pair is *faster* at 160 nm (452 ps)
-  than at 80 nm (530 ps) **and** matches better (1.39 vs 1.85 mV σ). Do not size L
-  by rule; the optimum is interior.
-- **Each backend's L is different and the backend now enforces it.** ptm45
-  45–200 nm (below 45 the card has no model and the deck errors), sky130
-  150–500 nm (per-device bin floor), asap7 21–200 nm, gaa2nm 10–120 nm. If you
-  omit `l_nm`, you get that node's nominal — you no longer have to send it.
-
-## Tool-call discipline
-
-**Which** tool to reach for, and what each one costs in SPICE seconds, is in
-`strongarm-fast-loop` — read that before the first call of a sizing turn. The
-rules here are about the shape of a turn; that skill is about its cost.
-
-These flows were tuned so one agent turn ≈ one minute:
-
-1. **Pass the design state through.** The UI panels send the current params
-   JSON in the message; put it (plus your deltas) directly into the tool's
-   `params` argument in ONE call. Do not re-derive or re-simulate baselines.
-2. **At most 2 tool calls per request** (3 when editing netlist text:
-   `*_netlist` → edit → `spice_run_netlist`). No terminal/file tools, no
-   explore-verify loops.
-3. **Structural circuit edits** go through the text path: export deck, edit,
-   run, and include the full modified deck in a ```spice block so the UI can
-   offer it for download/import.
-4. **Size proposals** end with a ```json block —
-   `{"devices": {…changed only…}, "vdd": …}` (comparator) or
-   `{"devices": …, "n_stages": odd ≥3, "vctrl": …}` (VCO) — so the UI's
-   ↧ apply button works.
+- **Omit `l_nm` and you get the node's nominal** — ptm45 80/45 nm, sky130 150 nm,
+  asap7 21 nm, gaa2nm 20/14 nm. You no longer have to send it, and you should not
+  carry a 45 nm-class L onto a 7 nm or 2 nm-class backend.
+- **Check `l_report.out_of_range`.** With L fixed, a bad fixed value is the quiet
+  failure: below 45 nm the PTM card has no model and the deck *errors*, which
+  surfaces as "non-functional" rather than "bad input". Say so instead of
+  reporting a broken sizing.
+- **`l_report.raised_by_pdk`** — sky130 silently builds a longer device than
+  asked when the request is under the bin floor. Report the L that was built.
+- Do not propose per-device L changes as a sizing move. If the user asks what a
+  different *fixed* L would buy, that is `optimize_l: true` — an exploratory
+  question, and worth mentioning that on ptm45 the input pair at 160 nm beats the
+  seed's 80 nm on both speed (452 vs 530 ps) and matching (1.39 vs 1.85 mV σ).
 
 ## Physics cheatsheet (for sane proposals)
 

@@ -236,6 +236,37 @@ def clamp_l_nm(p, dev, l_nm):
     return max(lo, min(hi, float(l_nm)))
 
 
+def l_report(p):
+    """Validate the fixed channel lengths. L is a methodology choice here, not a
+    searched variable, so the one thing that can silently go wrong is a fixed L
+    the backend cannot honour:
+
+      * below the range — on ptm45 the card has no model there and the deck
+        errors out, which reads as "non-functional" rather than "bad input";
+      * above it — the latch stops resolving;
+      * on sky130, between the request and the PDK bin floor, where the deck
+        quietly builds a longer device than asked for.
+
+    Returns the requested L, what is actually built, and anything out of range.
+    Both judgements are made on the **effective** L, because that is the device
+    that exists: a sky130 request below the bin floor is raised and is fine, while
+    the same request on ptm45 has nothing to raise it and dies."""
+    lo, hi = l_range_nm(p)
+    req, eff, out, raised = {}, {}, {}, {}
+    for dev, d in p["devices"].items():
+        r = float(d["l_nm"])
+        e = effective_l_nm(p, dev)
+        req[dev], eff[dev] = r, e
+        if e != r:
+            raised[dev] = f"{r:g}→{e:g}nm (PDK bin floor)"
+        if e < lo:
+            out[dev] = f"L {e:g}nm below {lo:g}nm — this backend has no model there, the deck will error"
+        elif e > hi:
+            out[dev] = f"L {e:g}nm above {hi:g}nm — the latch stops resolving"
+    return {"l_nm": req, "effective_nm": eff, "range_nm": [lo, hi],
+            "out_of_range": out, "raised_by_pdk": raised}
+
+
 def effective_l_nm(p, dev):
     """The L the device is actually **built with**, which is not always the L in
     the params: on sky130 the netlist raises L to the device's bin floor (0.15 µm,

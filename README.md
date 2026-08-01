@@ -145,11 +145,16 @@ Vth and through W·L·M, never through a different mismatch coefficient. Speed a
 power effects are simulated; the offset effect is partial. An offset-critical
 flavor decision needs the foundry's per-flavor Pelgrom data.
 
-### `l_nm` — L is searched too, with per-backend bounds
+### `l_nm` — L is **fixed**, and validated
 
-`strongarm_optimize` searches channel length as well (`optimize_l`, default on),
-reporting `final_l_nm`, `l_note` and `l_range_nm`. **Omit `l_nm` and you get that
-node's nominal L** — the backend now knows it:
+Channel length is a methodology choice here, not a per-device free variable:
+drawing the latch's groups at different L breaks the symmetry the comparator's
+matching depends on, complicates the layout, and the PDK's Vt binning and corner
+characterization are cleanest at a chosen L. **The sizing knobs are W and M.**
+
+`optimize` therefore leaves every L exactly where you fixed it
+(`optimize_l=False`, the default). **Omit `l_nm` and you get that node's nominal
+L** — the backend now knows it:
 
 | backend | usable L | nominal (input / other) |
 |---|---|---|
@@ -158,20 +163,19 @@ node's nominal L** — the backend now knows it:
 | `asap7` | 21–200 nm | 21 / 21 nm |
 | `gaa2nm` | 10–120 nm | 20 / 14 nm |
 
-Bounds are measured, not assumed: below 45 nm the PTM card has no model and the
-deck **errors out**; gaa2nm stops resolving at 8 nm and sky130 beyond ~500 nm.
+Because L is fixed, a *wrongly* fixed L is the one thing that can go quiet, so
+`l_report` validates it against the measured range — below 45 nm the PTM card has
+no model and **the deck errors out**, which otherwise reads as "non-functional"
+rather than "bad input". Judgement is made on the L actually built: a sky130
+request under the bin floor is raised and reported (`raised_by_pdk`), not failed.
 
-Why it needs searching rather than a rule:
-
-- **W and L are not interchangeable.** At identical gate area — identical Pelgrom
-  offset — input 8.0 µm × 80 nm resolves in 530 ps while 4.0 µm × 160 nm takes
-  800 ps.
-- **L is non-monotonic in speed.** On ptm45 the input pair is *faster* at 160 nm
-  (452 ps) than at the hand-picked 80 nm (530 ps) **and** matches better (1.39 vs
-  1.85 mV σ) — the seed sizing's L was strictly dominated. The optimum is interior.
-- In `optimize`: ptm45 26.7→**16.9 µW** from the L pass alone (→15.4 with Vt),
-  gaa2nm 18.7→17.5 µW. sky130/asap7 already sit at their L floor, so the pass
-  reports "already best" and costs only the sweep.
+If you want to know what a *different fixed* L would buy — a seed-selection
+question — `optimize_l: true` runs an exploratory pass. Measured on ptm45, the
+input pair at 160 nm is both faster than the seed's 80 nm (452 vs 530 ps) **and**
+better matched (1.39 vs 1.85 mV σ), so 80 nm is worth revisiting as a fixed
+choice. Note also that W and L are not interchangeable: at identical gate area —
+identical Pelgrom offset — 8.0 µm × 80 nm resolves in 530 ps while 4.0 µm × 160 nm
+takes 800 ps.
 
 Two bugs this surfaced, both fixed:
 
