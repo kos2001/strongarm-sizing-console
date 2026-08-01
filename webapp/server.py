@@ -12,17 +12,28 @@ Run:  python3 server.py [port]     (default 8770)
 The Vite dev server proxies /api to this port (see vite.config.ts).
 """
 import copy
+import gzip
 import json
 import math
 import mimetypes
 import os
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ngspice runs as a subprocess (releases the GIL), so independent evaluations
 # parallelize for real. Cap workers so a big DE/PVT sweep can't fork-bomb.
+# (run_sim._ng_gate bounds the total process count across nested pools.)
 _WORKERS = max(2, min(8, (os.cpu_count() or 4)))
+
+# Response compression. Bodies below the threshold aren't worth the framing.
+_GZIP_MIN = 1024
+_GZIP_LEVEL = 6
+# The built assets are content-hashed and immutable, so their compressed bytes
+# are worth keeping instead of re-gzipping ~370 KiB of JS on every page load.
+_static_gz = {}
+_static_gz_lock = threading.Lock()
 
 
 def _pmap(fn, items):
@@ -1297,14 +1308,33 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _json(self, obj, code=200):
-        body = json.dumps(obj).encode()
+    def _send(self, body, ctype, code=200, headers=(), precompressed=None):
+        """One exit for every response, so compression is decided in one place.
+
+        The big payloads here are highly repetitive JSON — 45 PVT corners, Pareto
+        fronts, waveform arrays — and the JS bundle. gzip cuts those ~3-8x on the
+        wire. Below the threshold the framing overhead outweighs the saving, so
+        small bodies go out as-is."""
+        enc = None
+        if len(body) >= _GZIP_MIN and "gzip" in self.headers.get("Accept-Encoding", ""):
+            if precompressed is not None:
+                body, enc = precompressed, "gzip"
+            else:
+                body, enc = gzip.compress(body, _GZIP_LEVEL), "gzip"
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", ctype)
         self._cors()
+        if enc:
+            self.send_header("Content-Encoding", enc)
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
+        for k, v in headers:
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def _json(self, obj, code=200):
+        self._send(json.dumps(obj).encode(), "application/json", code)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -1314,7 +1344,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/health":
-            self._json({"ok": True, "ngspice": run_sim.NGSPICE})
+            self._json({"ok": True, "ngspice": run_sim.NGSPICE,
+                        "sim_cache": run_sim.ngspice_cache_stats()})
         elif path == "/api/defaults":
             self._json({"defaults": run_sim.DEFAULT_PARAMS, "targets": SPEC_TARGETS})
         elif path.startswith("/api/"):
@@ -1335,23 +1366,33 @@ class Handler(BaseHTTPRequestHandler):
         if not os.path.isfile(target):
             target = os.path.join(DIST, "index.html")  # SPA fallback
         try:
+            st = os.stat(target)
             with open(target, "rb") as fh:
                 body = fh.read()
         except OSError:
             self._json({"error": "not found"}, 404)
             return
+        # keep the compressed bytes for the (immutable) built assets — mtime+size
+        # in the key means an edited or rebuilt file is never served stale
+        gz, gzkey = None, (target, st.st_mtime_ns, st.st_size)
+        if len(body) >= _GZIP_MIN:
+            with _static_gz_lock:
+                gz = _static_gz.get(gzkey)
+            if gz is None:
+                gz = gzip.compress(body, _GZIP_LEVEL)
+                with _static_gz_lock:
+                    if len(_static_gz) > 64:     # a build has a handful of files
+                        _static_gz.clear()
+                    _static_gz[gzkey] = gz
         ctype = mimetypes.guess_type(target)[0] or "application/octet-stream"
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
         # index.html 은 절대 캐시 금지(회로 변경 후 '옛 화면' 재발 방지) —
         # 해시된 assets/* 는 immutable 캐시 허용
+        hdrs = []
         if target.endswith("index.html"):
-            self.send_header("Cache-Control", "no-cache, must-revalidate")
+            hdrs.append(("Cache-Control", "no-cache, must-revalidate"))
         elif "/assets/" in target.replace(os.sep, "/"):
-            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
-        self.end_headers()
-        self.wfile.write(body)
+            hdrs.append(("Cache-Control", "public, max-age=31536000, immutable"))
+        self._send(body, ctype, 200, hdrs, precompressed=gz)
 
     def _read_json(self):
         n = int(self.headers.get("Content-Length", 0))
@@ -1598,11 +1639,17 @@ class Handler(BaseHTTPRequestHandler):
                 pc = layout.extract_parasitics({**run_sim.DEFAULT_PARAMS, **prm,
                                                 "devices": run_sim.merge_devices(prm.get("devices"))})
                 plp = {**prm, "parasitic": True, "par_caps": pc}
-                sch = run_sim.run_sim({**prm, "parasitic": False}, do_offset=False)
-                pl = run_sim.run_sim(plp, do_offset=False)
+                sp = {**prm, "parasitic": False}
+                # four independent sims (nominal + waveform, schematic vs extracted)
+                sch, pl, wsch, wpl = _pmap(lambda job: job(), [
+                    lambda: run_sim.run_sim(sp, do_offset=False),
+                    lambda: run_sim.run_sim(plp, do_offset=False),
+                    lambda: run_sim.capture_waveform(sp),
+                    lambda: run_sim.capture_waveform(plp),
+                ])
                 self._json({
-                    "schematic": {"nominal": sch["nominal"], "waveform": run_sim.capture_waveform({**prm, "parasitic": False})},
-                    "postlayout": {"nominal": pl["nominal"], "waveform": run_sim.capture_waveform(plp)},
+                    "schematic": {"nominal": sch["nominal"], "waveform": wsch},
+                    "postlayout": {"nominal": pl["nominal"], "waveform": wpl},
                     "par_caps": pc,
                 })
             elif self.path == "/api/pvt":

@@ -260,16 +260,94 @@ meas tran iavg AVG i(Vdd) FROM=200p TO={iavg_to}n
 """
 
 
-def _run(netlist):
-    with tempfile.NamedTemporaryFile("w", suffix=".sp", delete=False) as f:
-        f.write(netlist)
-        path = f.name
-    try:
-        r = subprocess.run([NGSPICE, "-b", path], capture_output=True,
-                            text=True, timeout=60)
-        return r.stdout + "\n" + r.stderr
-    finally:
-        os.unlink(path)
+# --- ngspice invocation: one gate, one memo -----------------------------------
+# Every ngspice run is a CPU-bound process, and the thread pools in this codebase
+# nest: a 45-corner PVT fan-out calls run_sim, whose offset Monte-Carlo fans out
+# again, so per-pool limits multiply (8 x 8 = 64 processes). This bounds the total
+# process-wide instead. Measured throughput is flat from 8 to 64 slots — macOS
+# absorbs the oversubscription — so this is a resource ceiling for smaller/loaded
+# machines and a single knob for it, not a speedup. Default leaves headroom.
+_NG_SLOTS = int(os.environ.get("NGSPICE_MAX_PROCS") or 0) or max(8, os.cpu_count() or 8)
+_ng_gate = threading.BoundedSemaphore(_NG_SLOTS)
+
+# A deck's output is a deterministic function of its text, so identical decks are
+# worth remembering: coordinate descent revisits candidates, the console re-runs
+# the same sizing across pages, and sweeps overlap at their endpoints. Bounded
+# LRU on sha1(deck) — set NGSPICE_CACHE=0 to disable.
+_NG_CACHE_MAX = 4096 if os.environ.get("NGSPICE_CACHE") is None else int(os.environ["NGSPICE_CACHE"])
+_ng_cache = {}
+_ng_order = []                      # LRU order, newest last; guarded by _ng_lock
+_ng_lock = threading.Lock()
+_ng_stats = {"hits": 0, "misses": 0}
+
+# Decks that write files (waveform capture, user `wrdata` decks) have a side
+# effect beyond their stdout, so a hit would silently skip producing the file.
+_NG_SIDE_EFFECT = re.compile(r"^\s*(wrdata|write|print\s*>)", re.MULTILINE)
+
+
+def pmap(fn, items):
+    """Order-preserving parallel map for sim work. Each ngspice call is a
+    subprocess that releases the GIL, so threads are the right tool; the total
+    process count is bounded by `_ng_gate`, so the pool size here only needs to
+    be wide enough to keep that gate fed."""
+    items = list(items)
+    if len(items) < 2:
+        return [fn(i) for i in items]
+    with ThreadPoolExecutor(max_workers=min(len(items), _NG_SLOTS)) as ex:
+        return list(ex.map(fn, items))
+
+
+def ngspice_cache_stats():
+    """{hits, misses, size} — surfaced by /api/health so the cache is observable
+    rather than a silent behaviour change."""
+    with _ng_lock:
+        return {**_ng_stats, "size": len(_ng_cache), "max": _NG_CACHE_MAX,
+                "max_procs": _NG_SLOTS}
+
+
+def _ng_cache_get(key):
+    with _ng_lock:
+        if key not in _ng_cache:
+            _ng_stats["misses"] += 1
+            return None
+        _ng_stats["hits"] += 1
+        try:
+            _ng_order.remove(key)
+        except ValueError:
+            pass
+        _ng_order.append(key)
+        return _ng_cache[key]
+
+
+def _ng_cache_put(key, val):
+    with _ng_lock:
+        if key not in _ng_cache:
+            _ng_order.append(key)
+        _ng_cache[key] = val
+        while len(_ng_order) > _NG_CACHE_MAX:
+            _ng_cache.pop(_ng_order.pop(0), None)
+
+
+def _run(netlist, cache=True):
+    cacheable = cache and _NG_CACHE_MAX > 0 and not _NG_SIDE_EFFECT.search(netlist)
+    key = hashlib.sha1(netlist.encode()).hexdigest() if cacheable else None
+    if key is not None:
+        hit = _ng_cache_get(key)
+        if hit is not None:
+            return hit
+    with _ng_gate:                  # bound total concurrent ngspice, not per pool
+        with tempfile.NamedTemporaryFile("w", suffix=".sp", delete=False) as f:
+            f.write(netlist)
+            path = f.name
+        try:
+            r = subprocess.run([NGSPICE, "-b", path], capture_output=True,
+                               text=True, timeout=60)
+            out = r.stdout + "\n" + r.stderr
+        finally:
+            os.unlink(path)
+    if key is not None:
+        _ng_cache_put(key, out)
+    return out
 
 
 def _parse(out, key):
@@ -290,21 +368,85 @@ def _sky130_lib_path():
 # cache of one-corner libs (keeps ngspice from re-parsing all 51 corners each run)
 _SKY_CACHE = os.path.join(tempfile.gettempdir(), "strongarm_sky130_corners")
 
+# The only sky130 primitives this tool instantiates (see gen_netlist / _dev_line).
+# Everything else in a corner deck is a model bank we pay to parse and never use.
+_SKY_USED_DEVICES = ("nfet_01v8", "pfet_01v8")
+
+
+def _sky130_keep_include(base):
+    """Should this include inside a sky130 corner deck be parsed?
+
+    A corner file (`corners/tt.spice`) pulls ~30 model banks: LVT/HVT variants,
+    the 3.3/5/16/20 V families, ESD devices, the NPN, the RF cards and the
+    passive (`nonfet`) bank. We instantiate only the 1.8 V core nfet/pfet
+    subckts, so every other bank is parse time spent on models the netlist never
+    references — dropping them is bit-identical, and it is the same argument the
+    outer lib already makes for the R/C and specialized-cell banks.
+
+    Kept: the corner + mismatch cards for the devices in `_SKY_USED_DEVICES`,
+    and `all.spice` (shared process/statistical `.param`s the subckts read)."""
+    if base == "all.spice":
+        return True
+    return any(f"sky130_fd_pr__{d}__" in base for d in _SKY_USED_DEVICES)
+
+
+def _sky130_prune_corner_file(path, tag):
+    """Rewrite one `corners/<c>.spice` with the unused model banks dropped and
+    relative includes made absolute. Returns the cached pruned path, or `path`
+    unchanged if pruning is disabled or anything goes wrong."""
+    if os.environ.get("SKY130_PRUNE") == "0":   # escape hatch: parse the full deck
+        return path
+    srcdir = os.path.dirname(os.path.abspath(path))
+    out = os.path.join(_SKY_CACHE, f"corner_{os.path.basename(path)}_{tag}_v3.spice")
+    try:
+        if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(path):
+            return out
+        with open(path) as f:
+            lines = f.readlines()
+    except OSError:
+        return path
+    kept = []
+    for ln in lines:
+        m = re.match(r'^(\s*\.include\s+)"([^"]+)"(.*)$', ln)
+        if m:
+            inc = m.group(2)
+            if not _sky130_keep_include(os.path.basename(inc)):
+                continue
+            if not os.path.isabs(inc):
+                inc = os.path.normpath(os.path.join(srcdir, inc))
+            ln = f'{m.group(1)}"{inc}"{m.group(3)}\n'
+        kept.append(ln)
+    try:
+        os.makedirs(_SKY_CACHE, exist_ok=True)
+        tmp = f"{out}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "w") as f:
+            f.writelines(kept)
+        os.replace(tmp, out)   # atomic promote — concurrent builders are safe
+        return out
+    except OSError:
+        return path
+
 
 def sky130_corner_lib(corner="tt"):
     """The full sky130 .lib bundles 51 corner sections; ngspice re-parses ALL of
     them (the entire binned BSIM4 corpus) on every process launch — ~19s — even
     when one corner is used. This extracts just the requested `.lib <corner>`
     block into a standalone one-corner file (relative .includes rewritten to
-    absolute so it can live anywhere), cutting each sim to ~1.4s. Cached on disk
-    and reused; regenerated only if the source lib is newer. Falls back to the
-    full lib if the corner block isn't found."""
+    absolute so it can live anywhere), cutting each sim to ~1.4s. The corner file
+    it points at is pruned in turn to the device families we actually instantiate
+    (`_sky130_prune_corner_file`), which is what takes a warm sim from ~420ms to
+    ~185ms. Cached on disk and reused; regenerated only if the source lib is
+    newer. Falls back to the full lib if the corner block isn't found."""
     full = _sky130_lib_path()
     libdir = os.path.dirname(full)
     # cache key includes a hash of the source lib path so repointing
     # SKY130_NGSPICE_LIB to a different PDK can't reuse the wrong corner block
     tag = hashlib.sha1(os.path.abspath(full).encode()).hexdigest()[:8]
-    out = os.path.join(_SKY_CACHE, f"sky130_{corner}_{tag}_v2.lib.spice")  # v2: drops R/C banks
+    # v3: also prunes the corner file's unused device-family model banks. The
+    # prune setting is part of the name — otherwise flipping SKY130_PRUNE would
+    # silently reuse a lib built the other way.
+    pr = "full" if os.environ.get("SKY130_PRUNE") == "0" else "lean"
+    out = os.path.join(_SKY_CACHE, f"sky130_{corner}_{tag}_v3{pr}.lib.spice")
     try:
         if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(full):
             return out
@@ -330,7 +472,11 @@ def sky130_corner_lib(corner="tt"):
                 if re.search(r"(^|/)(r\+c|specialized_cells)", inc):
                     continue
                 if not os.path.isabs(inc):
-                    ln = f'{m.group(1)}"{os.path.join(libdir, inc)}"{m.group(3)}\n'
+                    inc = os.path.join(libdir, inc)
+                # the per-corner deck is the expensive one — prune its model banks
+                if os.path.basename(os.path.dirname(inc)) == "corners":
+                    inc = _sky130_prune_corner_file(inc, tag)
+                ln = f'{m.group(1)}"{inc}"{m.group(3)}\n'
             block.append(ln)
             if re.match(r"^\.endl\b", s):
                 break
@@ -461,12 +607,7 @@ def measure_offset(p, rng):
     # identical to the serial version), then bisect each sample in parallel — the
     # samples are independent and each ngspice call releases the GIL.
     pairs = [(rng.gauss(0.0, sigma_vth), rng.gauss(0.0, sigma_vth)) for _ in range(p["n_mc"])]
-    workers = max(1, min(8, (os.cpu_count() or 4)))
-    if workers > 1 and len(pairs) > 1:
-        with ThreadPoolExecutor(max_workers=workers) as ex:
-            offsets = list(ex.map(lambda ab: _offset_sample(p, ab[0], ab[1]), pairs))
-    else:
-        offsets = [_offset_sample(p, a, b) for a, b in pairs]
+    offsets = pmap(lambda ab: _offset_sample(p, ab[0], ab[1]), pairs)
     offsets = [o for o in offsets if o is not None]  # drop failed-sim samples (#5)
     n = len(offsets)
     if n == 0:                                       # no usable sample
@@ -546,8 +687,7 @@ def noise_probit(params, points=5, n_per_point=24, seed0=1000):
         return None if f is None else (f < 0)   # 극성: vin>0 → outdiff<0
 
     jobs = [(v, seed0 + i) for i in range(n_per_point) for v in vins]
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        outs = list(ex.map(one, jobs))
+    outs = pmap(one, jobs)
 
     pts, fit = [], []
     for v in vins:
@@ -615,7 +755,7 @@ def metastability_sweep(params, amps=None):
         resolved = tdec is not None and fdiff is not None and abs(fdiff) > 0.7 * p["vdd"]
         return {"vin_v": v, "decision_time_ps": round(tdec * 1e12, 2) if (tdec and resolved) else None,
                 "resolved": bool(resolved)}
-    points = [_one(v) for v in amps]
+    points = pmap(_one, amps)          # the amplitudes are independent sims
     # fit t_dec = tau*ln(1/Vin) + c  over resolved points (regeneration regime)
     fit = _fit_tau(points)
     return {"points": points, "tau_ps": fit[0], "intercept_ps": fit[1],
@@ -666,7 +806,7 @@ def max_fclk_sweep(params, periods_ns=None):
                 "power_uw": round(pw, 3) if pw is not None else None,
                 "energy_fj": round(pw * T, 2) if pw is not None else None}
 
-    pts = [_one(T) for T in periods_ns]
+    pts = pmap(_one, periods_ns)       # each clock period is an independent sim
     ok = [pt for pt in pts if pt["ok"]]
     best = min(ok, key=lambda pt: pt["period_ns"]) if ok else None
     return {"points": pts,
