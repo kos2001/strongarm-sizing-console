@@ -643,7 +643,9 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
                 f"dominant contributor: {budget.get('dominant', ['?'])[0]}. The cost "
                 f"function does not price latch/precharge mismatch, so the search "
                 f"shrinks those devices for power. Size them by hand or judge against "
-                f"total_sigma_mv.")
+                f"total_sigma_mv. The ratio is a small-sample estimate and varies "
+                f"2-7x run to run (the direction does not) — treat it as 'large', "
+                f"not as a figure; raise budget_n_mc for a tighter number.")
     meas, v = _verdicts(r["nominal"], r.get("offset"), targets)
     surrogate_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
     traj.append({"action": f"confirm best (Monte-Carlo offset) · {n_sims[0]} SPICE evals{surrogate_note}",
