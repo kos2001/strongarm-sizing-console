@@ -322,6 +322,15 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
               "temp": -40, "vdd": round(p["vdd"] * 0.9, 4)}
         return run_sim.run_sim(wp, do_offset=False)["nominal"]
 
+    # Optional kickback constraint. Measured kickback runs ~15x the offset σ this
+    # cost function already minimises, and it moves *against* the offset lever —
+    # widening the input pair improves matching and worsens kickback — so without
+    # this the optimizer trades blind. Costs one extra simulation per candidate, so
+    # it is only evaluated when a target is actually given.
+    kb_t = targets.get("kickback_diff_mv")
+    kb_drive = {"rs_ohm": float(base.get("rs_ohm") or 2000.0),
+                "cs_ff": float(base.get("cs_ff") or 50.0)}
+
     def _score(p, x=None):
         """Cost of one fully-formed sizing. Pure: runs ngspice, touches no shared
         state (thread-safe). Split out from _eval_raw so the Vt pass can score a
@@ -347,8 +356,16 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
                 cost += 5e5                            # 최악 코너 비기능 — 배제급
             elif wdec > corner_relax * dec_t:
                 cost += 3000.0 * (wdec / (corner_relax * dec_t) - 1.0)
+        kb = None
+        if kb_t:
+            k = run_sim.measure_kickback(p, **kb_drive)
+            kb = k.get("kickback_diff_mv")
+            if kb is None:
+                cost += 1e4                     # could not be measured — deprioritise
+            elif kb > kb_t:
+                cost += 5000.0 * (kb / kb_t - 1.0)
         return {"cost": cost, "x": list(x) if x is not None else None,
-                "p": p, "nom": nom, "offp": offp, "wc": wc}
+                "p": p, "nom": nom, "offp": offp, "wc": wc, "kb": kb}
 
     def _eval_raw(x):
         return _score(make(x), x)
@@ -632,6 +649,9 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
             "final_l_nm": {k: d["l_nm"] for k, d in best["devices"].items()},
             "l_range_nm": list(run_sim.l_range_nm(best)),
             "l_report": run_sim.l_report(best),
+            # kickback, if it was part of the constraint set
+            "kickback_target_mv": kb_t,
+            "final_kickback": (run_sim.measure_kickback(best, **kb_drive) if kb_t else None),
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
             "final_stacks": _stacks(best) if run_sim.w_unit(base) else None}
 
@@ -1761,6 +1781,14 @@ class Handler(BaseHTTPRequestHandler):
                     rs_ohm=float(payload.get("rs_ohm", 2000.0)),
                     cs_ff=float(payload.get("cs_ff", 50.0)),
                     vdiff=float(payload.get("vdiff", 0.005))))
+            elif self.path == "/api/cmrange":
+                # input common-mode range: where it works and what the operating point costs
+                payload = self._read_json()
+                self._json(run_sim.cm_range_sweep(
+                    payload.get("params", {}),
+                    vcm_fracs=payload.get("vcm_fracs"),
+                    with_offset=bool(payload.get("with_offset", False)),
+                    n_mc=int(payload.get("n_mc", 8))))
             elif self.path == "/api/offset/budget":
                 # offset per matched pair, not input-pair only
                 payload = self._read_json()

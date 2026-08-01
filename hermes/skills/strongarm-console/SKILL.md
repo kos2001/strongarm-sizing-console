@@ -108,6 +108,34 @@ On the seed sizing it is **27.6 mV differential — 14.9× the offset σ (1.85 m
   offset by widening the input pair, mention the kickback cost. Cutting kickback
   instead wants a bigger sampling cap or a stiffer driver — system changes.
 
+## The operating point is nearly-free speed
+
+`strongarm_cmrange` sweeps `vcm_frac`. Two things to use it for:
+
+- **There is a hard lower bound.** Below vcm_frac 0.50 the seed sizing does not
+  resolve *at all* — a wall, not a slow corner. If a design "fails" at low common
+  mode, check this before re-sizing anything.
+- **The default 0.62 is 2.7× slower than 0.95** (530 vs 198 ps) across a 9.4×
+  spread, at **no offset cost** — σ is flat in Vcm because input-pair mismatch is
+  gate-referred. So when someone wants speed, raising the common mode is often
+  cheaper than any width change. Offer it.
+
+**Do not report a CMRR number.** The deck is symmetric, so systematic offset — and
+hence CMRR — is structurally zero/infinite; the probe returns the bisection's
+quantisation step at every Vcm. If asked, explain that rather than quoting it.
+
+## Sizing against kickback
+
+Pass `targets.kickback_diff_mv` to `strongarm_optimize` and kickback joins the
+constraint set (costs one extra sim per candidate). Tightening it shrinks the input
+pair and gives back offset — measured: ≤30 mV → W 29.5 µm / σ 0.97 mV, ≤5 mV →
+W 2.7 µm / σ 3.23 mV.
+
+When both specs are tight the run comes back `success: false`. That is the correct
+answer, not a failure to optimize: kickback and offset pull opposite ways on the same
+width, so the fix is systemic — a bigger held cap (`cs_ff`) or a stiffer driver
+(`rs_ohm`). Say that instead of loosening a spec silently.
+
 ## Offset is not just the input pair
 
 `strongarm_offset_budget` breaks offset σ down per matched pair, each perturbed by

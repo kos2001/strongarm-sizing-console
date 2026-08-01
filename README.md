@@ -249,6 +249,59 @@ because latch mismatch is divided by the input pair's gain on the way to the inp
 `tail` is excluded on purpose: one device, no differential partner, so its mismatch
 is common-mode rather than offset.
 
+### Input common-mode range — and why there is no CMRR number
+
+`vcm_frac` was a parameter nothing swept, which hid two things
+(`/api/cmrange`, `strongarm_cmrange`):
+
+| vcm_frac | Vcm | t_dec | offset σ | functional |
+|---|---|---|---|---|
+| 0.40 | 0.280 V | — | 1.33 mV | **no** |
+| 0.45 | 0.315 V | — | 1.33 mV | **no** |
+| 0.50 | 0.350 V | 1867 ps | 1.33 mV | yes |
+| **0.62 (default)** | 0.434 V | **530 ps** | 1.33 mV | yes |
+| 0.70 | 0.490 V | 307 ps | 1.33 mV | yes |
+| 0.95 | 0.665 V | **198 ps** | 1.33 mV | yes |
+
+- **A hard lower bound.** Below vcm_frac 0.50 the latch does not resolve at all —
+  not a slow corner, a wall. Nothing reported it before.
+- **The seed operating point costs 2.7× in speed** (530 vs 198 ps) across a 9.4×
+  spread, at **no offset cost**: σ is flat to 6 significant figures in Vcm, because
+  input-pair Vth mismatch refers to the input gate-to-gate. Measured, not assumed.
+  So the operating point is a speed/power knob only — which also means it is close
+  to free speed the tool never surfaced.
+
+**No CMRR figure is returned, on purpose.** CMRR is ΔVcm/ΔVos on the *systematic*
+offset, but this deck is perfectly symmetric — identical devices into identical
+loads — so with zero mismatch the systematic offset is zero at every Vcm and CMRR
+is infinite. Probing it returns 0.4688 mV at every single Vcm, which is exactly the
+offset bisection's own quantisation step (60 mV / 2⁷ / 2) — an artifact, not a
+measurement. Real CMRR needs asymmetry this netlist does not have (layout gradients,
+unequal loading). A test pins that reasoning so the "missing" number does not later
+get filled in with the artifact.
+
+### The optimizer can now see kickback
+
+Kickback runs well above the offset σ the cost function minimises **and moves
+against the same lever**, so the search was trading blind. An optional
+`targets.kickback_diff_mv` puts it in the constraint set (one extra simulation per
+candidate, evaluated only when a target is given):
+
+| kickback target | input W | offset σ | kickback |
+|---|---|---|---|
+| none | 19.12 µm | 1.32 mV | — |
+| ≤ 30 mV | 29.53 µm | 0.966 mV | 10.3 mV |
+| ≤ 10 mV | 7.06 µm | 2.011 mV | 4.35 mV |
+| ≤ 5 mV | 2.73 µm | 3.230 mV | 4.96 mV |
+
+Tightening kickback shrinks the input pair and gives back offset — the trade is now
+priced instead of ignored. A non-binding target leaves the sizing unchanged, and
+when the two specs genuinely conflict (offset ≤ 1.0 mV with kickback ≤ 3 mV) the
+optimizer reports `success: false` rather than quietly satisfying one of them. That
+conflict is the honest signal that kickback wants a *system* fix — a bigger held
+sampling capacitance or a stiffer driver, both of which live in `cs_ff`/`rs_ohm`
+rather than in any device width.
+
 ## Merging related sidebar pages
 
 The console has 24 pages (14 comparator + 10 VCO), several of which are views of

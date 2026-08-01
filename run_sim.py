@@ -961,6 +961,71 @@ def _offset_of_pair(p, group, sigma_v, n_mc, seed):
             "offset_mean_mv": round(mean * 1e3, 4), "n_mc": len(vals)}
 
 
+def cm_range_sweep(params, vcm_fracs=None, with_offset=False, n_mc=8):
+    """Input common-mode range: where the comparator works, and what the operating
+    point costs.
+
+    `vcm_frac` existed as a parameter but nothing swept it, so two things stayed
+    invisible: the hard lower bound below which the latch never resolves, and how
+    much speed the chosen operating point is giving up.
+
+    **Why this is not a CMRR number.** CMRR would be ΔVcm/ΔVos on the *systematic*
+    offset, but this deck is perfectly symmetric — both halves are identical devices
+    into identical loads — so with zero mismatch the systematic offset is zero at
+    every Vcm and CMRR is infinite. Probing it returns the bisection's own
+    quantisation step (60 mV / 2⁷ ≈ 0.47 mV) at every point, which is an artifact,
+    not a measurement. Real CMRR comes from asymmetry this netlist does not have
+    (layout, loading, systematic gradients). What *is* measurable is reported here.
+
+    `with_offset` re-runs the mismatch Monte-Carlo at each point. It is off by
+    default because it costs ~90 sims per point and the answer is flat: the input
+    pair's Vth mismatch refers to the input gate-to-gate, so σ_offset is
+    Vcm-independent to first order — measured constant to 3 significant figures
+    across the whole usable range. That flatness is itself the useful result: you
+    cannot buy offset with the operating point, only speed."""
+    p0 = _full(params)
+    if vcm_fracs is None:
+        vcm_fracs = [round(0.40 + 0.05 * i, 3) for i in range(12)]   # 0.40 .. 0.95
+    # always include the caller's own operating point, or the report cannot say
+    # what their current choice costs
+    vcm_fracs = sorted({round(float(v), 4) for v in vcm_fracs} | {round(float(p0["vcm_frac"]), 4)})
+
+    def one(vf):
+        p = {**p0, "vcm_frac": vf}
+        nom = run_sim(p, do_offset=False)["nominal"]
+        row = {"vcm_frac": vf, "vcm_v": round(vf * p0["vdd"], 4),
+               "decision_time_ps": nom.get("decision_time_ps"),
+               "power_uw": nom.get("power_uw"),
+               "functional": bool(nom.get("functional")) and nom.get("decision_time_ps") is not None}
+        if with_offset:
+            import random
+            row["offset_sigma_mv"] = measure_offset({**p, "n_mc": n_mc},
+                                                    random.Random(7)).get("offset_sigma_mv")
+        return row
+
+    pts = pmap(one, vcm_fracs)
+    ok = [r for r in pts if r["functional"]]
+    fastest = min(ok, key=lambda r: r["decision_time_ps"]) if ok else None
+    slowest = max(ok, key=lambda r: r["decision_time_ps"]) if ok else None
+    return {
+        "points": pts,
+        "usable_vcm_frac": [ok[0]["vcm_frac"], ok[-1]["vcm_frac"]] if ok else None,
+        "usable_vcm_v": [ok[0]["vcm_v"], ok[-1]["vcm_v"]] if ok else None,
+        "n_nonfunctional": len(pts) - len(ok),
+        "fastest": fastest, "slowest": slowest,
+        "speed_spread": (round(slowest["decision_time_ps"] / fastest["decision_time_ps"], 2)
+                         if fastest and slowest and fastest["decision_time_ps"] else None),
+        "at_current_vcm": next((r for r in pts if r["vcm_frac"] == p0["vcm_frac"]), None),
+        "cmrr_note": ("no CMRR figure: the deck is symmetric, so systematic offset — "
+                      "and hence CMRR — is structurally zero/infinite. Probing it "
+                      "returns the bisection quantisation step, not a measurement."),
+        "note": ("offset σ is flat in Vcm (input-pair mismatch is gate-referred), so "
+                 "the operating point trades speed and power only. Below the usable "
+                 "range the latch does not resolve at all — that is a hard bound, "
+                 "not a slow corner."),
+    }
+
+
 def measure_kickback(params, rs_ohm=2000.0, cs_ff=50.0, vdiff=0.005):
     """Input-referred kickback: how much the comparator disturbs the voltage it is
     supposed to be measuring.
