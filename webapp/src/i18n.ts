@@ -338,4 +338,14 @@ export const UI = {
   howToRead: { ko: '읽는 법', en: 'How to read it' },
   domainComparator: { ko: '비교기', en: 'Comparator' },
   domainVco: { ko: 'VCO', en: 'VCO' },
+  // Status strip. The unrun case is worded as an instruction, not as an absence: a blank
+  // row reads as "no data available" when what it means is "you have not run it yet".
+  statusUnrun: { ko: '아직 측정 안 함', en: 'Not measured yet' },
+  statusRunNow: { ko: '지금 실행', en: 'Run now' },
+  statusPass: { ko: '스펙 만족', en: 'Meets spec' },
+  statusFail: { ko: '스펙 미달', en: 'Misses spec' },
+  statusNonFunctional: { ko: '판정 실패 — 회로가 동작하지 않음', en: 'No decision — circuit not functional' },
+  statusError: { ko: '시뮬레이션 오류', en: 'Simulation error' },
+  statusFixIt: { ko: '지렛대 찾기', en: 'find the lever' },
+  statusRetune: { ko: '목표로 재사이징', en: 'resize to target' },
 }

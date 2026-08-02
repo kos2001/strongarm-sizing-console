@@ -1689,7 +1689,26 @@ def run_sim(params, seed=12345, do_offset=True, with_noise=False):
     rng = random.Random(seed)
     result = {"nominal": measure_nominal(p, with_noise=with_noise)}
     if do_offset:
-        result["offset"] = measure_offset(p, rng)
+        # `offset` keeps the Monte-Carlo path because the Monte-Carlo page plots its
+        # individual samples — a distribution needs draws, not moments. But the headline
+        # σ is the deterministic full budget, and the two must not disagree: the UI was
+        # showing 1.83 mV on the sizing page (one MC draw of the input pair) next to
+        # 1.8734 mV on the resolution page (the deterministic total) for the same design,
+        # which reads as a bug whichever number the user believes.
+        mc = measure_offset(p, rng)
+        budget = offset_budget(p)
+        result["offset"] = {
+            **mc,
+            "offset_sigma_mv": budget.get("total_sigma_mv"),
+            "offset_sigma_source": "deterministic full budget over all matched pairs",
+            "mc_offset_sigma_mv": mc.get("offset_sigma_mv"),
+            "mc_note": ("`samples_mv` and `mc_offset_sigma_mv` are one Monte-Carlo draw "
+                        "set, kept for the distribution plot. The headline "
+                        "`offset_sigma_mv` is the deterministic budget: an MC estimate at "
+                        "these sample counts carries ~21% standard error and reads ~11% "
+                        "low, so it is not the number to judge a spec against."),
+        }
+        result["offset_budget"] = budget
     result["params"] = p
     return result
 
