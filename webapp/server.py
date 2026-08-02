@@ -76,13 +76,14 @@ SPEC_TARGETS = {
 
 def _predict_offset_mv(params):
     """Analytic input-referred offset from Pelgrom (no simulation needed).
-    Matches run_sim: per-device sigma_vth = AVT/sqrt(W*L*M); pair ~ sqrt(2)x.
+    Per-device sigma_vth = AVT/sqrt(W*L*M), referred to the input by the measured
+    1.06 (see _pred_offset_mv for why that is not sqrt(2)).
     Uses the *effective* L — on sky130 the PDK raises L to the device's bin
     floor, and computing offset from the requested L instead reports a device
     that was never built."""
     area = run_sim.gate_area_um2(params, "input")
     sigma_vth = params["avt_mv_um"] / math.sqrt(max(area, 1e-9))
-    return math.sqrt(2) * sigma_vth
+    return run_sim._OFFSET_R_INPUT * sigma_vth
 
 
 def _size_input_for_offset(params, off_target_mv):
@@ -204,9 +205,16 @@ def front_sizing_relation(front, axes):
 
 
 def _pred_offset_mv(p):
-    # effective L, not the requested one — see run_sim.effective_l_nm
+    """Predicted input-pair-only offset σ (mV). Effective L, not the requested one —
+    see run_sim.effective_l_nm.
+
+    The referral factor is the **measured** 1.06, not the textbook √2 = 1.414:
+    referring a gate-side Vth shift back to the input is not 1:1, because the shift
+    also perturbs the tail current and common mode. Measured 1.0552–1.0608 across an
+    8x input-width sweep, so the old √2 was ~33% pessimistic on the dominant term.
+    Prefer run_sim.predicted_offset_budget_mv, which covers every matched pair."""
     area = run_sim.gate_area_um2(p, "input")
-    return math.sqrt(2) * p["avt_mv_um"] / math.sqrt(max(area, 1e-9))
+    return run_sim._OFFSET_R_INPUT * p["avt_mv_um"] / math.sqrt(max(area, 1e-9))
 
 
 def _total_w(p):
@@ -336,7 +344,15 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
         """Cost of one fully-formed sizing. Pure: runs ngspice, touches no shared
         state (thread-safe). Split out from _eval_raw so the Vt pass can score a
         params dict directly — Vt is not a coordinate of the W vector."""
-        offp = _pred_offset_mv(p)
+        # Full analytic budget, not the input pair alone. With the input-pair-only
+        # term the search grew the input pair (the only thing penalised) and shrank
+        # the latch until latch mismatch dominated the real offset — the reported
+        # number improving while the actual offset doubled. This predictor tracks the
+        # measured budget to ~8% mean / 19% worst, which is enough for the gradient
+        # to point the right way; the term it replaces was zero for every device but
+        # one. `offset_terms` is kept so the trajectory can show which device is
+        # binding.
+        offp, off_terms = run_sim.predicted_offset_budget_mv(p)
         nom = run_sim.run_sim(p, do_offset=False)["nominal"]
         dec = nom.get("decision_time_ps")
         pw = nom.get("power_uw") or 1e6
@@ -366,7 +382,8 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
             elif kb > kb_t:
                 cost += 5000.0 * (kb / kb_t - 1.0)
         return {"cost": cost, "x": list(x) if x is not None else None,
-                "p": p, "nom": nom, "offp": offp, "wc": wc, "kb": kb}
+                "p": p, "nom": nom, "offp": offp, "off_terms": off_terms,
+                "wc": wc, "kb": kb}
 
     def _eval_raw(x):
         return _score(make(x), x)
@@ -706,13 +723,19 @@ def optimize_pareto(base, targets, pop=16, gens=6, seed=7):
 
     def ev(x):
         p = make(x)
-        offp = _pred_offset_mv(p)
+        # Full budget, same as the single-objective cost function. The Pareto front had
+        # the identical flaw — its offset constraint priced the input pair only, so the
+        # front admitted designs whose real offset was worse than reported, and for the
+        # same reason: nothing stopped the search shrinking the latch. Free to fix here,
+        # since the budget is analytic and this loop already runs one sim per candidate.
+        offp, off_terms = run_sim.predicted_offset_budget_mv(p)
         nom = run_sim.run_sim(p, do_offset=False)["nominal"]
         dec = nom.get("decision_time_ps")
         pw = nom.get("power_uw") or 1e6
         fn = bool(nom.get("functional")) and dec is not None
         cv = (0.0 if fn else 1.0) + max(0.0, offp / off_t - 1.0)   # constraint violation
-        return {"x": list(x), "p": p, "f": [pw, dec if dec else 1e5], "cv": cv, "offp": offp, "nom": nom}
+        return {"x": list(x), "p": p, "f": [pw, dec if dec else 1e5], "cv": cv,
+                "offp": offp, "off_terms": off_terms, "nom": nom}
 
     def dominates(a, b):  # Deb constraint-domination
         if a["cv"] != b["cv"]:
@@ -1441,7 +1464,11 @@ def design_brief(params, targets=None):
     p = run_sim._full(params or {})
     t = {"decision_time_ps": 400.0, "power_uw": 100.0, "offset_sigma_mv": 5.0, **(targets or {})}
     nom = run_sim.run_sim(p, do_offset=False)["nominal"]
-    offp = _pred_offset_mv(p)
+    # Report the full budget as the offset figure — the input-pair-only number is what
+    # let the optimizer look good while the latch dominated, so a one-call briefing
+    # should not lead with it. Both are returned so the difference is visible.
+    offp_input = _pred_offset_mv(p)
+    offp, offp_terms = run_sim.predicted_offset_budget_mv(p)
     dec, pw = nom.get("decision_time_ps"), nom.get("power_uw")
     margins = {
         "functional": bool(nom.get("functional")),
@@ -1466,6 +1493,8 @@ def design_brief(params, targets=None):
         "w_grid_um": unit,
         "stacks": _stacks(p) if unit else None,
         "nominal": nom, "predicted_offset_sigma_mv": round(offp, 3),
+        "predicted_offset_input_pair_only_mv": round(offp_input, 3),
+        "predicted_offset_terms_mv": {k: round(v, 3) for k, v in offp_terms.items()},
         "targets": t, "margins": margins, "hints": hints,
         "devices": copy.deepcopy(p["devices"]),
     }

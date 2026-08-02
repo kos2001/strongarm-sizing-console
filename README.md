@@ -359,6 +359,89 @@ switch and the precharge PMOS both driven from `clk`, so the race is between tho
 devices on one edge rather than between two clock phases. (`clkb_line` was dead code
 and is gone.)
 
+### The optimizer now prices mismatch on every pair — and a loop keeps it honest
+
+Following the discovery that the search was gaming its input-pair-only offset term,
+the cost function now uses an analytic budget over all matched pairs
+(`run_sim.predicted_offset_budget_mv`). Getting there needed three corrections, each
+found by measurement rather than reasoning:
+
+**1. The offset bisection was too coarse to measure what was being fitted.** 7 steps
+over ±60 mV quantise to 0.47 mV. The latch and precharge contributions land *at* that
+step — measured values pinned at 0.494 mV across sizings that should have differed —
+so the earlier "RSS 1.761 mV, 22% understated" figure was partly floor artifact. It
+also biased the headline input-pair σ up to **19% high** for large-area designs
+(0.906 → 0.764 mV on a 24 µm input pair), which are exactly what the optimizer
+produces. Default is now 11 steps (0.029 mV); 13 gives the same numbers. Cost: offset
+MC 0.85 s → 1.34 s. The search itself uses the analytic path, so only explicit MC pays.
+
+**2. The input referral factor is 1.06, not √2.** Referring a gate-side Vth shift back
+to the input is not 1:1 — the shift also moves the tail current and common mode. With
+1.06 the prediction lands within 0.5% of the Monte-Carlo (1.325 vs 1.326 measured;
+0.765 vs 0.764; 2.164 vs 2.154) where √2 was 33% high on all three.
+
+**3. `pcc` had to be modelled as a constant, not σ-proportional.** Its contribution
+*rises* with its own width (0.286 → 0.442 mV over 0.5 → 16 µm) because its leverage on
+the regeneration grows faster than its σ_Vth falls. A σ-proportional term would have
+penalised shrinking it — backwards. `pre`/`prei` are ~0.026 mV regardless of width,
+150x below the input pair, so they are carried as constants only for completeness.
+**`ncc` is the one term that mattered and was missing**: its contribution falls 9.3x as
+its width goes 0.5 → 16 µm.
+
+Result, compared at the same 2.0 mV target across four seeds:
+
+| objective | ncc W median | measured budget | median | met target | power median |
+|---|---|---|---|---|---|
+| input-pair only | 1.33 µm | 2.02–4.00 mV | 3.00 | 0/4 | 20.8 µW |
+| **full budget** | **2.25 µm** | **1.99–3.00 mV** | **2.35** | 1/4 | 24.3 µW |
+
+Honest reading: the pathological case is gone and the median improves 22%, at ~17%
+more power. It is **not** uniformly better — one seed came out slightly worse, which is
+what a predictor with this much error guiding a stochastic search should be expected to
+do. Three of four runs still miss a tight target, so the measured `offset_budget` check
+on the winner remains the backstop.
+
+#### How accurate is the predictor, honestly
+
+It tracks the measured budget to ~8% mean / 19% worst on the fitting grid. But the
+**measured reference itself scatters 27–28%** across estimator seeds at n_mc 12–24
+(14% at n_mc 48), so the model cannot be shown to be better than that, and no safety
+factor was tuned onto the residuals because that would be fitting noise. Tests assert
+35–40% against a *median over estimator seeds*; a single-draw reference made one
+assertion intermittently fail, and the flakiness was the reference moving, not the model.
+
+#### The same flaw was in two more places
+
+Fixing the single-objective cost function exposed that `optimize_pareto`'s constraint
+and `design_brief`'s headline both used the input-pair-only figure too — the Pareto
+front therefore admitted designs whose real offset was worse than reported, for exactly
+the same reason. Both now use the full budget. It was free in the Pareto loop, which
+already runs one simulation per candidate and needed no extra one; the front now keeps
+`ncc` at 3.75–7.56 µm where it used to collapse. `design_brief` returns both figures
+plus the per-device terms, so the difference is visible rather than implied.
+
+#### The self-improvement loop
+
+`scripts/calibrate_offset_model.py` closes the loop those constants sit in — they were
+otherwise a snapshot of one afternoon, with nothing to notice if the circuit, the model
+card or the measurement changed underneath them:
+
+    measure a grid → re-fit → validate on HELD-OUT sizings → accept or reject
+
+The held-out gate is the point: a refit that fits the training grid better but the
+held-out sizings worse is rejected, so the loop cannot talk itself into overfitting.
+Every run appends to `out/offset_model_history.jsonl` whether it accepted or not, so
+drift is visible even when nothing changes. `--apply` rewrites the constants in place
+(keeping a `.bak`); without it the loop only reports.
+
+The loop immediately earned itself twice. It flagged that `R_input` refits to 1.363
+rather than 1.06 — because it was being fitted on the *latch* grid, where ncc is driven
+to 0.5 µm and a weak latch inflates the input pair's measured offset. The held-out error
+even "improved", because the held-out set shared the same skew: a gate only guards
+against overfitting when the held-out data is drawn differently. `R_input` now has its
+own nominal-latch sweep. Then a test caught that two of the eight held-out sizings were
+also in that sweep, making a quarter of the gate training data.
+
 ### Sign-off now covers the terms that dominate — and the optimizer confesses
 
 `fullflow` ran sizing → post-layout → PVT → layout/DRC and called that sign-off. It

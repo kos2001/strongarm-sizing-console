@@ -108,7 +108,35 @@ On the seed sizing it is **27.6 mV differential — 14.9× the offset σ (1.85 m
   offset by widening the input pair, mention the kickback cost. Cutting kickback
   instead wants a bigger sampling cap or a stiffer driver — system changes.
 
-## ⚠ The optimizer's reported offset is optimistic — check the warning
+## Offset: the cost function now prices every pair, imperfectly
+
+`strongarm_optimize` prices mismatch on all matched pairs, not just the input pair.
+Two things to carry over:
+
+- **`ncc` is the term that matters.** Its offset contribution falls 9.3x as its width
+  goes 0.5 → 16 µm. If a user asks how to cut offset, the answer after an optimize run
+  is usually the *latch*, not the input pair.
+- **`pcc` is the opposite** — its contribution *rises* with its own width, so shrinking
+  it slightly helps offset. Never advise growing pcc for matching.
+- `pre`/`prei` are ~0.026 mV, 150x below the input pair. Not worth discussing.
+
+The predictor is good to ~8% mean / 19% worst, and the **measured reference itself
+scatters 27%** at practical sample counts — so quote `offset_budget.total_sigma_mv`
+with that in mind and do not present either number to three digits. Compared at the
+same target, the new objective removed the pathological latch collapse and improved the
+median budget 22%, but it is not uniformly better and 3 of 4 runs still miss a tight
+target. Read the measured budget; do not trust the prediction alone.
+
+### The offset model can be recalibrated
+
+`scripts/calibrate_offset_model.py` re-measures, re-fits and — only if the held-out
+error improves — rewrites those constants (`--apply`, keeps a `.bak`). Suggest it when
+the user changes the model backend or the circuit, since the constants were fitted on
+ptm45 and nothing else would notice them going stale. A full run takes >10 min and
+saturates the simulator; `--limit N` smoke-tests the path in about a minute. History
+accumulates in `out/offset_model_history.jsonl` (machine-local — `out/` is gitignored).
+
+## ⚠ Check the optimizer's offset warning
 
 `strongarm_optimize` prices **only the input pair's** mismatch, so minimising power it
 grows the input pair and shrinks the latch/precharge pairs, whose mismatch is then

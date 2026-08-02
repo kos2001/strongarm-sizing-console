@@ -896,17 +896,41 @@ def _decide_sign(p, vdiff, dvth1, dvth2):
     return fdiff
 
 
-def _offset_sample(p, dvth1, dvth2):
+#: Bisection resolution for one offset sample. The original 7 steps over ±60 mV
+#: quantise to 0.47 mV, which turned out to bias the headline spec: measured, σ comes
+#: out up to 19% high for well-matched (large-area) designs — 0.906 vs 0.764 mV on a
+#: 24 µm input pair — and those are exactly what the optimizer produces. It also *was*
+#: the answer for the latch/precharge pairs, whose contributions sit near it: they
+#: pinned at 0.494 mV across sizings that should have differed. 11 steps converge
+#: (13 gives the same numbers) at +58% offset-MC time; the search itself uses the
+#: analytic prediction, so only explicit MC calls pay.
+_OFFSET_BISECT_RANGE_V = 0.06
+_OFFSET_BISECT_ITERS = 11
+
+
+def offset_bisect_resolution_v(n_iter=None):
+    """Smallest offset difference this bisection can distinguish. `None` resolves the
+    module default at call time — a default argument would bind it at definition time,
+    which is the trap that made an earlier resolution experiment silently measure
+    nothing when the module constant was patched."""
+    if n_iter is None:
+        n_iter = _OFFSET_BISECT_ITERS
+    return 2.0 * _OFFSET_BISECT_RANGE_V / (2 ** (n_iter + 1))
+
+
+def _offset_sample(p, dvth1, dvth2, n_iter=None):
     """Input-referred offset for one Vth-mismatch draw: bisect the differential
     input to the decision-flip point. No RNG here — deterministic per draw."""
-    lo, hi = -0.06, 0.06
+    if n_iter is None:
+        n_iter = _OFFSET_BISECT_ITERS       # resolved at call time, not definition
+    lo, hi = -_OFFSET_BISECT_RANGE_V, _OFFSET_BISECT_RANGE_V
     s_lo = _decide_sign(p, lo, dvth1, dvth2)
     s_hi = _decide_sign(p, hi, dvth1, dvth2)
     if s_lo == 0.0 or s_hi == 0.0:
         return None                      # sim/parse failure — skip, don't fake a rail sample
     if (s_lo > 0) == (s_hi > 0):
         return hi if s_lo > 0 else lo    # offset beyond ±60mV range; clamp
-    for _ in range(7):
+    for _ in range(n_iter):
         mid = 0.5 * (lo + hi)
         s_mid = _decide_sign(p, mid, dvth1, dvth2)
         if (s_mid > 0) == (s_lo > 0):
@@ -928,6 +952,51 @@ def pelgrom_sigma_v(p, dev):
     credited."""
     area = max(gate_area_um2(p, dev), 1e-12)
     return (p["avt_mv_um"] / math.sqrt(area)) / 1000.0
+
+
+# --- analytic offset budget, for use inside a search -------------------------
+# The optimizer's offset penalty saw the input pair only, so minimising power it
+# shrank the latch until latch mismatch dominated the real offset while the reported
+# number improved. Fixing that needs a *predictor* cheap enough to run per candidate,
+# which these constants provide. Every one of them is measured, not assumed:
+#
+#   input  R = 1.06, and remarkably stable — 1.0552..1.0608 across an 8x input-width
+#          sweep. Note this is NOT the textbook sqrt(2) = 1.414 that `_pred_offset_mv`
+#          used: referring a gate-side Vth shift back to the input is not 1:1, because
+#          the shift also perturbs the tail current and common mode. The old constant
+#          was therefore ~33% pessimistic on the dominant term.
+#
+#   ncc    the one term that actually mattered and was missing. Its contribution falls
+#          9.3x as its own width goes 0.5 -> 16 um (1.794 -> 0.193 mV), so shrinking it
+#          is genuinely expensive. Fitted over a 20-point grid in (input W, ncc W):
+#          mean |error| 12.7%, worst 29.1% — crude, but the term it replaces was zero.
+#
+#   pcc    deliberately modelled as a constant. Measured, its contribution *rises*
+#          with its own width (0.286 -> 0.442 mV over 0.5 -> 16 um) because its
+#          leverage on the regeneration grows faster than its sigma_Vth falls. A
+#          sigma-proportional term would penalise shrinking it, which is backwards.
+#   pre,
+#   prei   ~0.025-0.03 mV regardless of width, i.e. 150x below the input pair.
+#          Negligible; carried as constants so the RSS is complete.
+_OFFSET_R_INPUT = 1.06
+_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = 0.1249, 0.679, 0.372
+_OFFSET_FLAT_MV = {"pcc": 0.36, "pre": 0.026, "prei": 0.027}
+
+
+def predicted_offset_budget_mv(p):
+    """Analytic RSS offset budget over all matched pairs, no simulation.
+
+    Replaces the input-pair-only prediction inside the cost function. Accurate to
+    ~13% on the ncc term and exact in form for the input pair; see the constants
+    above for what each term is and how it was measured. Use `offset_budget` when
+    you want the measured answer."""
+    terms = {"input": _OFFSET_R_INPUT * pelgrom_sigma_v(p, "input") * 1e3}
+    sig_ncc = pelgrom_sigma_v(p, "ncc") * 1e3
+    di, dn = p["devices"]["input"], p["devices"]["ncc"]
+    ratio = max((di["w_um"] * di["m"]) / max(dn["w_um"] * dn["m"], 1e-9), 1e-9)
+    terms["ncc"] = _OFFSET_NCC_K * (sig_ncc ** _OFFSET_NCC_A) * (ratio ** _OFFSET_NCC_B)
+    terms.update(_OFFSET_FLAT_MV)
+    return math.sqrt(sum(v * v for v in terms.values())), terms
 
 
 def offset_budget(params, n_mc=12, seed=4242, groups=OFFSET_PAIRS):
@@ -978,16 +1047,18 @@ def offset_budget(params, n_mc=12, seed=4242, groups=OFFSET_PAIRS):
     }
 
 
-def _offset_of_pair(p, group, sigma_v, n_mc, seed):
+def _offset_of_pair(p, group, sigma_v, n_mc, seed, n_iter=None):
     """Input-referred offset σ from one matched pair's Vth mismatch, by the same
-    bisection the input pair uses."""
+    bisection the input pair uses — but with a finer bisection by default, because
+    these contributions are small enough that the 7-step default *is* the answer
+    (0.47 mV) rather than a bound on it."""
     import random
     rng = random.Random(seed + hash(group) % 10000)
     draws = [rng.gauss(0.0, sigma_v * math.sqrt(2)) for _ in range(n_mc)]
 
     def one(d):
         q = {**p, "mismatch_v": {**(p.get("mismatch_v") or {}), group: d}}
-        return _offset_sample(q, 0.0, 0.0)
+        return _offset_sample(q, 0.0, 0.0, n_iter=n_iter)
 
     vals = [v for v in pmap(one, draws) if v is not None]
     if len(vals) < 2:
@@ -998,7 +1069,8 @@ def _offset_of_pair(p, group, sigma_v, n_mc, seed):
     var = sum((v - mean) ** 2 for v in vals) / max(len(vals) - 1, 1)
     return {"pelgrom_sigma_vth_mv": round(sigma_v * 1e3, 4),
             "offset_sigma_mv": round(math.sqrt(var) * 1e3, 4),
-            "offset_mean_mv": round(mean * 1e3, 4), "n_mc": len(vals)}
+            "offset_mean_mv": round(mean * 1e3, 4), "n_mc": len(vals),
+            "resolution_mv": round(offset_bisect_resolution_v(n_iter) * 1e3, 5)}
 
 
 def clock_edge_sweep(params, trf_ps=None):
@@ -1266,7 +1338,7 @@ def measure_kickback(params, rs_ohm=2000.0, cs_ff=50.0, vdiff=0.005):
     }
 
 
-def measure_offset(p, rng):
+def measure_offset(p, rng, n_iter=None):
     """Input-referred offset sigma via Monte Carlo input-pair Vth mismatch.
 
     For each sample we perturb the input-pair threshold voltages (Pelgrom:
@@ -1283,7 +1355,7 @@ def measure_offset(p, rng):
     # identical to the serial version), then bisect each sample in parallel — the
     # samples are independent and each ngspice call releases the GIL.
     pairs = [(rng.gauss(0.0, sigma_vth), rng.gauss(0.0, sigma_vth)) for _ in range(p["n_mc"])]
-    offsets = pmap(lambda ab: _offset_sample(p, ab[0], ab[1]), pairs)
+    offsets = pmap(lambda ab: _offset_sample(p, ab[0], ab[1], n_iter=n_iter), pairs)
     offsets = [o for o in offsets if o is not None]  # drop failed-sim samples (#5)
     n = len(offsets)
     if n == 0:                                       # no usable sample
