@@ -78,6 +78,47 @@ offset:  { offset_sigma_mv, offset_mean_mv, pelgrom_sigma_vth_mv, n_mc }
   `pelgrom_sigma_vth_mv` (offset_σ ≈ √2 · pelgrom) as the sizing anchor.
 - **functional** — did the latch resolve to a rail.
 
+## Docker
+
+```bash
+docker build -t strongarm-console .
+docker run -p 8770:8770 strongarm-console            # ptm45 + gaa2nm
+docker run -p 8770:8770 -v ~/pdk:/pdk:ro strongarm-console   # + sky130
+```
+
+The image is built around **ngspice, not around the web app** — everything here is real
+SPICE. ngspice is compiled from source (`--enable-osdi`) rather than apt-installed, because
+the version is not incidental: every number in this README was measured on **ngspice-46**,
+and a distro package pinned to 38 or 44 would quietly produce different ones. Verified in
+the container, the measurements reproduce to the last digit — offset total 1.8734 mV, input
+pair 1.7675, ncc 0.4477, decision 530.22 ps, power 106.432 µW; sky130 1.6379 mV through the
+mount. A full `optimize` run inside it lands on the same 1.501 mV as the host.
+
+**Two of the four backends are conditional, and the image says so rather than failing
+mid-run.** `/api/health` (and the startup log) carry `model_availability()`:
+
+| backend | in the image | why |
+|---|---|---|
+| `ptm45` | ✅ always | BSIM4 model card, vendored (12 KB) |
+| `gaa2nm` | ✅ always | scaled BSIM4, vendored |
+| `sky130` | mount the PDK | several GB — `-v ~/pdk:/pdk:ro` |
+| `asap7` | rebuild the OSDI | OSDI is a **native** library; the repo's copy is macOS/arm64 |
+
+That last row is the one worth knowing about. `bsimcmg107.osdi` is a compiled shared object,
+so the vendored macOS build cannot load on Linux — and a wrong-architecture OSDI surfaces as
+a raw ngspice parse error from inside a sizing run, which reads as "the simulator is broken".
+So `.dockerignore` excludes it deliberately (reported as *missing*, which is actionable) and
+`model_availability()` checks the ELF/Mach-O magic rather than merely that the file exists.
+To enable asap7, build one for Linux — the Verilog-A source is vendored:
+
+```bash
+docker compose --profile tools run --rm osdi-build   # Rust + LLVM, one-shot
+docker compose up -d console
+```
+
+`docker-compose.yml` also caps `NGSPICE_MAX_PROCS`: the simulator semaphore otherwise sizes
+itself to the host CPU count and oversubscribes a container with a smaller cpu quota.
+
 ## Usage
 
 ```bash

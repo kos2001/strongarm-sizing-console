@@ -1,0 +1,5 @@
+# The GP surrogate in the optimizer. Both are imported inside try/except — the app runs
+# without them and falls back to evaluating every candidate in SPICE, which is much slower —
+# so this file is what makes the fast path present in a build rather than incidental.
+numpy>=1.26,<3
+scikit-learn>=1.4,<2
