@@ -458,3 +458,25 @@ def test_the_optimizer_region_bias_is_reported_and_conservative():
     assert "over-predicts" in a["note"] and "margin" in a["note"]
     # the validation-set error must not be presented as if it covered this region
     assert a["heldout_median_abs_error"] < bias["gaa2nm"] - 1.0
+
+
+def test_the_latch_fit_includes_the_region_the_search_uses():
+    """The fit folds in optimizer-converged sizings, which makes it a fixed point.
+
+    Two properties have to hold. The exponents must still differ per backend (the fit did
+    not collapse onto one law), and the recorded optimizer-region ratios must be the
+    POST-install ones. The distinction is not pedantic: judged at the sizings the old model
+    converged to, this law scores 1.36x on asap7 and 1.55x on gaa2nm; once installed, the
+    search moves elsewhere and the honest numbers are 1.40x and 1.82x. A fixed-point
+    iteration cannot be evaluated at the previous fixed point."""
+    laws = run_sim._OFFSET_NCC_BY_MODEL
+    exps = sorted(a for _, a, _ in laws.values())
+    assert exps[0] < 1.0 < exps[1], laws          # ptm45 still stands apart
+    bias = run_sim._OFFSET_MODEL_OPT_REGION_BIAS
+    assert bias["gaa2nm"] > 1.5, bias   # the pre-install 1.55x estimate must not be what
+                                        # got recorded — measured after install it is 1.82x
+    # every backend must have improved on both axes versus the pre-refit state
+    for m, (was_err, was_bias) in {"ptm45": (0.039, 1.31), "asap7": (0.114, 1.53),
+                                   "gaa2nm": (0.219, 1.99), "sky130": (0.166, 1.36)}.items():
+        assert run_sim._OFFSET_MODEL_HELDOUT_ERR[m] < was_err, m
+        assert 1.0 <= bias[m] < was_bias, m

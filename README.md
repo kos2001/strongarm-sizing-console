@@ -468,19 +468,32 @@ the width drift closes to ptm45's own level, and on ptm45 the refit was **reject
 | a **fresh** set neither fit nor gate saw | **3.9%** | **11.4%** | **21.9%** | **16.6%** |
 
 There is a fourth number, and it is the largest: **at the sizings the optimizer actually
-converges to, the model over-predicts 1.31x / 1.53x / 1.99x / 1.36x** (median over 3
-seeds; asap7 and gaa2nm reproduce exactly). The search does not sample sizings evenly — it
-seeks out whatever the model rates cheapest — so its converged region has its own bias,
-and no validation set drawn by hand will show it.
+converges to**, the model over-predicts. The search does not sample sizings evenly — it
+seeks out whatever the model rates cheapest — so its converged region has its own bias, and
+no validation set drawn by hand will show it. Folding those sizings into the fit closes part
+of it:
 
-Every one of those is *above* 1, i.e. conservative. That is the safe direction, and it is
-the opposite of where this model started: the same selection effect once ran optimistic,
-which is precisely how the search came to game its own offset term. But 1.99x on gaa2nm
-means roughly twice the latch area offset actually requires, so it is a cost and not just
-comfortable margin. Closing it means folding optimizer-converged sizings into the fit —
-`scripts/calibrate_offset_model.py` does that via `optimizer_sizings()`, a fixed-point
-iteration since the sizings depend on the constants being fitted. **Not done deliberately:
-a refit that lands optimistic here would be worse than a known 2x of conservatism.**
+| backend | fresh-set median | optimizer-region ratio |
+|---|---|---|
+| ptm45 | 3.9% → **3.5%** | 1.31x → **1.25x** |
+| asap7 | 11.4% → **9.6%** | 1.53x → **1.40x** |
+| gaa2nm | 21.9% → **10.9%** | 1.99x → **1.82x** |
+| sky130 | 16.6% → **10.7%** | 1.36x → **1.30x** |
+
+Every ratio stays *above* 1, i.e. conservative, and that was an **acceptance condition**,
+not an outcome: a refit had to improve fresh-set error *and* keep the ratio ≥ 1.0. The
+second condition is the one that matters. This model began by being optimistic in exactly
+this region, which is how the search came to game its own offset term; a refit that made the
+numbers prettier by landing optimistic there would rebuild the original defect.
+
+Two things worth knowing about this fit. It is a **fixed-point iteration** — the training
+sizings depend on the constants being fitted — so the ratio column has to be measured
+*after* installing. Judged at the sizings the old model converged to, this law scores 1.36x
+and 1.55x on asap7 and gaa2nm; installed, the search moves and the honest numbers are 1.40x
+and 1.82x. And per-model `pcc` was **retested** here, in case the first rejection had been
+masked by ncc's much larger error. It was not: per-model pcc helps only sky130 (10.7% →
+7.3%) and hurts asap7 (9.6% → 11.8%) and gaa2nm (10.9% → 12.7%). No consistent signal, so
+one global law and fewer constants.
 
 End-to-end, all three tested backends now meet their offset target with the measured
 budget (ptm45 1.50 mV / 2.0, asap7 3.16 / 6.0, sky130 1.25 / 2.5).

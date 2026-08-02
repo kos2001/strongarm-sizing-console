@@ -1018,11 +1018,32 @@ _OFFSET_R_INPUT = 1.4142135623730951
 #
 # ptm45 keeps its original exponents: refitting them there made held-out error slightly
 # WORSE (1.3% -> 1.6%), so the gate rejected it. Three of four accepted, one refused.
+# Fitted on the 2-D grid PLUS the sizings the optimizer converges to. Including them is
+# what closed the conservatism in the region that matters: a hand-drawn grid cannot show
+# that bias, because the search does not sample sizings evenly — it goes wherever the model
+# rates cheapest. This makes the fit a fixed-point iteration (the sizings depend on the
+# constants being fitted), and one pass moved every backend the right way:
+#
+#   backend   fresh-set median      optimizer-region ratio
+#   ptm45      3.9% ->  3.5%          1.31x -> 1.25x
+#   asap7     11.4% ->  9.6%          1.53x -> 1.40x
+#   gaa2nm    21.9% -> 10.9%          1.99x -> 1.82x
+#   sky130    16.6% -> 10.7%          1.36x -> 1.30x
+#
+# The ratio column has to be measured AFTER installing, and that is not a formality. Judged
+# at the sizings the OLD model converged to, the new law scores 1.36x and 1.55x on asap7 and
+# gaa2nm; installed, the search moves to different sizings and the honest numbers are 1.40x
+# and 1.82x. A fixed-point iteration cannot be evaluated at the previous fixed point.
+#
+# The acceptance gate required BOTH: fresh-set error had to improve AND the ratio had to
+# stay >= 1.0. The second condition is the important one — a refit that made the numbers
+# prettier by landing optimistic where the search lives would re-create the original defect,
+# where the search gamed its own offset term. Nothing accepted here went below 1.
 _OFFSET_NCC_BY_MODEL = {
-    "ptm45":  (0.1175, 0.6838, 0.3709),
-    "asap7":  (0.1647, 2.2181, -0.1021),
-    "gaa2nm": (0.1536, 2.2385, -0.0217),
-    "sky130": (0.3173, 2.5475, -0.2251),
+    "ptm45":  (0.1067, 0.9163, 0.2965),
+    "asap7":  (0.1217, 2.4253, -0.1705),
+    "gaa2nm": (0.1154, 2.6029, -0.1779),
+    "sky130": (0.2788, 2.7531, -0.2934),
 }
 
 #: How far the implied K still drifts across a 16x ncc-width sweep. This is the diagnostic
@@ -1044,7 +1065,11 @@ _OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = _OFFSET_NCC_BY_MODEL["ptm45"]
 # optimizer output: the corner-feasibility step raises vcm_frac to 0.82, where the
 # multiplier is already 4.3x. exp fit to +/-6% over that range, referenced to 0.62.
 _OFFSET_NCC_VCM_REF, _OFFSET_NCC_VCM_K = 0.62, 7.02
-# pcc and the precharge flats stay GLOBAL, deliberately. Their measured spread across
+# pcc and the precharge flats stay GLOBAL, deliberately — retested after the ncc law became
+# per model (the first test could have been masked by ncc's much larger error) and still not
+# adopted: per-model pcc helps only sky130 (10.7% -> 7.3% fresh) and HURTS asap7 (9.6% ->
+# 11.8%) and gaa2nm (10.9% -> 12.7%). No consistent signal, so one law and fewer constants.
+# Their measured spread across
 # backends is large (pcc 0.048 mV on sky130 to 1.40 mV on asap7; prei 50x between them),
 # so per-model versions were fitted and tested — and they did not earn their place. On a
 # held-out set of 8 sizings, splitting them changed the error by at most ~1 point and made
@@ -1071,8 +1096,8 @@ _OFFSET_PCC_K, _OFFSET_PCC_P = 0.3161, 0.1464
 #: The gap between the second and third is selection: gate on a set and it stops being an
 #: independent estimate of anything. Quoting the seed figure would have claimed a model
 #: exact everywhere while it was ~55% wrong one sizing away.
-_OFFSET_MODEL_HELDOUT_ERR = {"ptm45": 0.039, "asap7": 0.114, "gaa2nm": 0.219,
-                             "sky130": 0.166}
+_OFFSET_MODEL_HELDOUT_ERR = {"ptm45": 0.035, "asap7": 0.096, "gaa2nm": 0.109,
+                             "sky130": 0.107}
 
 #: predicted / measured at the sizings the OPTIMIZER converges to, median over 3 seeds.
 #: A separate number from the one above because the search does not sample sizings evenly
@@ -1088,10 +1113,13 @@ _OFFSET_MODEL_HELDOUT_ERR = {"ptm45": 0.039, "asap7": 0.114, "gaa2nm": 0.219,
 #: cost, not just a comfortable margin. Closing it means including optimizer-converged
 #: sizings in the fit — `scripts/calibrate_offset_model.py` does that via
 #: `optimizer_sizings()` — which is a fixed-point iteration, since the sizings depend on
-#: the constants being fitted. Not done: a refit that lands optimistic here would be worse
-#: than a known 2x of conservatism.
-_OFFSET_MODEL_OPT_REGION_BIAS = {"ptm45": 1.31, "asap7": 1.53, "gaa2nm": 1.99,
-                                 "sky130": 1.36}
+#: the constants being fitted. One pass is done — it brought gaa2nm from 1.99x to 1.55x and
+#: every backend closer — gated on the ratio never dropping below 1.0, since a refit that
+#: landed optimistic here would re-create the defect where the search gamed its own offset
+#: term. Further passes are available and converge slowly — gaa2nm moved 1.99x -> 1.82x on
+#: this one, having looked like 1.55x before the search was allowed to move.
+_OFFSET_MODEL_OPT_REGION_BIAS = {"ptm45": 1.25, "asap7": 1.40, "gaa2nm": 1.82,
+                                 "sky130": 1.30}
 
 
 def offset_model_accuracy(p):
