@@ -990,6 +990,12 @@ def pelgrom_sigma_v(p, dev):
 #          Negligible; carried as constants so the RSS is complete.
 _OFFSET_R_INPUT = 1.268
 _OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = 0.1268, 0.6838, 0.3709
+# The latch term also depends on the input common mode, and strongly — measured, ncc's
+# contribution grows 7x as vcm_frac goes 0.62 -> 0.90 while the input pair's stays flat.
+# The model had no such term, which is the bulk of why it under-predicted ~41% on
+# optimizer output: the corner-feasibility step raises vcm_frac to 0.82, where the
+# multiplier is already 4.3x. exp fit to +/-6% over that range, referenced to 0.62.
+_OFFSET_NCC_VCM_REF, _OFFSET_NCC_VCM_K = 0.62, 7.02
 _OFFSET_FLAT_MV = {"pre": 0.0302, "prei": 0.0306}
 _OFFSET_PCC_K, _OFFSET_PCC_P = 0.3176, 0.1283
 
@@ -1005,7 +1011,9 @@ def predicted_offset_budget_mv(p):
     sig_ncc = pelgrom_sigma_v(p, "ncc") * 1e3
     di, dn = p["devices"]["input"], p["devices"]["ncc"]
     ratio = max((di["w_um"] * di["m"]) / max(dn["w_um"] * dn["m"], 1e-9), 1e-9)
-    terms["ncc"] = _OFFSET_NCC_K * (sig_ncc ** _OFFSET_NCC_A) * (ratio ** _OFFSET_NCC_B)
+    vcm_mult = math.exp(_OFFSET_NCC_VCM_K * (p["vcm_frac"] - _OFFSET_NCC_VCM_REF))
+    terms["ncc"] = (_OFFSET_NCC_K * (sig_ncc ** _OFFSET_NCC_A)
+                    * (ratio ** _OFFSET_NCC_B) * vcm_mult)
     dp = p["devices"]["pcc"]
     terms["pcc"] = _OFFSET_PCC_K * max(dp["w_um"], 1e-9) ** _OFFSET_PCC_P
     terms.update(_OFFSET_FLAT_MV)
@@ -1252,12 +1260,19 @@ def cm_range_sweep(params, vcm_fracs=None, with_offset=False, n_mc=8):
     not a measurement. Real CMRR comes from asymmetry this netlist does not have
     (layout, loading, systematic gradients). What *is* measurable is reported here.
 
-    `with_offset` re-runs the mismatch Monte-Carlo at each point. It is off by
-    default because it costs ~90 sims per point and the answer is flat: the input
-    pair's Vth mismatch refers to the input gate-to-gate, so σ_offset is
-    Vcm-independent to first order — measured constant to 3 significant figures
-    across the whole usable range. That flatness is itself the useful result: you
-    cannot buy offset with the operating point, only speed."""
+    `with_offset` re-runs the **input pair's** mismatch Monte-Carlo at each point. It is
+    off by default because it costs ~90 sims per point and that term is genuinely flat:
+    the input pair's Vth mismatch refers to the input gate-to-gate, so it is
+    Vcm-independent to first order — measured constant to 3 significant figures across
+    the usable range.
+
+    **The total offset is NOT flat, and an earlier version of this docstring said it
+    was.** The latch's contribution grows ~7x over the same sweep (ncc 0.72 -> 5.05 mV
+    as vcm_frac goes 0.62 -> 0.90) because the latch mismatch is referred through a
+    shrinking overdrive. So raising the operating point for speed is *not* free — it is
+    paid for in offset, through the latch rather than the input pair. Use
+    `offset_budget` (or the analytic `predicted_offset_budget_mv`, which now carries the
+    vcm term) to price it; `with_offset` here only shows the flat part."""
     p0 = _full(params)
     if vcm_fracs is None:
         vcm_fracs = [round(0.40 + 0.05 * i, 3) for i in range(12)]   # 0.40 .. 0.95
@@ -1294,10 +1309,11 @@ def cm_range_sweep(params, vcm_fracs=None, with_offset=False, n_mc=8):
         "cmrr_note": ("no CMRR figure: the deck is symmetric, so systematic offset — "
                       "and hence CMRR — is structurally zero/infinite. Probing it "
                       "returns the bisection quantisation step, not a measurement."),
-        "note": ("offset σ is flat in Vcm (input-pair mismatch is gate-referred), so "
-                 "the operating point trades speed and power only. Below the usable "
-                 "range the latch does not resolve at all — that is a hard bound, "
-                 "not a slow corner."),
+        "note": ("the INPUT PAIR's offset σ is flat in Vcm (its mismatch is "
+                 "gate-referred), but the total is not: the latch's contribution grows "
+                 "~7x over this sweep, so a higher operating point buys speed and pays "
+                 "for it in offset. Price it with offset_budget. Below the usable range "
+                 "the latch does not resolve at all — a hard bound, not a slow corner."),
     }
 
 
