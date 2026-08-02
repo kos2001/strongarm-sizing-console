@@ -82,8 +82,17 @@ def test_finer_bisection_removes_a_bias_not_just_noise():
     coarse, fine, finer = med(7), med(11), med(13)
     assert coarse > fine, (coarse, fine)                    # biased, in this direction
     assert fine == pytest.approx(finer, rel=0.02), (fine, finer)   # and 11 has converged
-    p = run_sim._full({"model": "ptm45", "devices": {"input": {"w_um": 24.0}}, "n_mc": 16})
-    assert fine == pytest.approx(server._pred_offset_mv(p), rel=0.10)
+
+    # The prediction is checked against the DETERMINISTIC reference, not against `fine`.
+    # It used to be compared to `fine` at rel=0.10, and passed only because R_input had
+    # been fitted to that same noisy estimate; with R_input at its exact value sqrt(2) the
+    # prediction is 1.021 and this particular median lands at 0.915 — 10% away, which is
+    # the estimator's own error, not the model's. Comparing a model to a noisy reference
+    # at the reference's noise level cannot distinguish the two.
+    p = run_sim._full({"model": "ptm45", "devices": {"input": {"w_um": 24.0}}})
+    exact = run_sim.offset_budget(p, groups=("input",))["per_device"]["input"]["offset_sigma_mv"]
+    assert exact == pytest.approx(server._pred_offset_mv(p), rel=0.01), (exact,)
+    assert fine == pytest.approx(exact, rel=0.15)      # the MC path, at its own precision
 
 
 # ── the referral constants ──────────────────────────────────────────────────
@@ -194,15 +203,31 @@ def test_analytic_budget_tracks_the_measured_one(dev):
     assert set(terms) == set(run_sim.OFFSET_PAIRS)
 
 
-def test_the_measured_reference_is_only_good_to_about_25_percent():
-    """Why the tolerance above is loose, and why no safety factor was tuned onto the
-    residuals: the reference moves as much as the model's error does."""
+def test_the_reference_no_longer_moves_but_the_mc_path_still_does():
+    """Why the tolerance above was ever loose — and why it need not be any more.
+
+    This test used to assert the reference scatters MORE than 15%, as the reason no
+    safety factor could be tuned onto the residuals. That was true of the Monte-Carlo
+    path and is still true of it; it is no longer true of the default reference, which is
+    deterministic. The MC arm is kept here because the contrast is the finding: the model
+    was validated for a long time against something that moved as much as its own error,
+    and three constants were mis-fitted as a result."""
     p = run_sim._full({"model": "ptm45"})
-    vals = [run_sim.offset_budget(p, n_mc=12, seed=s)["total_sigma_mv"]
-            for s in (11, 22, 33, 44)]
-    spread = (max(vals) - min(vals)) / (sum(vals) / len(vals))
-    assert spread > 0.15, vals      # it really is this scattered
-    assert spread < 0.60, vals      # but not unusable
+    det = [run_sim.offset_budget(p)["total_sigma_mv"] for _ in range(3)]
+    assert len(set(det)) == 1, det                       # no scatter at all
+
+    mc = [run_sim.offset_budget(p, n_mc=12, seed=s, method="mc")["total_sigma_mv"]
+          for s in (11, 22, 33, 44, 55, 66)]
+    spread = (max(mc) - min(mc)) / (sum(mc) / len(mc))
+    assert spread > 0.05, mc        # the old reference really did move
+
+    # ...and it did not move symmetrically. At the old default n_mc=12 the MC reference is
+    # biased LOW: over 8 seeds its mean sits 10.7% under the deterministic answer with 7 of
+    # 8 draws below it, closing to -1.6% at n_mc=32. So the reference the model was fitted
+    # against was itself optimistic, in the same direction as the model — the two errors
+    # compounded rather than cancelling, and averaging more seeds could not fix a bias.
+    assert sum(mc) / len(mc) < det[0], (mc, det[0])
+    assert sum(1 for v in mc if v < det[0]) >= len(mc) - 2, (mc, det[0])
 
 
 def test_the_latch_term_depends_on_the_operating_point():
@@ -331,3 +356,105 @@ def test_optimizer_reports_which_device_binds_the_budget():
     b = r["offset_budget"]
     assert b["dominant"], b
     assert b["dominant"][0] in run_sim.OFFSET_PAIRS
+
+
+def test_the_whole_latch_law_is_per_backend_exponents_included():
+    """A global law was 30-43% out of sample on the three non-ptm45 backends, optimistically
+    — the direction that lets the search shrink the latch believing offset is fine.
+
+    The EXPONENTS were the problem, not just the scale: the non-ptm45 backends want
+    sigma^2.2 to sigma^2.5 with essentially no geometry-ratio dependence, against ptm45's
+    sigma^0.68 / ratio^0.37. Fitting them per model cut fresh-set median error 2-4x
+    (asap7 42.7 -> 11.4%, gaa2nm 30.6 -> 21.9%, sky130 34.5 -> 16.6%) and worst case 3-5x."""
+    laws = run_sim._OFFSET_NCC_BY_MODEL
+    assert set(laws) == {"ptm45", "asap7", "gaa2nm", "sky130"}
+    assert all(len(v) == 3 for v in laws.values())
+    exps = [a for _, a, _ in laws.values()]
+    assert max(exps) / min(exps) > 2.0, laws       # the exponents really do differ
+    # the held-out record must cover exactly the same backends, or a caller can be handed a
+    # prediction with no statement of how far out of sample it is
+    assert set(run_sim._OFFSET_MODEL_HELDOUT_ERR) == set(laws)
+    assert set(run_sim._OFFSET_NCC_K_WIDTH_DRIFT) == set(laws)
+
+    # and the model must read the per-model slot, not the fallback scalars
+    seen = {}
+    for m in laws:
+        p = run_sim._full({"model": m, **({"vdd": 1.8} if m == "sky130" else {})})
+        seen[m] = run_sim.predicted_offset_budget_mv(p)[1]["ncc"]
+    saved = dict(laws)
+    try:
+        k, a, b = saved["asap7"]
+        run_sim._OFFSET_NCC_BY_MODEL = {**saved, "asap7": (k * 2, a, b)}
+        p = run_sim._full({"model": "asap7"})
+        assert run_sim.predicted_offset_budget_mv(p)[1]["ncc"] > 1.8 * seen["asap7"]
+        # ...and only that backend moves
+        p45 = run_sim._full({"model": "ptm45"})
+        assert run_sim.predicted_offset_budget_mv(p45)[1]["ncc"] == pytest.approx(seen["ptm45"])
+    finally:
+        run_sim._OFFSET_NCC_BY_MODEL = saved
+
+    # no derived convenience view may exist: a `{m: law[0]}` dict lived here for one commit
+    # and immediately became a trap the calibration loop patched instead of the real table
+    assert not hasattr(run_sim, "_OFFSET_NCC_K_BY_MODEL")
+
+
+def test_accuracy_is_reported_out_of_sample_not_at_the_fitted_point():
+    """The seed sizing is where K is fitted, so its residual is ~0 on every backend.
+
+    Reporting that would be self-congratulation: one sizing away three of the four
+    backends are ~55% wrong. `offset_model_accuracy` must quote held-out error."""
+    good = run_sim.offset_model_accuracy({"model": "ptm45"})
+    assert good["heldout_median_abs_error"] < 0.05
+    assert "derived on this backend" in good["note"]
+
+    # A borrowed-form backend must report materially worse accuracy than the one the form
+    # was derived on, and say what to do about it. Asserted RELATIVE to ptm45 rather than
+    # against an absolute threshold: a 0.15 floor here broke the moment per-model exponents
+    # cut asap7 from 23% to 11%, which is a test fighting the improvement it should confirm.
+    weak = run_sim.offset_model_accuracy({"model": "asap7"})
+    assert weak["heldout_median_abs_error"] > 2 * good["heldout_median_abs_error"]
+    assert "validation set" in weak["note"] and "offset_budget" in weak["note"]
+    assert "screening" in weak["note"]
+
+    unknown = run_sim.offset_model_accuracy({"model": "something_new"})
+    assert unknown["heldout_median_abs_error"] is None
+    assert unknown["has_own_latch_law"] is False
+
+    # ptm45 is the only backend the form was derived on, and it must stay the only one
+    # claiming few-per-cent accuracy — if another ever does, its form was refitted too
+    tight = [m for m, e in run_sim._OFFSET_MODEL_HELDOUT_ERR.items() if e < 0.05]
+    assert tight == ["ptm45"], tight
+    for a in (good, weak):
+        assert a["reference"].startswith("deterministic")
+
+
+def test_the_input_referral_factor_is_exactly_sqrt2_by_linearity():
+    """Not a fit. It was published as 1.414, "corrected" to 1.06, "corrected" to 1.268 —
+    both corrections wrong, both from fitting a 21%-standard-error reference."""
+    assert run_sim._OFFSET_R_INPUT == pytest.approx(math.sqrt(2), rel=1e-12)
+    for model, ov in (("ptm45", {}), ("sky130", {"vdd": 1.8})):
+        r = run_sim.input_referral_is_linear({"model": model, **ov}, sigmas=(1.0, 3.0))
+        assert r["linear"], r
+        assert r["max_deviation"] < 0.01
+        assert r["implied_r_input"] == pytest.approx(math.sqrt(2), rel=1e-5)
+
+
+def test_the_optimizer_region_bias_is_reported_and_conservative():
+    """The search does not sample sizings evenly — it seeks out whatever the model rates
+    cheapest — so its converged region has its own bias, and a larger one than the
+    validation set shows (1.31-1.99x vs 3.9-21.9%).
+
+    The direction is what matters. Every entry must be >1, i.e. over-predicting: this
+    model began by being OPTIMISTIC in exactly this region, which is how the search came
+    to game its own offset term. If a refit ever flips one of these below 1 that is a
+    regression regardless of what it does to the median error."""
+    bias = run_sim._OFFSET_MODEL_OPT_REGION_BIAS
+    assert set(bias) == set(run_sim._OFFSET_NCC_BY_MODEL)
+    assert all(v > 1.0 for v in bias.values()), bias
+
+    a = run_sim.offset_model_accuracy({"model": "gaa2nm"})
+    assert a["optimizer_region_bias"] == bias["gaa2nm"]
+    # and it must say what the number costs, not just quote it
+    assert "over-predicts" in a["note"] and "margin" in a["note"]
+    # the validation-set error must not be presented as if it covered this region
+    assert a["heldout_median_abs_error"] < bias["gaa2nm"] - 1.0

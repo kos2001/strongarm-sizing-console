@@ -988,16 +988,145 @@ def pelgrom_sigma_v(p, dev):
 #   pre,
 #   prei   ~0.025-0.03 mV regardless of width, i.e. 150x below the input pair.
 #          Negligible; carried as constants so the RSS is complete.
-_OFFSET_R_INPUT = 1.268
-_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = 0.1268, 0.6838, 0.3709
+# EXACTLY sqrt(2), and not a fitted number. Measured deterministically, the input pair's
+# input-referred offset is v = -d for a differential Vth mismatch d: v/d is 1.0000 to
+# within 0.06% on all four backends and out to 4 sigma (see `input_referral_is_linear`).
+# A linear response has sigma_out = sigma_in exactly, and the differential sigma of two
+# independent devices is sqrt(2) * sigma_1dev. So the textbook value was right.
+#
+# This constant was published as 1.414, "corrected" to 1.06, then "corrected" to 1.268,
+# and both corrections were wrong — by -25% and -10%, on the model's DOMINANT term, in the
+# optimistic direction. All three errors have the same cause: a Monte-Carlo reference with
+# a 21% standard error per estimate was treated as ground truth. It converges to sqrt(2)
+# as n grows (-16.7% at n_mc=12, -3.4% at 64, +2.5% at 256) — it was never in conflict
+# with the textbook, it was just noisy. Hence the deterministic reference below; the
+# lesson is not about this constant, it is that a fit is only as good as its reference.
+_OFFSET_R_INPUT = 1.4142135623730951
+# The latch magnitude coefficient is PER MODEL — it spans 6.5x across the backends
+# (0.115 on ptm45 to 0.747 on asap7), so a single global value calibrated on ptm45
+# under-predicted asap7 by 41%, gaa2nm by 31% and sky130 by 14%. All in the optimistic
+# direction, which is the dangerous one: the search shrinks the latch believing offset is
+# fine. The exponents and the vcm term do transfer — measured, the vcm ratio at 0.82 is
+# 3.55-4.30 across backends against a fit of 4.07 — so only K is split.
+# The whole ncc law is per model, exponents included — because the exponents were the
+# problem. Fitted on a 2-D grid (input W x ncc W varied independently, so the sigma
+# exponent and the geometry exponent are separable; on a 1-D ncc sweep they are
+# confounded) against the deterministic reference. The non-ptm45 backends want sigma^2.2
+# to sigma^2.5 and essentially NO geometry-ratio dependence, against ptm45's sigma^0.68
+# and ratio^0.37 — a different dependence, not a different scale, which is what the 174%
+# width drift of a per-model-K-only fit was telling us.
+#
+# ptm45 keeps its original exponents: refitting them there made held-out error slightly
+# WORSE (1.3% -> 1.6%), so the gate rejected it. Three of four accepted, one refused.
+_OFFSET_NCC_BY_MODEL = {
+    "ptm45":  (0.1175, 0.6838, 0.3709),
+    "asap7":  (0.1647, 2.2181, -0.1021),
+    "gaa2nm": (0.1536, 2.2385, -0.0217),
+    "sky130": (0.3173, 2.5475, -0.2251),
+}
+
+#: How far the implied K still drifts across a 16x ncc-width sweep. This is the diagnostic
+#: that found the problem: with global exponents it read 39% on ptm45 (where they were
+#: fitted) but 82 / 174 / 176% elsewhere, which said the FORM was wrong, not the scale — a
+#: single coefficient cannot absorb 176%. With per-model exponents it is 39 / 31 / 41 / 49%,
+#: i.e. the non-ptm45 backends are now no worse than the one the model was derived on.
+#: The Monte-Carlo reference hid all of this: 176% of drift is invisible behind an estimator
+#: that scattered 27% between seeds and read 11% low on top of that.
+_OFFSET_NCC_K_WIDTH_DRIFT = {"ptm45": 0.39, "asap7": 0.31, "gaa2nm": 0.41, "sky130": 0.49}
+# Fallback for a backend with no entry above. Deliberately NOT a derived view of the table:
+# a `{m: v[0] for ...}` convenience dict existed for one commit and immediately became a
+# trap — the calibration loop patched it, the model read the real table, and every
+# candidate was silently ignored. There is one place the ncc law lives.
+_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = _OFFSET_NCC_BY_MODEL["ptm45"]
 # The latch term also depends on the input common mode, and strongly — measured, ncc's
 # contribution grows 7x as vcm_frac goes 0.62 -> 0.90 while the input pair's stays flat.
 # The model had no such term, which is the bulk of why it under-predicted ~41% on
 # optimizer output: the corner-feasibility step raises vcm_frac to 0.82, where the
 # multiplier is already 4.3x. exp fit to +/-6% over that range, referenced to 0.62.
 _OFFSET_NCC_VCM_REF, _OFFSET_NCC_VCM_K = 0.62, 7.02
-_OFFSET_FLAT_MV = {"pre": 0.0302, "prei": 0.0306}
-_OFFSET_PCC_K, _OFFSET_PCC_P = 0.3176, 0.1283
+# pcc and the precharge flats stay GLOBAL, deliberately. Their measured spread across
+# backends is large (pcc 0.048 mV on sky130 to 1.40 mV on asap7; prei 50x between them),
+# so per-model versions were fitted and tested — and they did not earn their place. On a
+# held-out set of 8 sizings, splitting them changed the error by at most ~1 point and made
+# sky130 worse (17.7% -> 21.1%). Only per-model `ncc` K earned its keep (asap7 49% -> 23%).
+# Shipping four per-backend micro-decisions worth ~1 point each would be fitting the
+# validation set, not the circuit.
+# The values themselves ARE updated: refit against the deterministic reference, the pcc law
+# moves 0.3176*W^0.1283 -> 0.3161*W^0.1464 and the flats 0.030 -> 0.0067/0.0054 (the old
+# 0.030 was itself a correction of a 0.484 that was pure bisection floor).
+_OFFSET_FLAT_MV = {"pre": 0.0067, "prei": 0.0054}
+_OFFSET_PCC_K, _OFFSET_PCC_P = 0.3161, 0.1464
+
+
+#: Median |error| of the analytic budget against the deterministic reference on a
+#: validation set that neither the fit NOR the acceptance gate ever saw, and which
+#: deliberately reaches outside the fitted ranges (ncc 0.4 and 16 um, input 2 and 50 um).
+#: Worst case in that set: 24 / 38 / 57 / 42%.
+#:
+#: These are deliberately the pessimistic numbers. Three other figures were available and
+#: all of them flatter:
+#:   - at the SEED sizing, where K is fitted: -0.2% to -0.0% on every backend
+#:   - on the 8-sizing set used to ACCEPT the fit: 1.3 / 3.7 / 10.0 / 9.9%
+#:   - on this fresh set:                        3.9 / 11.4 / 21.9 / 16.6%   <- recorded
+#: The gap between the second and third is selection: gate on a set and it stops being an
+#: independent estimate of anything. Quoting the seed figure would have claimed a model
+#: exact everywhere while it was ~55% wrong one sizing away.
+_OFFSET_MODEL_HELDOUT_ERR = {"ptm45": 0.039, "asap7": 0.114, "gaa2nm": 0.219,
+                             "sky130": 0.166}
+
+#: predicted / measured at the sizings the OPTIMIZER converges to, median over 3 seeds.
+#: A separate number from the one above because the search does not sample sizings evenly
+#: — it seeks out whatever the model rates cheapest, so its converged region has its own
+#: bias, larger here than the validation-set error. Reproducible: asap7 and gaa2nm return
+#: the same ratio on every seed.
+#:
+#: All four are ABOVE 1, i.e. the model now over-predicts offset where it is used. That is
+#: the safe direction — the search over-sizes rather than shipping a design that misses —
+#: and it is the opposite of where this model started, when the same selection effect ran
+#: optimistic and was the reason the search could game its own offset term. But 1.99x on
+#: gaa2nm means roughly twice the latch area that offset actually requires, so it is a real
+#: cost, not just a comfortable margin. Closing it means including optimizer-converged
+#: sizings in the fit — `scripts/calibrate_offset_model.py` does that via
+#: `optimizer_sizings()` — which is a fixed-point iteration, since the sizings depend on
+#: the constants being fitted. Not done: a refit that lands optimistic here would be worse
+#: than a known 2x of conservatism.
+_OFFSET_MODEL_OPT_REGION_BIAS = {"ptm45": 1.31, "asap7": 1.53, "gaa2nm": 1.99,
+                                 "sky130": 1.36}
+
+
+def offset_model_accuracy(p):
+    """How far the analytic budget is known to sit from measurement on this backend.
+
+    Reports the number, not a `calibrated: true/false`: a boolean reading "true" for a
+    backend that is 23% wrong out of sample is the same false reassurance a single global
+    constant gave. Deliberately quotes HELD-OUT error, since the fitted point flatters."""
+    m = p.get("model") or "ptm45"
+    e = _OFFSET_MODEL_HELDOUT_ERR.get(m)
+    if e is None:
+        note = ("no held-out error measured for this backend; the constants are ptm45 "
+                "fits, and on the backends where that was tested they were 39-52% out")
+    elif e < 0.05:
+        note = (f"the functional form was derived on this backend; error {e:.0%} on a "
+                f"validation set the fit and the gate never saw")
+    else:
+        note = (f"error {e:.0%} on a validation set the fit and the gate never saw — the "
+                f"law is fitted per backend but this is a screening number, not a sign-off "
+                f"one. Judge a final design against a measured offset_budget()")
+    bias = _OFFSET_MODEL_OPT_REGION_BIAS.get(m)
+    if bias:
+        note += (f". Separately, at the sizings the optimizer converges to it "
+                 f"over-predicts {bias:.2f}x — the safe direction, but it means a "
+                 f"converged design carries roughly that much offset margin over what it "
+                 f"needs, so check the measured budget before accepting the area")
+    return {
+        "model": m,
+        "has_own_latch_law": m in _OFFSET_NCC_BY_MODEL,
+        "heldout_median_abs_error": e,
+        "optimizer_region_bias": bias,
+        "latch_k_width_drift": _OFFSET_NCC_K_WIDTH_DRIFT.get(m),
+        "reference": "deterministic (Gauss-Hermite quadrature)",
+        "note": note,
+    }
 
 
 def predicted_offset_budget_mv(p):
@@ -1012,15 +1141,114 @@ def predicted_offset_budget_mv(p):
     di, dn = p["devices"]["input"], p["devices"]["ncc"]
     ratio = max((di["w_um"] * di["m"]) / max(dn["w_um"] * dn["m"], 1e-9), 1e-9)
     vcm_mult = math.exp(_OFFSET_NCC_VCM_K * (p["vcm_frac"] - _OFFSET_NCC_VCM_REF))
-    terms["ncc"] = (_OFFSET_NCC_K * (sig_ncc ** _OFFSET_NCC_A)
-                    * (ratio ** _OFFSET_NCC_B) * vcm_mult)
+    model = p.get("model") or "ptm45"
+    k, a, b = _OFFSET_NCC_BY_MODEL.get(
+        model, (_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B))
+    terms["ncc"] = k * (sig_ncc ** a) * (ratio ** b) * vcm_mult
     dp = p["devices"]["pcc"]
     terms["pcc"] = _OFFSET_PCC_K * max(dp["w_um"], 1e-9) ** _OFFSET_PCC_P
     terms.update(_OFFSET_FLAT_MV)
     return math.sqrt(sum(v * v for v in terms.values())), terms
 
 
-def offset_budget(params, n_mc=12, seed=4242, groups=OFFSET_PAIRS):
+# Gauss-Hermite nodes/weights for the PROBABILISTS' weight (standard normal), weights
+# normalised to sum to 1 so `sum(w_i f(x_i))` is E[f(X)] for X ~ N(0,1) directly.
+# Hardcoded rather than pulled from numpy: run_sim has no numpy dependency and should not
+# acquire one for five constants. `test_quadrature_rule_is_exact` validates them by
+# integrating x^k, which pins every digit without needing numpy to compare against.
+_GAUSS_HERMITE = {
+    3: ((-1.7320508075688774, 0.0, 1.7320508075688774),
+        (0.16666666666666666, 0.6666666666666667, 0.16666666666666666)),
+    5: ((-2.8569700138728056, -1.355626179974266, 0.0, 1.355626179974266,
+         2.8569700138728056),
+        (0.011257411327720686, 0.22207592200561257, 0.5333333333333334,
+         0.22207592200561257, 0.011257411327720686)),
+    7: ((-3.750439717725742, -2.3667594107345415, -1.1544053947399682, 0.0,
+         1.1544053947399682, 2.3667594107345415, 3.750439717725742),
+        (0.0005482688559722177, 0.030757123967586498, 0.2401231786050127,
+         0.45714285714285724, 0.2401231786050127, 0.030757123967586498,
+         0.0005482688559722177)),
+    9: ((-4.512745863399783, -3.20542900285647, -2.07684797867783, -1.0232556637891326,
+         0.0, 1.0232556637891326, 2.07684797867783, 3.20542900285647, 4.512745863399783),
+        (2.23458440077466e-05, 0.002789141321231769, 0.049916406765217865,
+         0.24409750289493945, 0.4063492063492063, 0.24409750289493945,
+         0.049916406765217865, 0.002789141321231769, 2.23458440077466e-05)),
+}
+#: 5 nodes and 16 bisection steps: at 16 steps the answer agrees to 0.04% across 3, 5, 7
+#: and 9 nodes, so 5 is comfortable margin rather than a compromise. At the old 11-step
+#: default the same sweep scattered 5.1% — the limit was never the number of nodes, it was
+#: that one bisection LSB (0.029 mV) is 14% of the response at the inner nodes.
+_OFFSET_QUAD_NODES = 5
+_OFFSET_QUAD_ITERS = 16
+
+
+def _offset_response(p, group, d, n_iter=None):
+    """Input-referred offset for a single differential Vth mismatch `d` on `group`.
+
+    One entry point for both paths, because the input pair goes through
+    `_offset_sample`'s own two arguments while every other group is injected as a series
+    gate source. For the input pair only the DIFFERENCE matters — putting `d` on one
+    device and splitting it +d/2 / -d/2 give bit-identical results, and a pure
+    common-mode shift moves the offset by one LSB, i.e. not at all — so `(d, 0)` is
+    exact rather than an approximation."""
+    if group == "input":
+        return _offset_sample(p, d, 0.0, n_iter=n_iter)
+    q = {**p, "mismatch_v": {**(p.get("mismatch_v") or {}), group: d}}
+    return _offset_sample(q, 0.0, 0.0, n_iter=n_iter)
+
+
+def _offset_of_pair_quad(p, group, sigma_v, nodes=None, n_iter=None):
+    """Input-referred offset sigma for one matched pair, by Gauss-Hermite quadrature.
+
+    Deterministic, and cheaper than the Monte-Carlo path it replaces. The reason it can
+    be: each group's mismatch enters as a SINGLE scalar d ~ N(0, sigma_v*sqrt(2)), so
+    this is a one-dimensional expectation, not a sampling problem. Monte Carlo on a 1-D
+    Gaussian buys nothing but variance — at n_mc=12 the estimate carried a 21% standard
+    error and the same sizing returned 0.42, 0.51, 0.39 mV on three seeds.
+
+    5 nodes at 16 bisection steps land within 0.04% of the 9-node answer using 5
+    bisections where the MC path used 12, and the result repeats bit-for-bit."""
+    x, w = _GAUSS_HERMITE[nodes or _OFFSET_QUAD_NODES]
+    if n_iter is None:
+        n_iter = _OFFSET_QUAD_ITERS
+    sd = sigma_v * math.sqrt(2.0)
+    vals = pmap(lambda xi: _offset_response(p, group, xi * sd, n_iter=n_iter), list(x))
+    usable = [(wi, v) for wi, v in zip(w, vals) if v is not None]
+    if len(usable) < len(x):
+        return {"pelgrom_sigma_vth_mv": round(sigma_v * 1e3, 4),
+                "offset_sigma_mv": None, "method": "quadrature",
+                "error": f"{len(x) - len(usable)} of {len(x)} quadrature nodes failed to "
+                         f"converge; a partial rule is not a weaker estimate, it is a "
+                         f"wrong one, so no number is reported"}
+    m = sum(wi * v for wi, v in usable)
+    m2 = sum(wi * v * v for wi, v in usable)
+    return {"pelgrom_sigma_vth_mv": round(sigma_v * 1e3, 4),
+            "offset_sigma_mv": round(math.sqrt(max(m2 - m * m, 0.0)) * 1e3, 4),
+            "offset_mean_mv": round(m * 1e3, 4),
+            "method": "quadrature", "nodes": len(x),
+            "resolution_mv": round(offset_bisect_resolution_v(n_iter) * 1e3, 6)}
+
+
+def input_referral_is_linear(params, sigmas=(0.5, 1.0, 2.0, 3.0, 4.0), n_iter=16):
+    """Verify the property `_OFFSET_R_INPUT = sqrt(2)` rests on, rather than fitting it.
+
+    Returns v/d at each multiple of the differential sigma. If the response is linear
+    these are all 1.0 and the referral factor is sqrt(2) exactly; if a backend ever
+    breaks linearity this is what says so, instead of a refitted constant absorbing it
+    into an average."""
+    p = _full(params)
+    sd = pelgrom_sigma_v(p, "input") * math.sqrt(2.0)
+    out = {}
+    for a in sigmas:
+        v = _offset_response(p, "input", a * sd, n_iter=n_iter)
+        out[a] = None if v is None else round(-v / (a * sd), 5)
+    got = [r for r in out.values() if r is not None]
+    return {"ratios": out, "max_deviation": (max(abs(r - 1.0) for r in got) if got else None),
+            "linear": bool(got) and max(abs(r - 1.0) for r in got) < 0.01,
+            "implied_r_input": round(math.sqrt(2.0), 6)}
+
+
+def offset_budget(params, n_mc=12, seed=4242, groups=OFFSET_PAIRS, method="quadrature"):
     """Which devices the offset is actually made of.
 
     `measure_offset` models the input pair only — the code called latch and tail
@@ -1032,17 +1260,27 @@ def offset_budget(params, n_mc=12, seed=4242, groups=OFFSET_PAIRS):
     Each group is perturbed by its **own** Pelgrom σ (from its own W·L·M), one
     group at a time, and the resulting input-referred offset σ is measured the same
     way as the input pair's: bisect the differential input to the decision-flip
-    point per Monte-Carlo draw. Reporting them separately is the point — it says
-    which device to grow."""
+    point. Reporting them separately is the point — it says which device to grow.
+
+    `method="quadrature"` (default) evaluates the expectation by Gauss-Hermite
+    quadrature; `"mc"` keeps the Monte-Carlo path. Quadrature is the default because
+    each group's mismatch is a single scalar, so this is a 1-D expectation and sampling
+    it only adds variance: the MC path carried a 21% standard error at n_mc=12 and
+    scattered 27% between seeds, which is larger than most of the differences this
+    function is used to resolve. Three separate constants in the analytic model were
+    mis-fitted against that noise. `n_mc`/`seed` apply to `"mc"` only."""
     p = _full(params)
     p = {**p, "n_mc": n_mc}
     per = {}
     for g in groups:
         sig = pelgrom_sigma_v(p, g)
+        if method == "quadrature":
+            per[g] = _offset_of_pair_quad(p, g, sig)
+            continue
         if g == "input":
             # existing dedicated path (series sources already in the deck)
             import random
-            per[g] = {"pelgrom_sigma_vth_mv": round(sig * 1e3, 4),
+            per[g] = {"pelgrom_sigma_vth_mv": round(sig * 1e3, 4), "method": "mc",
                       **{k: v for k, v in measure_offset(p, random.Random(seed)).items()
                          if k in ("offset_sigma_mv", "offset_mean_mv", "n_mc")}}
             continue
@@ -1061,6 +1299,7 @@ def offset_budget(params, n_mc=12, seed=4242, groups=OFFSET_PAIRS):
         "dominant": ranked,
         "excluded": {"tail": "single device, no differential partner — its mismatch "
                              "is common-mode, not offset"},
+        "method": method,
         "note": ("each group perturbed by its own Pelgrom σ from its own W·L·M, one "
                  "at a time; total is the RSS over independent contributors. Grow "
                  "the area of whatever leads `dominant` — growing anything else "
@@ -1074,14 +1313,16 @@ def _offset_of_pair(p, group, sigma_v, n_mc, seed, n_iter=None):
     these contributions are small enough that the 7-step default *is* the answer
     (0.47 mV) rather than a bound on it."""
     import random
-    rng = random.Random(seed + hash(group) % 10000)
+    # `hash(group)` here was salted per process (PYTHONHASHSEED), so this function took a
+    # `seed` and did not reproduce across runs — `hash("ncc") % 10000` returned 7174,
+    # 8200 and 5952 on three consecutive interpreters. Every non-input reference number
+    # ever recorded came from a draw set that cannot be replayed, including the
+    # calibration history. zlib.crc32 is stable across processes and versions.
+    import zlib
+    rng = random.Random(seed + zlib.crc32(group.encode()) % 10000)
     draws = [rng.gauss(0.0, sigma_v * math.sqrt(2)) for _ in range(n_mc)]
-
-    def one(d):
-        q = {**p, "mismatch_v": {**(p.get("mismatch_v") or {}), group: d}}
-        return _offset_sample(q, 0.0, 0.0, n_iter=n_iter)
-
-    vals = [v for v in pmap(one, draws) if v is not None]
+    vals = [v for v in pmap(lambda d: _offset_response(p, group, d, n_iter=n_iter),
+                            draws) if v is not None]
     if len(vals) < 2:
         return {"pelgrom_sigma_vth_mv": round(sigma_v * 1e3, 4),
                 "offset_sigma_mv": None, "n_mc": len(vals),
@@ -1091,6 +1332,7 @@ def _offset_of_pair(p, group, sigma_v, n_mc, seed, n_iter=None):
     return {"pelgrom_sigma_vth_mv": round(sigma_v * 1e3, 4),
             "offset_sigma_mv": round(math.sqrt(var) * 1e3, 4),
             "offset_mean_mv": round(mean * 1e3, 4), "n_mc": len(vals),
+            "method": "mc",
             "resolution_mv": round(offset_bisect_resolution_v(n_iter) * 1e3, 5)}
 
 

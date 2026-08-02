@@ -55,12 +55,34 @@ def test_optimizer_flags_which_device_dominates_the_offset(opt):
 
 
 def test_the_warning_names_which_measurement_it_compares():
-    """The budget re-measures the input pair with its own n_mc, so the number in the
-    warning differs slightly from the result's `offset` field. It has to say so or it
-    reads as a contradiction."""
+    """The budget re-measures the input pair, so its number differs from the result's
+    `offset` field and the warning has to say which reference it used.
+
+    It used to quote `n_mc=<budget_n_mc>`. That became false the moment the reference
+    became deterministic and stopped consuming `n_mc` — the same failure mode as the
+    warning that went on claiming the cost function ignored latch mismatch after it
+    stopped doing so. So the assertion is now: name the reference, and do NOT claim a
+    sample count that was never used."""
     r = server.optimize(run_sim._full({"model": "ptm45"}), TARGETS, budget_n_mc=6)
-    if r["offset_budget_warning"]:
-        assert "n_mc=6" in r["offset_budget_warning"]
+    w = r["offset_budget_warning"]
+    if w:
+        assert "deterministic" in w
+        assert r["offset_budget"]["method"] == "quadrature"
+        assert "n_mc" not in w, w
+        # and it must quote the predictor's held-out error, since that is the number the
+        # reader needs to decide how much of the gap is the model
+        assert "held-out" in w
+
+
+def test_the_mc_reference_is_still_reachable_and_labelled():
+    """Keeping the old path matters — the contrast is the evidence — but a result must
+    always say which reference produced it."""
+    p = run_sim._full({"model": "ptm45"})
+    det = run_sim.offset_budget(p)
+    mc = run_sim.offset_budget(p, n_mc=6, seed=7, method="mc")
+    assert det["method"] == "quadrature" and mc["method"] == "mc"
+    assert all(v.get("method") == "quadrature" for v in det["per_device"].values())
+    assert all(v.get("method") == "mc" for v in mc["per_device"].values())
 
 
 def test_the_budget_check_is_skippable(opt):

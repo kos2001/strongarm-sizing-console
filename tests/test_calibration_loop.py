@@ -225,20 +225,88 @@ def test_a_worse_model_scores_worse_on_holdout(cal):
 def test_apply_is_reversible_and_rewrites_only_the_constants(cal, tmp_path):
     """It edits run_sim.py in place, so it has to leave a .bak and touch nothing else."""
     import shutil
+    import run_sim
     path = os.path.join(ROOT, "run_sim.py")
     keep = tmp_path / "run_sim.py.keep"
     shutil.copy(path, keep)
     before = open(path).read()
     try:
         cal.apply_constants(0.1111, 0.5555, 0.2222, 1.2345,
-                            {"pcc": 0.111, "pre": 0.011, "prei": 0.012})
+                            {"pcc": 0.111, "pre": 0.011, "prei": 0.012}, model="asap7")
         after = open(path).read()
-        assert "_OFFSET_R_INPUT = 1.234" in after
-        assert "0.1111, 0.5555, 0.2222" in after
+        # R_input is sqrt(2) by the linearity of the input response, not a fit, so a
+        # candidate value must NOT be written — rewriting it published 1.06 and 1.268
+        assert "_OFFSET_R_INPUT = 1.234" not in after
+        assert "1.4142135623730951" in after
+        # the whole law goes into the named model's slot, not the global fallback
+        assert "(0.1111, 0.5555, 0.2222)" in after
+        assert '"asap7"' in after
+        assert str(run_sim._OFFSET_NCC_BY_MODEL["ptm45"]) in after
         assert os.path.exists(path + ".bak")
-        # only the three constant lines changed
+        # only the two fitted-constant lines changed: R_input is not one of them, and the
+        # exponents now live inside the per-model tuple rather than on a line of their own
         diff = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]
-        assert len(diff) == 3, diff
+        assert len(diff) == 2, diff
+    finally:
+        shutil.copy(keep, path)
+        if os.path.exists(path + ".bak"):
+            os.remove(path + ".bak")
+    assert open(path).read() == before
+
+
+def test_a_candidate_latch_coefficient_actually_reaches_the_model(cal):
+    import run_sim
+
+    """The loop installs K into the per-model table, not only the scalar fallback.
+
+    Patching the scalar fallbacks alone left every candidate silently ignored for all four
+    backends, because the model reads its own slot first — a calibration loop whose
+    candidates have no effect reports convergence on constants it never varied. This
+    happened twice: once when K became per model, again when the exponents did."""
+    p = run_sim._full({"model": "ptm45"})
+    _, a, b = run_sim._OFFSET_NCC_BY_MODEL["ptm45"]
+    r, flat = run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV)
+    snapshot = dict(run_sim._OFFSET_NCC_BY_MODEL)
+    lo = cal.predict(p, 0.05, a, b, r, flat)
+    hi = cal.predict(p, 0.50, a, b, r, flat)
+    assert hi > lo * 1.2, (lo, hi)
+    # and it restores the table afterwards. Compared against a snapshot, not a literal:
+    # a test that pins the value the loop exists to improve is a test fighting its feature
+    assert run_sim._OFFSET_NCC_BY_MODEL == snapshot
+
+
+def test_apply_refuses_to_silently_no_op(cal, tmp_path):
+    """A pattern that stops matching must fail loudly instead of reporting success."""
+    with pytest.raises(SystemExit, match="matched 0 times"):
+        cal.apply_constants(0.1, 0.5, 0.2, 1.2, {"pre": 0.01}, model="no_such_backend")
+
+
+def test_the_reference_is_deterministic_and_repeats(cal):
+    """The loop's reference must repeat, or a gate cannot mean anything.
+
+    The Monte-Carlo path carried a 21% standard error per estimate and 27% scatter
+    between seeds — larger than most differences the loop is asked to resolve, and large
+    enough that a real 55% out-of-sample error read as noise."""
+    import run_sim
+    a = cal.measured("ptm45", {"devices": {"ncc": {"w_um": 2.0}}}, 8, (1, 2, 3))
+    b = cal.measured("ptm45", {"devices": {"ncc": {"w_um": 2.0}}}, 8, (4, 5, 6))
+    # different "seeds", identical answer — because seeds do not apply to quadrature
+    assert a[1]["ncc"][0] == b[1]["ncc"][0]
+    assert a[1]["input"][0] == b[1]["input"][0]
+    assert all(v[0] and v[0] > 0 for v in a[1].values())
+
+
+def test_the_loop_does_not_refit_the_input_referral_factor(cal, tmp_path):
+    """R_input is sqrt(2) by linearity. Two published values came from fitting it."""
+    import shutil
+    import run_sim
+    path = os.path.join(ROOT, "run_sim.py")
+    keep = tmp_path / "keep.py"
+    shutil.copy(path, keep)
+    before = open(path).read()
+    try:
+        cal.apply_constants(0.12, 0.68, 0.37, 1.06, {"pre": 0.007, "prei": 0.005})
+        assert "_OFFSET_R_INPUT = 1.06" not in open(path).read()
     finally:
         shutil.copy(keep, path)
         if os.path.exists(path + ".bak"):

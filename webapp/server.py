@@ -250,7 +250,7 @@ def _xkey(base, x):
 
 def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
              corner_aware=True, corner_relax=2.5, optimize_vt=True, optimize_l=False,
-             budget_check=True, budget_n_mc=8):
+             budget_check=True, budget_n_mc=8, budget_method="quadrature"):
     """Global sizing via log-space **Differential Evolution**.
 
     Minimizes power subject to offset + decision-time + functional constraints
@@ -648,22 +648,35 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
     # is measured once against the full budget and the discrepancy is reported, so a
     # 3.8x-optimistic offset cannot leave here unlabelled. `budget_check=False` skips
     # it if the extra time matters more than knowing.
-    budget = run_sim.offset_budget(best, n_mc=budget_n_mc) if budget_check else None
+    # The reference is deterministic by default, so `budget_n_mc` applies only when the
+    # caller asks for `budget_method="mc"`. It is still accepted, and no longer advertised
+    # in the warning below: the text used to say "re-measured here at n_mc=8", which the
+    # quadrature default made false.
+    budget = (run_sim.offset_budget(best, n_mc=budget_n_mc, method=budget_method)
+              if budget_check else None)
     budget_warning = None
     if budget:
         io, tot = budget.get("input_only_sigma_mv"), budget.get("total_sigma_mv")
         if io and tot and tot > 1.25 * io:
             worst = (budget.get("dominant") or ["?"])[0]
             # plain text: this is a JSON field the UI and the agent read, not markdown
+            acc = run_sim.offset_model_accuracy(best)
+            err = acc.get("heldout_median_abs_error")
             budget_warning = (
                 f"offset is dominated by {worst}, not the input pair: measured budget "
-                f"{tot}mV vs {io}mV from the input pair alone (re-measured here at "
-                f"n_mc={budget_n_mc}). Judge this design against total_sigma_mv, and if "
-                f"it misses, grow {worst} — growing the input pair will not help. The "
-                f"cost function does price every pair, but through a predictor good to "
-                f"only ~8-19% against a reference that itself scatters ~27%, so the "
-                f"search can land here legitimately; this is a pointer to the binding "
-                f"device, not evidence of a modelling gap.")
+                f"{tot}mV vs {io}mV from the input pair alone, re-measured here against "
+                f"the deterministic reference ({budget.get('method')}). Judge this design "
+                f"against total_sigma_mv, and if it misses, grow {worst} — growing the "
+                f"input pair will not help. The cost function does price every pair, but "
+                f"through a predictor whose held-out error on this backend is "
+                + (f"{err:.0%}" if err is not None else "not measured")
+                + f", so the search can land here legitimately; this is a pointer to the "
+                f"binding device, not evidence of a modelling gap.")
+    # The predictor's accuracy is per backend and only ptm45 is calibrated to a few
+    # per-cent; elsewhere it under-predicts, which is the direction that lets the search
+    # shrink the latch. Reported next to every number it produced rather than left for
+    # the reader to know.
+    off_accuracy = run_sim.offset_model_accuracy(best)
     meas, v = _verdicts(r["nominal"], r.get("offset"), targets)
     surrogate_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
     traj.append({"action": f"confirm best (Monte-Carlo offset) · {n_sims[0]} SPICE evals{surrogate_note}",
@@ -701,6 +714,7 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
             # full offset budget of the winner + a loud flag if the cost function's
             # input-pair-only offset term is optimistic (it usually is — see above)
             "offset_budget": budget, "offset_budget_warning": budget_warning,
+            "offset_model_accuracy": off_accuracy,
             "kickback_target_mv": kb_t,
             "final_kickback": (run_sim.measure_kickback(best, **kb_drive) if kb_t else None),
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
@@ -1470,6 +1484,7 @@ def design_brief(params, targets=None):
     # should not lead with it. Both are returned so the difference is visible.
     offp_input = _pred_offset_mv(p)
     offp, offp_terms = run_sim.predicted_offset_budget_mv(p)
+    offp_accuracy = run_sim.offset_model_accuracy(p)
     dec, pw = nom.get("decision_time_ps"), nom.get("power_uw")
     margins = {
         "functional": bool(nom.get("functional")),
@@ -1496,6 +1511,10 @@ def design_brief(params, targets=None):
         "nominal": nom, "predicted_offset_sigma_mv": round(offp, 3),
         "predicted_offset_input_pair_only_mv": round(offp_input, 3),
         "predicted_offset_terms_mv": {k: round(v, 3) for k, v in offp_terms.items()},
+        # the predictor's own known error on THIS backend — only ptm45 is calibrated to a
+        # few per-cent, and everywhere else it under-predicts, so the figure above is
+        # optimistic in a way the reader cannot see from the number itself
+        "predicted_offset_accuracy": offp_accuracy,
         "targets": t, "margins": margins, "hints": hints,
         "devices": copy.deepcopy(p["devices"]),
     }
@@ -1867,8 +1886,11 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/offset/budget":
                 # offset per matched pair, not input-pair only
                 payload = self._read_json()
-                self._json(run_sim.offset_budget(payload.get("params", {}),
-                                                 n_mc=int(payload.get("n_mc", 12))))
+                # deterministic by default; `method: "mc"` for the old sampled reference
+                self._json(run_sim.offset_budget(
+                    payload.get("params", {}),
+                    n_mc=int(payload.get("n_mc", 12)),
+                    method=str(payload.get("method", "quadrature"))))
             elif self.path == "/api/resolution":
                 # metastability + offset MC + BER on one amplitude axis, one call
                 payload = self._read_json()
@@ -2166,7 +2188,7 @@ class Handler(BaseHTTPRequestHandler):
                 # judged only if a target for it exists, and otherwise reported.
                 mf, budget, kb, cmr = _pmap(lambda f: f(), [
                     lambda: run_sim.max_fclk_sweep(fin),
-                    lambda: run_sim.offset_budget(fin, n_mc=10),
+                    lambda: run_sim.offset_budget(fin),      # deterministic reference
                     lambda: run_sim.measure_kickback(fin,
                                                      rs_ohm=float(fin.get("rs_ohm") or 2000.0),
                                                      cs_ff=float(fin.get("cs_ff") or 50.0)),
