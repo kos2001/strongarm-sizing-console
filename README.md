@@ -375,10 +375,18 @@ also biased the headline input-pair σ up to **19% high** for large-area designs
 produces. Default is now 11 steps (0.029 mV); 13 gives the same numbers. Cost: offset
 MC 0.85 s → 1.34 s. The search itself uses the analytic path, so only explicit MC pays.
 
-**2. The input referral factor is 1.06, not √2.** Referring a gate-side Vth shift back
-to the input is not 1:1 — the shift also moves the tail current and common mode. With
-1.06 the prediction lands within 0.5% of the Monte-Carlo (1.325 vs 1.326 measured;
-0.765 vs 0.764; 2.164 vs 2.154) where √2 was 33% high on all three.
+**2. The input referral factor is 1.268.** Referring a gate-side Vth shift back to the
+input is not quite 1:1 — the shift also moves the tail current and common mode — so the
+textbook √2 = 1.414 is about 11% high. Measured as a median over 5 estimator seeds it is
+1.268, stable to 0.5% across a 13x input-width sweep (1.268–1.275).
+
+> **Correction.** This was first published here as **1.06**, with a claimed 0.5%
+> agreement against Monte-Carlo. That was wrong. The agreement came from a *single* MC
+> draw (seed 4242) that happened to land there; the same sizing medians to 1.585 mV, not
+> the 1.326 that draw gave. So √2 was ~11% high rather than 33% high, and replacing it
+> with 1.06 made the **dominant** term ~16% low — a regression published as a fix. The
+> calibration loop is what surfaced it, by refitting the constant to 1.179 and failing a
+> test that had pinned the literal 1.06.
 
 **3. `pcc` had to be modelled as a constant, not σ-proportional.** Its contribution
 *rises* with its own width (0.286 → 0.442 mV over 0.5 → 16 µm) because its leverage on

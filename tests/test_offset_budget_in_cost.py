@@ -62,30 +62,63 @@ def test_latch_contributions_are_no_longer_pinned_at_the_floor():
 
 
 def test_finer_bisection_removes_a_bias_not_just_noise():
-    """For a well-matched design the coarse bisection reads high; the fine one agrees
-    with the analytic prediction. A pure noise problem would not do that."""
+    """For a well-matched design the coarse bisection reads high, and the fine one
+    converges — 11 and 13 steps agree while 7 sits above both.
+
+    Medians over estimator seeds, not single draws. The single-draw version of this test
+    reported the bias as 19% (0.906 vs 0.764); with medians it is ~5.6% (0.966 vs 0.915).
+    The bias is real and the direction holds, but the magnitude I published was noise —
+    the third finding in this area that a single draw inflated."""
     import random
+    import statistics
+
+    def med(n_iter):
+        p = run_sim._full({"model": "ptm45", "devices": {"input": {"w_um": 24.0}},
+                           "n_mc": 16})
+        return statistics.median(
+            run_sim.measure_offset(p, random.Random(s), n_iter=n_iter)["offset_sigma_mv"]
+            for s in (11, 22, 33, 44, 55))
+
+    coarse, fine, finer = med(7), med(11), med(13)
+    assert coarse > fine, (coarse, fine)                    # biased, in this direction
+    assert fine == pytest.approx(finer, rel=0.02), (fine, finer)   # and 11 has converged
     p = run_sim._full({"model": "ptm45", "devices": {"input": {"w_um": 24.0}}, "n_mc": 16})
-    coarse = run_sim.measure_offset(p, random.Random(4242), n_iter=7)["offset_sigma_mv"]
-    fine = run_sim.measure_offset(p, random.Random(4242), n_iter=13)["offset_sigma_mv"]
-    assert coarse > fine * 1.1, (coarse, fine)
-    assert fine == pytest.approx(server._pred_offset_mv(p), rel=0.05)
+    assert fine == pytest.approx(server._pred_offset_mv(p), rel=0.10)
 
 
 # ── the referral constants ──────────────────────────────────────────────────
 
-def test_input_referral_is_the_measured_value_not_sqrt_two():
-    """√2 assumes referring a gate-side Vth shift is 1:1. It is not — the shift also
-    moves the tail current and common mode. Measured 1.06, and the prediction lands
-    within a per-cent of the Monte-Carlo, which √2 does not."""
+def test_input_referral_matches_a_median_reference_not_one_draw():
+    """The input-pair prediction must track the measured offset — asserted against a
+    MEDIAN over estimator seeds, and with no literal pinned for the constant itself.
+
+    Both of those are scars. The constant was published as 1.06 on the strength of a
+    single draw (seed 4242) that agreed to 0.5%; the same sizing medians 20% away from
+    it, and the real value is ~1.268. And the old version of this test pinned
+    `_OFFSET_R_INPUT == 1.06`, which made it impossible for the calibration loop to ever
+    correct the constant — a test fighting the feature it was supposed to protect."""
     import random
-    assert run_sim._OFFSET_R_INPUT == pytest.approx(1.06, abs=0.01)
-    for w in (3.0, 8.0, 24.0):
+    import statistics
+    for w in (3.0, 8.0, 24.0, 40.0):
         p = run_sim._full({"model": "ptm45", "devices": {"input": {"w_um": w}}, "n_mc": 16})
-        meas = run_sim.measure_offset(p, random.Random(4242))["offset_sigma_mv"]
-        assert server._pred_offset_mv(p) == pytest.approx(meas, rel=0.03), w
-        sqrt2 = math.sqrt(2) * run_sim.pelgrom_sigma_v(p, "input") * 1e3
-        assert sqrt2 > meas * 1.2, (sqrt2, meas)        # the old constant was high
+        meas = statistics.median(run_sim.measure_offset(p, random.Random(s))["offset_sigma_mv"]
+                                 for s in (11, 22, 33))
+        assert server._pred_offset_mv(p) == pytest.approx(meas, rel=0.15), (w, meas)
+
+
+def test_the_referral_factor_is_stable_across_input_width():
+    """Whatever the constant is, the *ratio* it represents must not depend on width —
+    that is what makes a single number legitimate. Measured 1.268..1.275 over a 13x
+    sweep; if this spreads, the model needs a width term rather than a constant."""
+    import random
+    import statistics
+    ratios = []
+    for w in (3.0, 8.0, 24.0, 40.0):
+        p = run_sim._full({"model": "ptm45", "devices": {"input": {"w_um": w}}, "n_mc": 16})
+        meas = statistics.median(run_sim.measure_offset(p, random.Random(s))["offset_sigma_mv"]
+                                 for s in (11, 22, 33))
+        ratios.append(meas / (run_sim.pelgrom_sigma_v(p, "input") * 1e3))
+    assert (max(ratios) - min(ratios)) / statistics.median(ratios) < 0.10, ratios
 
 
 def test_pcc_contribution_rises_with_its_width():
