@@ -1558,9 +1558,16 @@ def cm_range_sweep(params, vcm_fracs=None, with_offset=False, n_mc=8):
                "power_uw": nom.get("power_uw"),
                "functional": bool(nom.get("functional")) and nom.get("decision_time_ps") is not None}
         if with_offset:
-            import random
-            row["offset_sigma_mv"] = measure_offset({**p, "n_mc": n_mc},
-                                                    random.Random(7)).get("offset_sigma_mv")
+            # Deterministic budget, and BOTH figures. This used to be one Monte-Carlo draw
+            # of the input pair at n_mc=8 (~24% standard error, biased low), which is a poor
+            # way to support this function's central claim: that the input pair's
+            # contribution is flat in Vcm while the total is not. A noisy estimate cannot
+            # demonstrate flatness. Reporting the total on the same row also saves the
+            # reader the manual `offset_budget` call the docstring used to send them on.
+            b = offset_budget(p)
+            row["offset_sigma_mv"] = b.get("input_only_sigma_mv")
+            row["offset_total_sigma_mv"] = b.get("total_sigma_mv")
+            row["offset_dominant"] = (b.get("dominant") or [None])[0]
         return row
 
     pts = pmap(one, vcm_fracs)
