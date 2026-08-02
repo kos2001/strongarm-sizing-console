@@ -1074,6 +1074,25 @@ _OFFSET_PCC_K, _OFFSET_PCC_P = 0.3161, 0.1464
 _OFFSET_MODEL_HELDOUT_ERR = {"ptm45": 0.039, "asap7": 0.114, "gaa2nm": 0.219,
                              "sky130": 0.166}
 
+#: predicted / measured at the sizings the OPTIMIZER converges to, median over 3 seeds.
+#: A separate number from the one above because the search does not sample sizings evenly
+#: — it seeks out whatever the model rates cheapest, so its converged region has its own
+#: bias, larger here than the validation-set error. Reproducible: asap7 and gaa2nm return
+#: the same ratio on every seed.
+#:
+#: All four are ABOVE 1, i.e. the model now over-predicts offset where it is used. That is
+#: the safe direction — the search over-sizes rather than shipping a design that misses —
+#: and it is the opposite of where this model started, when the same selection effect ran
+#: optimistic and was the reason the search could game its own offset term. But 1.99x on
+#: gaa2nm means roughly twice the latch area that offset actually requires, so it is a real
+#: cost, not just a comfortable margin. Closing it means including optimizer-converged
+#: sizings in the fit — `scripts/calibrate_offset_model.py` does that via
+#: `optimizer_sizings()` — which is a fixed-point iteration, since the sizings depend on
+#: the constants being fitted. Not done: a refit that lands optimistic here would be worse
+#: than a known 2x of conservatism.
+_OFFSET_MODEL_OPT_REGION_BIAS = {"ptm45": 1.31, "asap7": 1.53, "gaa2nm": 1.99,
+                                 "sky130": 1.36}
+
 
 def offset_model_accuracy(p):
     """How far the analytic budget is known to sit from measurement on this backend.
@@ -1093,10 +1112,17 @@ def offset_model_accuracy(p):
         note = (f"error {e:.0%} on a validation set the fit and the gate never saw — the "
                 f"law is fitted per backend but this is a screening number, not a sign-off "
                 f"one. Judge a final design against a measured offset_budget()")
+    bias = _OFFSET_MODEL_OPT_REGION_BIAS.get(m)
+    if bias:
+        note += (f". Separately, at the sizings the optimizer converges to it "
+                 f"over-predicts {bias:.2f}x — the safe direction, but it means a "
+                 f"converged design carries roughly that much offset margin over what it "
+                 f"needs, so check the measured budget before accepting the area")
     return {
         "model": m,
         "has_own_latch_law": m in _OFFSET_NCC_BY_MODEL,
         "heldout_median_abs_error": e,
+        "optimizer_region_bias": bias,
         "latch_k_width_drift": _OFFSET_NCC_K_WIDTH_DRIFT.get(m),
         "reference": "deterministic (Gauss-Hermite quadrature)",
         "note": note,

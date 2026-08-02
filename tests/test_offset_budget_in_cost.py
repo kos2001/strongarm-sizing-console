@@ -437,3 +437,24 @@ def test_the_input_referral_factor_is_exactly_sqrt2_by_linearity():
         assert r["linear"], r
         assert r["max_deviation"] < 0.01
         assert r["implied_r_input"] == pytest.approx(math.sqrt(2), rel=1e-5)
+
+
+def test_the_optimizer_region_bias_is_reported_and_conservative():
+    """The search does not sample sizings evenly — it seeks out whatever the model rates
+    cheapest — so its converged region has its own bias, and a larger one than the
+    validation set shows (1.31-1.99x vs 3.9-21.9%).
+
+    The direction is what matters. Every entry must be >1, i.e. over-predicting: this
+    model began by being OPTIMISTIC in exactly this region, which is how the search came
+    to game its own offset term. If a refit ever flips one of these below 1 that is a
+    regression regardless of what it does to the median error."""
+    bias = run_sim._OFFSET_MODEL_OPT_REGION_BIAS
+    assert set(bias) == set(run_sim._OFFSET_NCC_BY_MODEL)
+    assert all(v > 1.0 for v in bias.values()), bias
+
+    a = run_sim.offset_model_accuracy({"model": "gaa2nm"})
+    assert a["optimizer_region_bias"] == bias["gaa2nm"]
+    # and it must say what the number costs, not just quote it
+    assert "over-predicts" in a["note"] and "margin" in a["note"]
+    # the validation-set error must not be presented as if it covered this region
+    assert a["heldout_median_abs_error"] < bias["gaa2nm"] - 1.0

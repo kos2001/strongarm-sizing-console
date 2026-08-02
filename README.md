@@ -467,7 +467,25 @@ the width drift closes to ptm45's own level, and on ptm45 the refit was **reject
 | the 8 sizings used to **accept** the fit | 1.3% | 3.7% | 10.0% | 9.9% |
 | a **fresh** set neither fit nor gate saw | **3.9%** | **11.4%** | **21.9%** | **16.6%** |
 
-The third row is what `offset_model_accuracy()` reports. The seed row would have claimed a
+There is a fourth number, and it is the largest: **at the sizings the optimizer actually
+converges to, the model over-predicts 1.31x / 1.53x / 1.99x / 1.36x** (median over 3
+seeds; asap7 and gaa2nm reproduce exactly). The search does not sample sizings evenly — it
+seeks out whatever the model rates cheapest — so its converged region has its own bias,
+and no validation set drawn by hand will show it.
+
+Every one of those is *above* 1, i.e. conservative. That is the safe direction, and it is
+the opposite of where this model started: the same selection effect once ran optimistic,
+which is precisely how the search came to game its own offset term. But 1.99x on gaa2nm
+means roughly twice the latch area offset actually requires, so it is a cost and not just
+comfortable margin. Closing it means folding optimizer-converged sizings into the fit —
+`scripts/calibrate_offset_model.py` does that via `optimizer_sizings()`, a fixed-point
+iteration since the sizings depend on the constants being fitted. **Not done deliberately:
+a refit that lands optimistic here would be worse than a known 2x of conservatism.**
+
+End-to-end, all three tested backends now meet their offset target with the measured
+budget (ptm45 1.50 mV / 2.0, asap7 3.16 / 6.0, sky130 1.25 / 2.5).
+
+The third row of the table is what `offset_model_accuracy()` reports. The seed row would have claimed a
 model exact everywhere while it was ~55% wrong one sizing away; the gap between rows two
 and three is pure selection — gate on a set and it stops being an independent estimate of
 anything. The fresh set also reaches deliberately outside the fitted ranges (ncc 0.4 and
