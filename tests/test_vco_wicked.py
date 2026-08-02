@@ -1,33 +1,47 @@
 """Tests for the WiCkeD-inspired VCO robustness/sizing suite (vco_wicked.py)."""
+import vco_sim
 import vco_wicked as vw
 
 XCPL = {"topology": "xcpl"}
 
 
 def test_nominal_verdict_margins():
-    # 기본(2N+4P 유닛, ~4.84GHz) — 밴드 중심을 실측 주파수로 명시
-    v = vw.nominal_verdict({}, {"f_ghz": 4.84, "power_uw": 4000})   # 스타빙 없는 유닛은 전력 한계 상향
+    # 밴드 중심은 실측 주파수에서 유도한다. 리터럴(예전엔 4.84GHz)을 박아두면 기본
+    # 사이징이 움직일 때마다 테스트가 무관한 이유로 깨진다 — 실제로 그렇게 깨졌다.
+    nom = vco_sim.measure_vco(vco_sim._full({}))
+    v = vw.nominal_verdict({}, {"f_ghz": nom["f_osc_ghz"],
+                                "power_uw": nom["power_uw"] * 1.5})
     assert set(v["margins"]) == {"oscillates", "f_band", "power_uw"}
     assert v["margins"]["oscillates"] == 1.0
     assert v["pass"] is True
-    v2 = vw.nominal_verdict(XCPL)
-    assert v2["margins"]["f_band"] < 0           # 기본 밴드(1.5±15%) 위로 벗어남
+    # 목표 밴드를 실측에서 멀리 떼어놓으면 반드시 떨어져야 한다
+    v2 = vw.nominal_verdict({}, {"f_ghz": nom["f_osc_ghz"] * 4, "power_uw": 1e6})
+    assert v2["margins"]["f_band"] < 0
     assert v2["pass"] is False
 
 
 def test_dev_keys_by_topology():
-    # xcpl 유닛(2N+4P)에는 스타빙이 없다
-    assert vw.dev_keys({}) == ["invp", "invn", "xcplp"]   # 기본 = xcpl(유닛 소자만)
+    # 각 토폴로지는 자기 덱이 실제로 배치하는 소자만 사이징해야 한다 — 없는 소자를
+    # 사이징하면 옵티마이저가 "진행"을 보고하며 아무것도 바꾸지 않는다
+    assert vw.dev_keys({}) == ["invp", "invn", "xcplp", "starvep", "starven"]
+    assert vw.dev_keys({"topology": "xcpl"}) == ["invp", "invn", "xcplp"]
     assert vw.dev_keys({"topology": "starved"}) == ["invp", "invn", "starvep", "starven"]
     assert vw.dev_keys(XCPL) == ["invp", "invn", "xcplp"]
 
 
-def test_parameter_screening_ranks_inverters_for_frequency():
+def test_parameter_screening_ranks_the_devices_that_set_frequency():
+    # 기본(xcplsv): 5소자를 훑고, 주파수를 정하는 건 전류를 정하는 스타브 쌍이거나
+    # 인버터다 — 스크리닝이 그중 하나를 위로 올려야 한다
     r = vw.parameter_screening({}, delta=0.12)
     fr = r["rankings"]["f_osc_ghz"]
-    assert len(fr) == 3 and all(x["sensitivity"] >= 0 for x in fr)   # 2N+4P: inv 2 + 래치
-    # 스타빙이 없으니 주파수는 인버터(또는 래치 부하)가 지배해야 한다
-    assert {fr[0]["key"], fr[1]["key"]} & {"invp", "invn", "xcplp"}
+    assert len(fr) == 5 and all(x["sensitivity"] >= 0 for x in fr)
+    assert {fr[0]["key"], fr[1]["key"]} & {"invp", "invn", "starvep", "starven"}
+
+    # xcpl 유닛: 스타브가 없으니 3소자만, 그리고 인버터/래치가 지배해야 한다
+    ru = vw.parameter_screening({"topology": "xcpl"}, delta=0.12)
+    fru = ru["rankings"]["f_osc_ghz"]
+    assert len(fru) == 3
+    assert {fru[0]["key"], fru[1]["key"]} & {"invp", "invn", "xcplp"}
 
 
 def test_mismatch_mc_measures_spread():

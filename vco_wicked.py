@@ -59,14 +59,19 @@ def _targets(targets):
 
 
 def dev_keys(params):
-    """Sizing variables: the starve/inverter widths always; the cross-coupled
-    and reset PMOS only when the xcpl topology is active."""
+    """Sizing variables for this topology — the devices that actually exist in its deck.
+
+    Getting this wrong is silent: the optimizer would size a device the netlist never
+    instantiates, report progress, and change nothing."""
     p = _full(params)
-    if p.get("topology", "starved") == "xcpl":
-        # xcpl 유닛(2N+4P)에는 스타빙이 없다 — 인버터 + 래치/리셋 PMOS 만
+    topo = p.get("topology", "xcplsv")
+    if topo == "xcpl":
+        # unit-only cell (2N+4P): inverters + latch PMOS, no starve devices exist
         return ["invp", "invn", "xcplp"]
-    keys = list(vco_sim.DEV_KEYS)
-    return keys
+    if topo == "xcplsv":
+        # cross-coupled AND current-starved: everything above plus the starve pair
+        return ["invp", "invn", "xcplp", "starvep", "starven"]
+    return list(vco_sim.DEV_KEYS)
 
 
 def _band(t):

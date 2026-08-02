@@ -1324,7 +1324,15 @@ export default function App() {
 
           {page === 'wicked' && <WickedPage params={params} targets={targets} busy={busy} apiUp={apiUp} onApply={updateParams} />}
 
-          {domain === 'vco' && <VcoPage view={VCO_VIEW[page]} lang={lang} theme={theme} />}
+          {domain === 'vco' && (
+            <VcoPage view={VCO_VIEW[page]} lang={lang} theme={theme}
+                     // the view is owned here, so VcoPage cannot navigate itself: its status
+                     // strip called a setView() that did not exist and would have thrown
+                     onNavigate={(v) => {
+                       const target = (Object.keys(VCO_VIEW) as Page[]).find((k) => VCO_VIEW[k] === v)
+                       if (target) setPage(target)
+                     }} />
+          )}
 
           {page === 'flow' && (
             <div className="flex flex-col gap-4">

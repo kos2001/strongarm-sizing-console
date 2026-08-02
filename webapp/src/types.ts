@@ -282,7 +282,10 @@ export interface OptimizeResult {
 
 // ---- MOSFET ring VCO ----
 export type VcoDeviceKey = 'invp' | 'invn' | 'starvep' | 'starven' | 'xcplp'
-export type VcoTopology = 'starved' | 'xcpl'
+// 'xcplsv' = cross-coupled AND current-starved (default: V_ctrl controls f).
+// 'xcpl' = the same cell without the starve pair — unit-only 2N+4P, Kvco is 0.
+// 'starved' = legacy single-ended current-starved ring.
+export type VcoTopology = 'starved' | 'xcpl' | 'xcplsv'
 export interface VcoParams {
   vdd: number
   vctrl: number
@@ -309,6 +312,11 @@ export interface VcoTuning {
   tuning_pct: number | null
   kvco_ghz_per_v: number | null
   center_ghz: number | null
+  // whether a V_ctrl knob exists at all: `xcpl` has none, so a flat curve there is
+  // the design rather than a fault (see vco_sim.vco_tuning)
+  has_vctrl_knob?: boolean
+  tunable_range?: boolean
+  knob_note?: string | null
 }
 export interface VcoResult { nominal: VcoNominal; tuning?: VcoTuning; params?: VcoParams; error?: string }
 export interface VcoOptStep { action: string; f_osc_ghz: number | null; power_uw: number | null; oscillates: boolean; params: Partial<Record<VcoDeviceKey, Device>> }
