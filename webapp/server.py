@@ -653,16 +653,17 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
     if budget:
         io, tot = budget.get("input_only_sigma_mv"), budget.get("total_sigma_mv")
         if io and tot and tot > 1.25 * io:
+            worst = (budget.get("dominant") or ["?"])[0]
+            # plain text: this is a JSON field the UI and the agent read, not markdown
             budget_warning = (
-                f"input-pair-only offset σ ({io}mV, re-measured here at "
-                f"n_mc={budget_n_mc}) understates the full budget ({tot}mV, RSS over "
-                f"all matched pairs) by {tot / io:.2f}x — "
-                f"dominant contributor: {budget.get('dominant', ['?'])[0]}. The cost "
-                f"function does not price latch/precharge mismatch, so the search "
-                f"shrinks those devices for power. Size them by hand or judge against "
-                f"total_sigma_mv. The ratio is a small-sample estimate and varies "
-                f"2-7x run to run (the direction does not) — treat it as 'large', "
-                f"not as a figure; raise budget_n_mc for a tighter number.")
+                f"offset is dominated by {worst}, not the input pair: measured budget "
+                f"{tot}mV vs {io}mV from the input pair alone (re-measured here at "
+                f"n_mc={budget_n_mc}). Judge this design against total_sigma_mv, and if "
+                f"it misses, grow {worst} — growing the input pair will not help. The "
+                f"cost function does price every pair, but through a predictor good to "
+                f"only ~8-19% against a reference that itself scatters ~27%, so the "
+                f"search can land here legitimately; this is a pointer to the binding "
+                f"device, not evidence of a modelling gap.")
     meas, v = _verdicts(r["nominal"], r.get("offset"), targets)
     surrogate_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
     traj.append({"action": f"confirm best (Monte-Carlo offset) · {n_sims[0]} SPICE evals{surrogate_note}",
