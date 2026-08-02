@@ -27,6 +27,11 @@ export interface StatusMetric {
   mode?: 'max' | 'target'
   /** fractional tolerance for mode 'target'; default 0.10 */
   tol?: number
+  /** For a 'target' metric, what moves it. "bias" implies a knob exists; on the default
+   *  VCO topology none does (Kvco is structurally 0), so the strip must not imply that
+   *  re-biasing is available — sizing is the only lever. */
+  lever?: 'bias' | 'sizing'
+
 }
 
 const ok_of = (m: StatusMetric) =>
@@ -146,7 +151,10 @@ export default function StatusStrip({ lang, metrics, functional, profileLabel, e
                     ? (dev === 0 ? 'on target' : `${dev > 0 ? '↑' : '↓'}${Math.abs(dev)}%`)
                     : ok ? `↓${-dev}%` : `↑${dev}%`
                   const tip = m.mode === 'target'
-                    ? `${Math.abs(dev)}% ${dev > 0 ? 'above' : 'below'} the target frequency`
+                    ? `${Math.abs(dev)}% ${dev > 0 ? 'above' : 'below'} target`
+                      + (m.lever === 'sizing'
+                          ? ' — this topology has no V_ctrl knob, so sizing is the only lever'
+                          : '')
                     : ok ? `${-dev}% below the limit` : `${dev}% over the limit`
                   return (
                     <span className="mono text-[10px] tnum px-1 rounded" title={tip}

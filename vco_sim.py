@@ -150,8 +150,18 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     """Cross-coupled pseudo-differential ring VCO with a hardware reset start-up
     (topology="xcpl"; cf. the Mansuri-style CCO cell, plus a reset PMOS).
 
-    Two current-starved inverter rings (odd N per rail: o1..oN and ob1..obN)
-    run in anti-phase, tied at every stage by a weak cross-coupled PMOS pair.
+    Two inverter rings (odd N per rail: o1..oN and ob1..obN) run in anti-phase,
+    tied at every stage by a weak cross-coupled PMOS pair.
+
+    NOT current-starved, despite what this docstring said for several commits: the unit
+    cell is exactly 2 NMOS + 4 PMOS per stage and the inverter sources go straight to the
+    rails, so there is **no V_ctrl knob and Kvco is structurally 0** (see the comment on
+    the netlist below). That is a deliberate constraint, not an omission — but the word
+    "current-starved" survived the change that removed the starve devices, and a docstring
+    contradicting its own code twenty lines later is how the flat tuning curve came to be
+    presented as a tuning curve. Frequency is set by SIZING here (invp/invn/xcplp,
+    n_stages, cload), which is what the auto-size page searches. `topology="starved"` is
+    the tunable variant: measured Kvco 2.36 GHz/V over a 26% range.
     Per stage and rail (schematic naming):
         N0 -> Mn*/Mnb*   core inverter NMOS
         P0 -> Mp*/Mpb*   core inverter PMOS
@@ -238,7 +248,13 @@ def measure_vco(params, vctrl=None):
 
 
 def vco_tuning(params, points=9):
-    """Sweep V_ctrl across its usable range -> f(V_ctrl), tuning range, Kvco."""
+    """Sweep V_ctrl across its usable range -> f(V_ctrl), tuning range, Kvco.
+
+    Reports `has_vctrl_knob`. The default `xcpl` topology has none — its inverters sit on
+    the rails, so every point on this sweep returns the same frequency and a "tuning curve"
+    with Kvco = 0 is not a measurement of anything. Callers that draw a curve or quote Kvco
+    have to know that, otherwise a flat line reads as a broken oscillator rather than as a
+    circuit with no knob."""
     p = _full(params)
     vdd = p["vdd"]
     vlo, vhi = 0.30 * vdd, 0.98 * vdd
@@ -247,8 +263,16 @@ def vco_tuning(params, points=9):
     pts = [{"vctrl_v": v, "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"], "oscillates": m["oscillates"]}
            for v, m in zip(vs, ms)]
     fs = [(pt["vctrl_v"], pt["f_osc_ghz"]) for pt in pts if pt["f_osc_ghz"]]
+    has_knob = p.get("topology", "xcpl") != "xcpl"
     out = {"points": pts, "f_min_ghz": None, "f_max_ghz": None,
-           "tuning_pct": None, "kvco_ghz_per_v": None, "center_ghz": None}
+           "tuning_pct": None, "kvco_ghz_per_v": None, "center_ghz": None,
+           "has_vctrl_knob": has_knob,
+           "knob_note": (None if has_knob else
+                         "this topology has no V_ctrl knob — the unit cell is 2 NMOS + "
+                         "4 PMOS per stage with the inverters on the rails, so f does not "
+                         "depend on V_ctrl and Kvco is 0 by construction. Frequency is set "
+                         "by sizing (see the auto-size page); topology=\"starved\" is the "
+                         "tunable variant.")}
     if len(fs) >= 2:
         fmin, fmax = fs[0][1], fs[-1][1]
         for _, f in fs:
@@ -262,6 +286,9 @@ def vco_tuning(params, points=9):
         kvco = (n * sxy - sx * sy) / denom if abs(denom) > 1e-12 else None
         out.update({
             "f_min_ghz": round(fmin, 4), "f_max_ghz": round(fmax, 4),
+            # a target is "reachable by tuning" only where a knob exists; on xcpl the
+            # range is a single point and reporting it as a range would mislead
+            "tunable_range": bool(has_knob and fmax > fmin * 1.001),
             "center_ghz": round(center, 4),
             "tuning_pct": round(100.0 * (fmax - fmin) / center, 1) if center else None,
             "kvco_ghz_per_v": round(kvco, 3) if kvco is not None else None,

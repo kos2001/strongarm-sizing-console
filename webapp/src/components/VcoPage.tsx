@@ -159,8 +159,12 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
       onFix={() => setView('opt')}
       fixLabel={T(lang, '목표로 재사이징', 'resize to target')}
       metrics={[
+        // The default topology has no V_ctrl knob (Kvco is 0 by construction), so a miss is
+        // not a mis-set bias — sizing is the only lever, and the strip says so rather than
+        // implying a knob the circuit does not have.
         { key: 'f', label: T(lang, '발진 주파수', 'frequency'), value: nom?.f_osc_ghz ?? null,
-          limit: targetF, unit: 'GHz', mode: 'target' as const },
+          limit: targetF, unit: 'GHz', mode: 'target' as const,
+          lever: (params.topology ?? 'xcpl') === 'xcpl' ? ('sizing' as const) : ('bias' as const) },
         // no limit: this UI has no user-set VCO power budget, and inventing one to make the
         // row look symmetric would assert a spec the user never chose
         { key: 'p', label: T(lang, '전력', 'power'), value: nom?.power_uw ?? null,

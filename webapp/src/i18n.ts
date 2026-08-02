@@ -215,12 +215,12 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
   },
   vco: {
     what: {
-      ko: '순수 MOSFET로 만든 전압제어발진기(VCO) — current-starved 링 오실레이터입니다. 홀수 개 인버터를 고리로 연결해 계속 발진하고, 제어전압 V_ctrl이 전류를 조절해 주파수를 바꿉니다. 비교기와 똑같은 SPICE·최적화 흐름을 씁니다.',
-      en: 'A voltage-controlled oscillator built from pure MOSFETs — a current-starved ring oscillator. An odd number of inverters in a loop oscillates continuously, and the control voltage V_ctrl adjusts the current to change frequency. Same SPICE + optimization loop as the comparator.',
+      ko: '순수 MOSFET로 만든 링 오실레이터입니다. 두 개의 인버터 링이 역상으로 돌고, 스테이지마다 약한 교차결합 PMOS 쌍이 두 링을 묶어 상보 출력을 만듭니다. 기본 토폴로지는 스테이지당 유닛 소자 2 NMOS + 4 PMOS 만으로 구성돼 **V_ctrl 노브가 없습니다** — 주파수는 제어전압이 아니라 소자 크기·단수·부하로 정해지고, 그 탐색이 "자동 사이징" 페이지입니다. 전압으로 주파수를 당기는 current-starved 변형은 topology="starved" 입니다(실측 Kvco 2.36 GHz/V, 튜닝 26%).',
+      en: 'A ring oscillator built from pure MOSFETs. Two inverter rings run in anti-phase, tied at each stage by a weak cross-coupled PMOS pair that keeps the outputs complementary. The default topology is exactly 2 NMOS + 4 PMOS of unit devices per stage, which means it has **no V_ctrl knob**: frequency is set by sizing, stage count and load rather than by a control voltage, and searching that is what the "Auto-size" page does. The current-starved variant that does pull frequency with a voltage is topology="starved" (measured Kvco 2.36 GHz/V over a 26% range).',
     },
     read: {
-      ko: '실행하면 발진 주파수·전력과 튜닝 곡선(f vs V_ctrl)이 나옵니다. 곡선의 기울기가 Kvco. × 표시는 그 전압에서 발진하지 않음. (목표 주파수 자동 사이징은 "자동 사이징" 페이지에서.)',
-      en: 'Running shows the oscillation frequency, power, and the tuning curve (f vs V_ctrl) — the curve slope is Kvco. An × marks a voltage where it does not oscillate. (Target-frequency auto-sizing lives on the "Auto-size" page.)',
+      ko: '실행하면 발진 주파수와 전력이 나옵니다. f vs V_ctrl 곡선이 **평평하면 고장이 아니라** 이 토폴로지에 노브가 없다는 뜻입니다(Kvco = 0, 구조적). 목표 주파수에서 벗어났다면 재바이어스가 아니라 재사이징이 유일한 레버이므로 "자동 사이징"으로 가세요. × 표시는 그 조건에서 발진하지 않음.',
+      en: 'Running shows the oscillation frequency and power. If the f vs V_ctrl curve is **flat, nothing is broken** — this topology has no knob, so Kvco is 0 by construction. If the frequency is off target, re-sizing rather than re-biasing is the only lever, so go to "Auto-size". An × marks a condition where it does not oscillate.',
     },
   },
   vcoopt: {
