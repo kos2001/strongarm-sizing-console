@@ -960,11 +960,17 @@ def pelgrom_sigma_v(p, dev):
 # number improved. Fixing that needs a *predictor* cheap enough to run per candidate,
 # which these constants provide. Every one of them is measured, not assumed:
 #
-#   input  R = 1.06, and remarkably stable — 1.0552..1.0608 across an 8x input-width
-#          sweep. Note this is NOT the textbook sqrt(2) = 1.414 that `_pred_offset_mv`
-#          used: referring a gate-side Vth shift back to the input is not 1:1, because
-#          the shift also perturbs the tail current and common mode. The old constant
-#          was therefore ~33% pessimistic on the dominant term.
+#   input  R = 1.268, stable to 0.5% across a 13x input-width sweep (1.268..1.275),
+#          measured as a MEDIAN over 5 estimator seeds at n_mc=16.
+#
+#          CORRECTION. This was published as 1.06 with a claimed 0.5% agreement, and
+#          that was wrong: the agreement came from a single Monte-Carlo draw (seed 4242)
+#          that happened to land there. The same sizing medians to 1.585 mV, not the
+#          1.326 that single draw gave. So the textbook sqrt(2) = 1.414 the code
+#          originally used was ~11% high, not 33% high, and replacing it with 1.06 made
+#          the dominant term ~16% low — a regression dressed as a fix. Referring a
+#          gate-side Vth shift to the input is still not quite 1:1 (the shift also moves
+#          the tail current and common mode), but the correction is small.
 #
 #   ncc    the one term that actually mattered and was missing. Its contribution falls
 #          9.3x as its own width goes 0.5 -> 16 um (1.794 -> 0.193 mV), so shrinking it
@@ -982,9 +988,9 @@ def pelgrom_sigma_v(p, dev):
 #   pre,
 #   prei   ~0.025-0.03 mV regardless of width, i.e. 150x below the input pair.
 #          Negligible; carried as constants so the RSS is complete.
-_OFFSET_R_INPUT = 1.06
-_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = 0.1249, 0.679, 0.372
-_OFFSET_FLAT_MV = {"pre": 0.026, "prei": 0.027}
+_OFFSET_R_INPUT = 1.268
+_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = 0.1268, 0.6838, 0.3709
+_OFFSET_FLAT_MV = {"pre": 0.0302, "prei": 0.0306}
 _OFFSET_PCC_K, _OFFSET_PCC_P = 0.3176, 0.1283
 
 

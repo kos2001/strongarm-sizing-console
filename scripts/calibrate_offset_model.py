@@ -253,7 +253,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="ptm45")
     ap.add_argument("--n-mc", type=int, default=16)
-    ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--seeds", type=int, default=5,
+                    help="estimator seeds per measurement. 3 was too few for the input "
+                         "referral factor — it refitted to 1.179 where 5 seeds give a "
+                         "stable 1.268 — and a single draw is how the value got "
+                         "published as 1.06 in the first place")
     ap.add_argument("--apply", action="store_true",
                     help="rewrite the constants if the held-out error improves")
     ap.add_argument("--no-optimizer-sizings", action="store_true",
