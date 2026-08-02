@@ -205,6 +205,36 @@ def test_the_measured_reference_is_only_good_to_about_25_percent():
     assert spread < 0.60, vals      # but not unusable
 
 
+def test_the_latch_term_depends_on_the_operating_point():
+    """The term whose absence caused a -41% error on optimizer output. The corner
+    feasibility step drives vcm_frac to 0.82, where the latch's measured contribution is
+    already 4.3x its value at 0.62 while the input pair's is unchanged — so a model
+    without this term is blind exactly where the search operates."""
+    lo = run_sim._full({"model": "ptm45", "vcm_frac": 0.62,
+                        "devices": {"ncc": {"w_um": 2.25}, "input": {"w_um": 16.0}}})
+    hi = run_sim._full({"model": "ptm45", "vcm_frac": 0.82,
+                        "devices": {"ncc": {"w_um": 2.25}, "input": {"w_um": 16.0}}})
+    t_lo = run_sim.predicted_offset_budget_mv(lo)[1]
+    t_hi = run_sim.predicted_offset_budget_mv(hi)[1]
+    assert t_hi["ncc"] > t_lo["ncc"] * 3, (t_lo["ncc"], t_hi["ncc"])
+    assert t_hi["input"] == pytest.approx(t_lo["input"])      # input pair really is flat
+
+
+def test_the_operating_point_is_not_free_speed():
+    """Measured, because the tool used to advertise the opposite: the total offset is
+    not flat in Vcm even though the input pair's part is."""
+    import statistics
+    out = {}
+    for vf in (0.62, 0.90):
+        p = run_sim._full({"model": "ptm45", "vcm_frac": vf,
+                           "devices": {"ncc": {"w_um": 2.25}, "input": {"w_um": 16.0}}})
+        sig = run_sim.pelgrom_sigma_v(p, "ncc")
+        out[vf] = statistics.median(
+            run_sim._offset_of_pair(p, "ncc", sig, 12, s)["offset_sigma_mv"]
+            for s in (11, 22, 33))
+    assert out[0.90] > out[0.62] * 3, out
+
+
 def test_analytic_budget_penalises_shrinking_the_latch():
     """The gradient that was missing. Shrinking ncc must raise the predicted budget,
     or the search has no reason to keep it."""

@@ -266,10 +266,16 @@ is common-mode rather than offset.
 - **A hard lower bound.** Below vcm_frac 0.50 the latch does not resolve at all —
   not a slow corner, a wall. Nothing reported it before.
 - **The seed operating point costs 2.7× in speed** (530 vs 198 ps) across a 9.4×
-  spread, at **no offset cost**: σ is flat to 6 significant figures in Vcm, because
-  input-pair Vth mismatch refers to the input gate-to-gate. Measured, not assumed.
-  So the operating point is a speed/power knob only — which also means it is close
-  to free speed the tool never surfaced.
+  spread. The *input pair's* σ is flat to 6 significant figures in Vcm, because its Vth
+  mismatch refers to the input gate-to-gate.
+
+  > **Correction.** This section originally concluded that the operating point is
+  > therefore "nearly-free speed", a speed/power knob only. That is wrong, and it was
+  > wrong because only the input-pair term was measured. The **latch's** contribution
+  > grows **~7×** over the same sweep (ncc 0.72 → 5.05 mV as vcm_frac goes 0.62 → 0.90),
+  > so raising the operating point is paid for in offset — through the latch. The
+  > analytic budget now carries that term; `cm_range_sweep`'s `with_offset` still shows
+  > only the flat part, and says so.
 
 **No CMRR figure is returned, on purpose.** CMRR is ΔVcm/ΔVos on the *systematic*
 offset, but this deck is perfectly symmetric — identical devices into identical
