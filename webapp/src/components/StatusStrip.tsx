@@ -27,17 +27,29 @@ export interface StatusMetric {
   mode?: 'max' | 'target'
   /** fractional tolerance for mode 'target'; default 0.10 */
   tol?: number
-  /** For a 'target' metric, what moves it. "bias" implies a knob exists; on the default
-   *  VCO topology none does (Kvco is structurally 0), so the strip must not imply that
-   *  re-biasing is available — sizing is the only lever. */
+  /** For a 'target' metric, what moves it. `xcpl` has no knob, so sizing is the only
+   *  lever there and the strip must not imply re-biasing is available. */
   lever?: 'bias' | 'sizing'
+  /** For a tunable 'target' metric: the range the knob can reach. A VCO sitting at 1.93 GHz
+   *  with a 1.5 GHz target is NOT off-spec if 1.5 lies inside its tuning range — it is
+   *  simply not biased there, and calling that "misses spec" sends the user to re-size a
+   *  design that is already capable. Judged against the range when given. */
+  reach?: { lo: number; hi: number } | null
 
 }
 
 const ok_of = (m: StatusMetric) =>
   m.value == null || m.limit == null ? null
-    : m.mode === 'target' ? Math.abs(m.value / m.limit - 1) <= (m.tol ?? 0.10)
-    : m.value <= m.limit
+    : m.mode === 'target'
+      // a reachable target passes: the knob covers it, so the design meets the spec even
+      // though this particular operating point does not sit on it
+      ? (m.reach ? m.limit >= m.reach.lo && m.limit <= m.reach.hi
+                 : Math.abs(m.value / m.limit - 1) <= (m.tol ?? 0.10))
+      : m.value <= m.limit
+
+/** Is this metric on its target right now, as opposed to merely able to reach it? */
+const on_target = (m: StatusMetric) =>
+  m.value != null && m.limit != null && Math.abs(m.value / m.limit - 1) <= (m.tol ?? 0.10)
 
 interface Props {
   lang: Lang
@@ -61,20 +73,28 @@ const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1
 export default function StatusStrip({ lang, metrics, functional, profileLabel, error, onRun, busy, onFix, fixLabel }: Props) {
   const measured = metrics.filter((m) => m.value != null && m.limit != null)
   const failing = measured.filter((m) => ok_of(m) === false)
-  const state: 'unrun' | 'error' | 'pass' | 'fail' =
-    error ? 'error' : functional === null || !measured.length ? 'unrun' : functional === false || failing.length ? 'fail' : 'pass'
+  // A target the knob covers but is not currently sitting on is its own state: the design
+  // is capable, the operating point is not set. Calling it "pass" hides that the number on
+  // screen is not the target; calling it "fail" sends the user to re-size a design that
+  // already meets the spec.
+  const offBias = measured.some((m) => m.mode === 'target' && m.reach && ok_of(m) && !on_target(m))
+  const state: 'unrun' | 'error' | 'pass' | 'fail' | 'offbias' =
+    error ? 'error' : functional === null || !measured.length ? 'unrun'
+      : functional === false || failing.length ? 'fail' : offBias ? 'offbias' : 'pass'
 
   // "worst" = furthest past its limit in relative terms, which is the one to fix first.
   // Absolute overshoot would rank a 30 ps miss above a 2x power miss.
   const worst = failing.length
     ? failing.reduce((a, b) => (Math.abs(a.value! / a.limit! - 1) >= Math.abs(b.value! / b.limit! - 1) ? a : b))
     : null
-  const tone = { unrun: 'var(--faint)', error: 'var(--bad)', pass: 'var(--good)', fail: 'var(--bad)' }[state]
+  const tone = { unrun: 'var(--faint)', error: 'var(--bad)', pass: 'var(--good)',
+                 fail: 'var(--bad)', offbias: 'var(--ag)' }[state]
   const headline = {
     unrun: t(lang, UI.statusUnrun),
     error: t(lang, UI.statusError),
     pass: t(lang, UI.statusPass),
     fail: functional === false ? t(lang, UI.statusNonFunctional) : t(lang, UI.statusFail),
+    offbias: t(lang, UI.statusOffBias),
   }[state]
 
   return (
@@ -150,11 +170,14 @@ export default function StatusStrip({ lang, metrics, functional, profileLabel, e
                   const text = m.mode === 'target'
                     ? (dev === 0 ? 'on target' : `${dev > 0 ? '↑' : '↓'}${Math.abs(dev)}%`)
                     : ok ? `↓${-dev}%` : `↑${dev}%`
+                  const reachable = m.mode === 'target' && !!m.reach && ok
                   const tip = m.mode === 'target'
                     ? `${Math.abs(dev)}% ${dev > 0 ? 'above' : 'below'} target`
-                      + (m.lever === 'sizing'
-                          ? ' — this topology has no V_ctrl knob, so sizing is the only lever'
-                          : '')
+                      + (reachable && !on_target(m)
+                          ? ` — inside the tuning range (${m.reach!.lo}–${m.reach!.hi} ${m.unit}), so the knob reaches it; this operating point is just not set there`
+                          : m.lever === 'sizing'
+                            ? ' — this topology has no V_ctrl knob, so sizing is the only lever'
+                            : '')
                     : ok ? `${-dev}% below the limit` : `${dev}% over the limit`
                   return (
                     <span className="mono text-[10px] tnum px-1 rounded" title={tip}

@@ -45,7 +45,13 @@ VCO_DEFAULTS = {
     "vctrl": 0.6,          # nominal control voltage (V)
     "n_stages": 3,         # odd number of ring stages
     "cload_ff": 3.0,       # per-stage load capacitance
-    "topology": "xcpl",    # 기본: 교차결합+리셋(xcpl). "starved" 는 레거시 호환용
+    # Default is the cross-coupled ring WITH current starving, because that is what the
+    # product describes on the VCO page: V_ctrl sets the frequency and the tuning curve has
+    # a slope. `xcpl` is the same cell without the two starve devices — a fixed-frequency
+    # oscillator with Kvco structurally 0, kept because the unit-only (2N+4P) discipline was
+    # a deliberate choice; it is now an explicit option rather than the silent default that
+    # made the page's own description false. `starved` is the legacy single-ended ring.
+    "topology": "xcplsv",
     "devices": {
         "invp":    {"w_um": 2.0, "l_nm": 45, "m": 2},   # core PMOS (P0)
         "invn":    {"w_um": 1.0, "l_nm": 45, "m": 2},   # core NMOS (N0)
@@ -91,7 +97,7 @@ def _osdi_line(p):
 
 
 def gen_vco_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None):
-    if p.get("topology", "starved") == "xcpl":
+    if p.get("topology", "xcplsv") in ("xcpl", "xcplsv"):
         return _gen_xcpl_netlist(p, vctrl, tstop_ns, tstep_ps, wavefile)
     d = run_sim.quantize_devices(p)   # gaa2nm: W → 시트 단위(0.5µ) × finger
     vdd = p["vdd"]
@@ -180,7 +186,13 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     hdr = run_sim._model_header(p)
     invp, invn = _dev2(p, d["invp"], "p"), _dev2(p, d["invn"], "n")
     xp = _dev2(p, d["xcplp"], "p")
+    sp_p, sn_n = _dev2(p, d["starvep"], "p"), _dev2(p, d["starven"], "n")
     mp = _mp(p)
+    # `xcpl` is the unit-only cell (2N+4P, rails direct, no knob). `xcplsv` adds the two
+    # current-starve devices per stage that make V_ctrl actually control the frequency —
+    # which is what the product promises on the VCO page, so it is the default.
+    starved = p.get("topology", "xcplsv") == "xcplsv"
+    vc = p["vctrl"] if vctrl is None else vctrl
     wave = f"wrdata {wavefile} v(o1) v(ob1)" if wavefile else ""
 
     # 유닛 셀 = NMOS 2 + PMOS 4, 그 외 소자 없음: 인버터 2개(Mp/Mn, Mpb/Mnb
@@ -188,20 +200,45 @@ def _gen_xcpl_netlist(p, vctrl=None, tstop_ns=18.0, tstep_ps=2.0, wavefile=None)
     # 전부 없다 — 시동은 .ic 킥스타트(실리콘에선 열잡음이 그 역할). 링 결선은
     # 양 레일 비반전(straight). V_ctrl 노브 없음(튜닝 곡선 평탄은 설계 결과).
     lines = [
-        "cross-coupled pseudo-differential ring VCO (unit-only, generated)",
+        ("cross-coupled current-starved pseudo-differential ring VCO (generated)"
+         if starved else
+         "cross-coupled pseudo-differential ring VCO (unit-only, no knob, generated)"),
         f".option temp={p.get('temp', 27)}",
         f".param dvtn={-nskew if p.get('model') == 'asap7' else nskew} dvtp={-pskew_p}",
         hdr,
         f"Vdd vdd 0 {vdd}",
     ]
+    if starved:
+        # V_ctrl sets a tail current; a diode-connected PMOS mirrors it to vbp so both the
+        # pull-up and pull-down legs starve together and the duty cycle stays near 50%.
+        lines += [
+            f"Vc vctrl 0 {vc}",
+            "* bias: V_ctrl -> tail current, mirrored through a diode PMOS -> vbp",
+            f"{mp}Mpref vbp vbp vdd vdd {sp_p}",
+            f"{mp}Mnref vbp vctrl 0 0 {sn_n}",
+        ]
     for i in range(1, N + 1):
         prev = N if i == 1 else i - 1      # ring: in_1 = o_N (both rails, straight)
+        # Both rails of a stage share that stage's two starve devices: the rings run in
+        # anti-phase, so their currents interleave and a shared source node costs one
+        # device pair per stage instead of two without breaking the differential behaviour.
+        top, bot = (f"a{i}", f"b{i}") if starved else ("vdd", "0")
         lines += [
-            f"* stage {i}: unit = 2 inverters (2N+2P, rails direct) + latched PMOS pair",
-            f"{mp}Mp{i}   o{i} o{prev} vdd vdd {invp}",
-            f"{mp}Mn{i}   o{i} o{prev} 0 0 {invn}",
-            f"{mp}Mpb{i}  ob{i} ob{prev} vdd vdd {invp}",
-            f"{mp}Mnb{i}  ob{i} ob{prev} 0 0 {invn}",
+            f"* stage {i}: 2 inverters + latched PMOS pair"
+            + (" + current-starve pair (V_ctrl)" if starved else " (rails direct)"),
+        ]
+        if starved:
+            lines += [
+                f"{mp}Mbp{i} a{i} vbp vdd vdd {sp_p}",
+                f"{mp}Mbn{i} b{i} vctrl 0 0 {sn_n}",
+            ]
+        lines += [
+            f"{mp}Mp{i}   o{i} o{prev} {top} vdd {invp}",
+            f"{mp}Mn{i}   o{i} o{prev} {bot} 0 {invn}",
+            f"{mp}Mpb{i}  ob{i} ob{prev} {top} vdd {invp}",
+            f"{mp}Mnb{i}  ob{i} ob{prev} {bot} 0 {invn}",
+            # the cross-coupled latch pair stays on the rail: its job is rail
+            # complementarity, and starving it too stalls start-up at low V_ctrl
             f"{mp}Mx{i}   o{i} ob{i} vdd vdd {xp}",
             f"{mp}Mxb{i}  ob{i} o{i} vdd vdd {xp}",
             f"Co{i}  o{i} 0 {cl}f",
@@ -263,7 +300,7 @@ def vco_tuning(params, points=9):
     pts = [{"vctrl_v": v, "f_osc_ghz": m["f_osc_ghz"], "power_uw": m["power_uw"], "oscillates": m["oscillates"]}
            for v, m in zip(vs, ms)]
     fs = [(pt["vctrl_v"], pt["f_osc_ghz"]) for pt in pts if pt["f_osc_ghz"]]
-    has_knob = p.get("topology", "xcpl") != "xcpl"
+    has_knob = p.get("topology", "xcplsv") != "xcpl"
     out = {"points": pts, "f_min_ghz": None, "f_max_ghz": None,
            "tuning_pct": None, "kvco_ghz_per_v": None, "center_ghz": None,
            "has_vctrl_knob": has_knob,
@@ -367,7 +404,23 @@ def phase_noise(params, offsets_hz=None, measured=True, flicker_corner_hz=1e5):
     (white-noise / 1-f^2 region). The effective node cap is derived self-
     consistently from the measured frequency (C = I*t_d/VDD, t_d = 1/(2N*f0)),
     so it needs no extra guess. Thermal-only, first-order — not a PSS/pnoise
-    sign-off, but tracks the right dependence on power, f0 and N."""
+    sign-off, but tracks the right dependence on power, f0 and N.
+
+    **It omits the starve device's own noise, and that omission is large.** The model counts
+    only kT*C on the switching node. In a current-starved ring the tail device is a current
+    source in series with the switching path, so its thermal noise modulates the delay
+    directly and dominates — textbook, and measured here: against the SPICE trnoise
+    reference the analytic figure is optimistic by 3.7 dB on the unstarved cell (`xcpl`,
+    -98.2 vs -94.5 dBc/Hz at 1 MHz) but by **21.2 dB** on the starved default (-104.1 vs
+    -82.9; jitter 70.6 fs predicted against 302.9 fs measured). The measured value is not
+    under-resolved — it converges to -82.7/-82.7/-82.9 over 60/120/240 ns windows with the
+    seed spread falling 18.8 -> 9.7 fs.
+
+    So `starve_noise_omitted` is returned whenever the topology has a tail device, and the
+    measured cross-check is the number to quote for those. A second, smaller effect is also
+    unmodelled: `i_stage` is the total supply current over N, but the bias mirror is a static
+    branch that does no switching and carries 29% of the total here, worth a further ~1.5 dB.
+    Both are reported rather than folded into a wider tolerance."""
     p = _full(params)
     m = measure_vco(p)
     f0g, pw = m["f_osc_ghz"], m["power_uw"]
@@ -391,10 +444,19 @@ def phase_noise(params, offsets_hz=None, measured=True, flicker_corner_hz=1e5):
     pts = [{"offset_hz": round(fo), "L_dbc": round(_L(fo), 1)} for fo in offsets_hz]
     L_1m = _L(1e6)
     fom = L_1m - 20 * math.log10(f0 / 1e6) + 10 * math.log10(P * 1e3)   # P in mW
+    starved = p.get("topology", "xcplsv") in ("xcplsv", "starved")
     out = {"f0_ghz": round(f0 / 1e9, 4), "power_uw": round(pw, 2), "n_stages": N,
            "period_jitter_fs": round(sigma_T * 1e15, 2), "c_eff_ff": round(c_eff * 1e15, 3),
            "points": pts, "L_1mhz_dbc": round(L_1m, 1), "fom_db": round(fom, 1),
-           "flicker_corner_hz": round(fc)}
+           "flicker_corner_hz": round(fc),
+           "starve_noise_omitted": starved,
+           "analytic_validity": (
+               "optimistic by ~21 dB on this topology: the tail device's thermal noise "
+               "dominates a current-starved ring and this first-order model omits it. Quote "
+               "the `measured` cross-check, not L_1mhz_dbc."
+               if starved else
+               "no tail device, so the thermal-only model applies; agrees with the SPICE "
+               "trnoise reference to ~4 dB")}
     # SPICE-measured cross-check (trnoise jitter); best-effort
     if measured:
         try:
@@ -412,10 +474,25 @@ def _ring_gm(p):
     d = p["devices"]["invn"]
     vdd = p["vdd"]
     osdi = f"pre_osdi {run_sim.ASAP7_OSDI}\n" if p.get("model") == "asap7" else ""
+    # With current starving the inverter NMOS does not sit on ground — its source is the
+    # starved node, so its available current (and therefore its gm) is set by V_ctrl. Measured
+    # with the source grounded instead, gm came out high enough to make the analytic phase
+    # noise 16 dB more optimistic than the measured L(1 MHz): -104.1 against -88.1 dBc/Hz.
+    # So the starve device goes in series here, at the same V_ctrl the ring runs at.
+    starved = p.get("topology", "xcplsv") in ("xcplsv", "starved")
+    src = "s" if starved else "0"
+    sn = p["devices"]["starven"]
     if p.get("model") == "asap7":
-        dev = f'NM1 d g 0 0 nmos_lvt l={d["l_nm"]}n nfin={run_sim.nfin_of(d)}'
+        dev = f'NM1 d g {src} 0 nmos_lvt l={d["l_nm"]}n nfin={run_sim.nfin_of(d)}'
+        if starved:
+            dev += (f'\nNMB s vc 0 0 nmos_lvt l={sn["l_nm"]}n '
+                    f'nfin={run_sim.nfin_of(sn)}')
     else:
-        dev = f'M1 d g 0 0 nmos W={d["w_um"]}u L={d["l_nm"]}n M={d["m"]}'
+        dev = f'M1 d g {src} 0 nmos W={d["w_um"]}u L={d["l_nm"]}n M={d["m"]}'
+        if starved:
+            dev += (f'\nMB s vc 0 0 nmos W={sn["w_um"]}u L={sn["l_nm"]}n M={sn["m"]}')
+    if starved:
+        dev += f'\nVc2 vc 0 {p["vctrl"]}'
 
     def idn(vg):
         out = run_sim._run(f'{run_sim._model_header(p)}\nVd d 0 {vdd/2.0}\nVg g 0 {vg}\n'

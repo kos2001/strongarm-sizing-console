@@ -8,7 +8,7 @@ import type { Device, VcoDeviceKey } from '../types'
 // Built imperatively into an <svg> so the geometry stays exact.
 const C = { wire: '#39d7d7', sym: '#63d68a', pin: '#ff5a52', prop: '#e6c84f', net: '#57e0e0', global: '#ff8a3d', dim: '#7aa6a3', bg: '#040a0a', grid: '#0d2422' }
 
-export default function VcoSchematic({ devices, nStages }: { devices: Record<VcoDeviceKey, Device>; nStages: number }) {
+export default function VcoSchematic({ devices, nStages, starved = true }: { devices: Record<VcoDeviceKey, Device>; nStages: number; starved?: boolean }) {
   const ref = useRef<SVGSVGElement>(null)
   useEffect(() => {
     const svg = ref.current
@@ -49,13 +49,27 @@ export default function VcoSchematic({ devices, nStages }: { devices: Record<Vco
     wire([[24, VDD], [W - 24, VDD]]); wire([[24, GND], [W - 24, GND]])
     txt(24, VDD - 6, 'vdd!', C.global, 10); txt(24, GND + 14, 'gnd!', C.global, 10)
 
-    // 유닛 인버터(Mp/Mn — 레일 직결, 스타빙 없음) -> output-node x position.
-    // 유닛 셀 = NMOS 2 + PMOS 4 (인버터 2쌍 + 래치 PMOS 2) — 전류원 없음.
+    // The drawn cell must match the simulated deck. With current starving the inverter
+    // sources do NOT reach the rails directly — they go through Mbp/Mbn, gated by vbp and
+    // V_ctrl — and a schematic showing rail-direct sources would assert a different circuit
+    // than the one being measured, which is how a flat tuning curve went unquestioned.
     const stack = (cxc: number, suffix: string, inLabel: string) => {
       const mp = mos(cxc, 122, true, `Mp${suffix}`, sz('invp'))
       const mn = mos(cxc, 190, false, `Mn${suffix}`, sz('invn'))
       const X = cxc + 7, bus = cxc - 36
-      wire([[X, mp.d[1]], [X, VDD]]); wire([[X, mp.s[1]], [X, mn.d[1]]]); wire([[X, mn.s[1]], [X, GND]])
+      if (starved) {
+        const bp = mos(cxc, 68, true, `Mbp${suffix}`, sz('starvep'))
+        const bn = mos(cxc, 240, false, `Mbn${suffix}`, sz('starven'))
+        wire([[X, bp.d[1]], [X, VDD]])                  // vdd -> starve PMOS
+        wire([[X, bp.s[1]], [X, mp.d[1]]])              // starve PMOS -> inverter PMOS
+        wire([[X, mn.s[1]], [X, bn.d[1]]])              // inverter NMOS -> starve NMOS
+        wire([[X, bn.s[1]], [X, GND]])                  // starve NMOS -> gnd
+        wire([[bp.g[0], bp.g[1]], [bp.g[0] - 14, 68]]); txt(bp.g[0] - 17, 71, 'vbp', C.net, 8.5, 'end')
+        wire([[bn.g[0], bn.g[1]], [bn.g[0] - 14, 240]]); txt(bn.g[0] - 17, 243, 'vctrl', C.net, 8.5, 'end')
+      } else {
+        wire([[X, mp.d[1]], [X, VDD]]); wire([[X, mn.s[1]], [X, GND]])
+      }
+      wire([[X, mp.s[1]], [X, mn.d[1]]])
       wire([[mp.g[0], mp.g[1]], [bus, 122], [bus, 190], [mn.g[0], mn.g[1]]])
       wire([[bus, 122], [bus - 18, 122]]); dot(bus, 122); txt(bus - 21, 125, inLabel, C.net, 8.5, 'end')
       return X
@@ -122,7 +136,7 @@ export default function VcoSchematic({ devices, nStages }: { devices: Record<Vco
       wire([[mxb.g[0], mxb.g[1]], [mxb.g[0], 96], [mx.s[0], 128]]); dot(mx.s[0], 128)     // Mxb gate = o
       ringTwin(640, `pseudo-diff ring · N=${N} (odd)`)
     }
-  }, [devices, nStages])
+  }, [devices, nStages, starved])
   return <svg ref={ref} viewBox="0 0 866 300" width="100%" style={{ display: 'block', maxHeight: 340, background: C.bg, borderRadius: 8 }} role="img"
     aria-label="Cross-coupled pseudo-differential ring VCO schematic" />
 }

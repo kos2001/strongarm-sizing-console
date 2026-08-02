@@ -22,13 +22,21 @@ def test_frequency_rises_with_vctrl():
 
 
 def test_tuning_sweep_fields():
-    # xcpl(기본) 유닛은 vctrl 노브가 없다 — 스윕은 평탄해야 정상
+    # 기본(xcplsv)은 진짜 VCO — V_ctrl 이 주파수를 움직인다
     t = vco_sim.vco_tuning({})
     osc = [p for p in t["points"] if p["oscillates"]]
     assert len(osc) >= 3
     fs = [p["f_osc_ghz"] for p in osc if p["f_osc_ghz"]]
-    assert max(fs) - min(fs) < 0.05 * max(fs)   # ±5% 이내 평탄
-    # starved 는 여전히 진짜 튜닝
+    assert max(fs) > 2 * min(fs), fs            # 넓은 튜닝(넛지가 아니라)
+    assert t["has_vctrl_knob"] is True and t["kvco_ghz_per_v"] > 0
+
+    # xcpl 유닛(2N+4P)은 노브가 없다 — 평탄이 정상이며, 그 사실을 결과가 밝힌다
+    tu = vco_sim.vco_tuning({"topology": "xcpl"})
+    fu = [p["f_osc_ghz"] for p in tu["points"] if p["oscillates"] and p["f_osc_ghz"]]
+    assert len(set(fu)) == 1, fu                # 근사 평탄이 아니라 완전 동일
+    assert tu["has_vctrl_knob"] is False and tu["tunable_range"] is False
+
+    # 레거시 단일단 starved 도 여전히 튜닝
     t2 = vco_sim.vco_tuning({"topology": "starved", "n_stages": 5})
     assert t2["f_max_ghz"] > t2["f_min_ghz"]
     assert t2["kvco_ghz_per_v"] is not None and t2["kvco_ghz_per_v"] > 0
@@ -75,7 +83,11 @@ def test_vco_layout_and_parasitics():
     p = vco_sim._full({})
     L = layout.generate_vco_layout(p)
     assert L["area_um2"] > 0 and L["drc"]["clean"] is True
-    assert len(L["labels"]) == 6 * p["n_stages"]          # 스테이지당 6소자(2N+4P) — 유닛 소자만
+    # 기본(xcplsv) = 스테이지당 8소자(유닛 6 + 스타브 2) + 공용 바이어스 미러 2.
+    # 리터럴 6 을 박아두면 덱이 바뀔 때 레이아웃이 조용히 덜 그려도 통과한다.
+    assert len(L["labels"]) == 8 * p["n_stages"] + 2
+    pu = vco_sim._full({"topology": "xcpl"})
+    assert len(layout.generate_vco_layout(pu)["labels"]) == 6 * pu["n_stages"]
     pc = layout.extract_vco_parasitics(p)
     assert pc["c_node_ff"] > 0
     # parasitics lower the frequency
@@ -115,7 +127,19 @@ def test_vco_phase_noise_measured_agrees():
     assert "jitter_spread_fs" in m
     # two independent methods within several dB at 1 MHz (thermal region).
     # 1차 해석 모델은 낙관적(실측이 위) — 2N+4P 유닛 실측 7.1dB, 여유 8dB
-    assert abs(r["L_1mhz_dbc"] - m["L_1mhz_dbc"]) < 8.0
+    # The analytic model is thermal-only and omits the tail device's noise, which dominates
+    # a current-starved ring — so it only agrees where there is no tail device. Measured on
+    # the unstarved unit cell it is 3.7 dB optimistic; on the starved default, 21 dB. That
+    # is reported (`starve_noise_omitted`, `analytic_validity`) rather than absorbed into a
+    # tolerance wide enough to hide it.
+    assert r["starve_noise_omitted"] is True
+    assert "optimistic" in r["analytic_validity"]
+    assert r["L_1mhz_dbc"] < m["L_1mhz_dbc"]          # optimistic, in that direction
+
+    ru = vco_sim.phase_noise({"topology": "xcpl"}, measured=False)
+    mu = vco_sim.phase_noise_measured({"topology": "xcpl"}, tstop_ns=120.0)
+    assert ru["starve_noise_omitted"] is False
+    assert abs(ru["L_1mhz_dbc"] - mu["L_1mhz_dbc"]) < 8.0
     assert m["L_1mhz_dbc"] >= r["L_1mhz_dbc"] - 1.0   # 실측 ≥ 해석(방향 일관)
     # jitter-accumulation slope: white/thermal injection → well below the 1.0
     # flicker regime, and σ_Δt(τ) grows monotonically

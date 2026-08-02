@@ -18,15 +18,23 @@ import LayoutView from './LayoutView'
 import type { Lang } from '../i18n'
 
 const VCO_DEFAULTS: VcoParams = {
-  vdd: 1.0, vctrl: 0.6, n_stages: 3, cload_ff: 3.0, topology: 'xcpl',
+  // 'xcplsv' — the cross-coupled cell WITH the current-starve pair, so V_ctrl
+  // actually sets the frequency. This said 'xcpl' (no starve devices) while the
+  // page described a voltage-controlled oscillator, and the frontend pinning it
+  // here meant the backend default never reached the UI.
+  vdd: 1.0, vctrl: 0.6, n_stages: 3, cload_ff: 3.0, topology: 'xcplsv',
   devices: {
     invp: { w_um: 2.0, l_nm: 45, m: 2 }, invn: { w_um: 1.0, l_nm: 45, m: 2 },
     starvep: { w_um: 2.0, l_nm: 45, m: 2 }, starven: { w_um: 1.0, l_nm: 45, m: 1 },
     xcplp: { w_um: 1.0, l_nm: 45, m: 2 },
   },
 }
-// xcpl 유닛(2N+4P)에는 스타빙이 없다 — 인버터 + 래치/리셋 PMOS 만 사이징
-const XKEYS: VcoDeviceKey[] = ['invp', 'invn', 'xcplp']
+// Sizing keys follow the topology, matching vco_wicked.dev_keys: a key whose device the
+// deck never instantiates is silent — the editor would offer a width that changes nothing.
+const KEYS_FOR = (t: VcoParams['topology']): VcoDeviceKey[] =>
+  t === 'xcpl' ? ['invp', 'invn', 'xcplp']
+    : t === 'starved' ? ['invp', 'invn', 'starvep', 'starven']
+    : ['invp', 'invn', 'xcplp', 'starvep', 'starven']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
 type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'
 
@@ -36,7 +44,7 @@ const normalizeVcoStages = (raw: number | undefined | null) => {
   return Math.min(n, 9)
 }
 
-export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; theme: string; view?: View }) {
+export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { lang: Lang; theme: string; view?: View; onNavigate?: (v: View) => void }) {
   const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
   const [res, setRes] = useState<VcoResult | null>(null)
   const [tuning, setTuning] = useState<VcoTuning | null>(null)
@@ -83,11 +91,17 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
     if (f === 'n_stages') v = normalizeVcoStages(v)
     setParams((p) => ({ ...p, [f]: v }))
   }
-  // 토폴로지는 교차결합+리셋(xcpl) 단일 — 전류제한(starved) 회로는 제거됨
-  const dkeys = XKEYS
+  const dkeys = KEYS_FOR(params.topology ?? 'xcplsv')
+  // The badge names the circuit actually being simulated. It said "교차결합+리셋" long after
+  // the reset device was removed, and then through a change of default topology — a label
+  // that keeps its text while the circuit under it changes is worse than no label.
   const topoBadge = (
     <span className="mono text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'var(--ag)', color: 'var(--bg)' }}>
-      {T(lang, '교차결합+리셋', 'x-coupled+rst')}
+      {(params.topology ?? 'xcplsv') === 'xcpl'
+        ? T(lang, '교차결합 · 노브 없음', 'x-coupled · no knob')
+        : (params.topology === 'starved'
+            ? T(lang, '단일단 전류제한', 'single-ended starved')
+            : T(lang, '교차결합 + 전류제한', 'x-coupled + starved'))}
     </span>
   )
 
@@ -156,15 +170,18 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
       error={res?.error ?? null}
       busy={busy}
       onRun={run}
-      onFix={() => setView('opt')}
+      onFix={() => onNavigate?.('opt')}
       fixLabel={T(lang, '목표로 재사이징', 'resize to target')}
       metrics={[
-        // The default topology has no V_ctrl knob (Kvco is 0 by construction), so a miss is
-        // not a mis-set bias — sizing is the only lever, and the strip says so rather than
-        // implying a knob the circuit does not have.
+        // `reach` is the measured tuning range once a sweep has been run. With it the strip
+        // can separate "off spec" from "capable but not biased there" — the difference
+        // between re-sizing the design and just moving V_ctrl. `xcpl` has no knob at all, so
+        // there sizing is the only lever and the strip says so instead of implying a knob.
         { key: 'f', label: T(lang, '발진 주파수', 'frequency'), value: nom?.f_osc_ghz ?? null,
           limit: targetF, unit: 'GHz', mode: 'target' as const,
-          lever: (params.topology ?? 'xcpl') === 'xcpl' ? ('sizing' as const) : ('bias' as const) },
+          lever: (params.topology ?? 'xcplsv') === 'xcpl' ? ('sizing' as const) : ('bias' as const),
+          reach: (tuning && tuning.tunable_range && tuning.f_min_ghz != null && tuning.f_max_ghz != null)
+            ? { lo: tuning.f_min_ghz, hi: tuning.f_max_ghz } : null },
         // no limit: this UI has no user-set VCO power budget, and inventing one to make the
         // row look symmetric would assert a spec the user never chose
         { key: 'p', label: T(lang, '전력', 'power'), value: nom?.power_uw ?? null,
@@ -185,7 +202,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
               ⤓ {T(lang, '넷리스트', 'netlist')}
             </button>
             {runBtn(runWave, 'wave', T(lang, '↻ 파형', '↻ waveform'))}</div>)}
-          <div className="overflow-x-auto"><VcoSchematic devices={params.devices} nStages={params.n_stages} /></div>
+          <div className="overflow-x-auto"><VcoSchematic devices={params.devices} nStages={params.n_stages} starved={(params.topology ?? 'xcplsv') !== 'xcpl'} /></div>
           {wf ? (
             <div className="mt-4">
               <VcoWaveformChart wf={wf} theme={theme} labels={['o1', 'ob1']} />
@@ -552,7 +569,7 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
           </div>
           {showLiveSchematic && (
             <div className="overflow-x-auto mt-3" style={{ maxHeight: 260 }}>
-              <VcoSchematic devices={params.devices} nStages={params.n_stages} />
+              <VcoSchematic devices={params.devices} nStages={params.n_stages} starved={(params.topology ?? 'xcplsv') !== 'xcpl'} />
             </div>
           )}
         </div>
