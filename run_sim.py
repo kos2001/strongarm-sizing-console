@@ -989,7 +989,16 @@ def pelgrom_sigma_v(p, dev):
 #   prei   ~0.025-0.03 mV regardless of width, i.e. 150x below the input pair.
 #          Negligible; carried as constants so the RSS is complete.
 _OFFSET_R_INPUT = 1.268
-_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = 0.1268, 0.6838, 0.3709
+# The latch magnitude coefficient is PER MODEL — it spans 6.5x across the backends
+# (0.115 on ptm45 to 0.747 on asap7), so a single global value calibrated on ptm45
+# under-predicted asap7 by 41%, gaa2nm by 31% and sky130 by 14%. All in the optimistic
+# direction, which is the dangerous one: the search shrinks the latch believing offset is
+# fine. The exponents and the vcm term do transfer — measured, the vcm ratio at 0.82 is
+# 3.55-4.30 across backends against a fit of 4.07 — so only K is split.
+_OFFSET_NCC_K_BY_MODEL = {"ptm45": 0.1147, "asap7": 0.7467,
+                          "gaa2nm": 0.5179, "sky130": 0.3291}
+_OFFSET_NCC_K = _OFFSET_NCC_K_BY_MODEL["ptm45"]      # fallback for an unknown backend
+_OFFSET_NCC_A, _OFFSET_NCC_B = 0.6838, 0.3709
 # The latch term also depends on the input common mode, and strongly — measured, ncc's
 # contribution grows 7x as vcm_frac goes 0.62 -> 0.90 while the input pair's stays flat.
 # The model had no such term, which is the bulk of why it under-predicted ~41% on
@@ -998,6 +1007,37 @@ _OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = 0.1268, 0.6838, 0.3709
 _OFFSET_NCC_VCM_REF, _OFFSET_NCC_VCM_K = 0.62, 7.02
 _OFFSET_FLAT_MV = {"pre": 0.0302, "prei": 0.0306}
 _OFFSET_PCC_K, _OFFSET_PCC_P = 0.3176, 0.1283
+
+
+#: Measured residual of the analytic budget per backend, at the seed sizing, as a
+#: signed fraction. Reported rather than reduced to a boolean: "has its own coefficient"
+#: is not the same as "accurate", and a True for a backend sitting at -25% is the kind of
+#: false reassurance this model has already produced once. All residuals are NEGATIVE —
+#: the model is optimistic everywhere but ptm45, which is the direction that lets the
+#: search shrink the latch believing offset is fine.
+#:
+#: Only the latch coefficient is fitted per model. R_input, the pcc law, the flat terms
+#: and the exponents are all ptm45 fits, which is the likeliest source of what is left.
+#: `scripts/calibrate_offset_model.py --model <name>` is how these get better.
+_OFFSET_MODEL_RESIDUAL = {"ptm45": +0.01, "asap7": -0.25, "gaa2nm": -0.18, "sky130": -0.11}
+
+
+def offset_model_accuracy(p):
+    """{residual, calibrated, note} for the backend in `p` — how far the analytic budget
+    is known to sit from measurement, and in which direction."""
+    m = p.get("model") or "ptm45"
+    r = _OFFSET_MODEL_RESIDUAL.get(m)
+    return {
+        "model": m,
+        "has_own_latch_coefficient": m in _OFFSET_NCC_K_BY_MODEL,
+        "measured_residual": r,
+        "note": ("calibrated on this backend to within a few per-cent"
+                 if r is not None and abs(r) < 0.05 else
+                 f"known to under-predict by ~{abs(r):.0%} on this backend — judge "
+                 f"against a measured offset_budget, not this number"
+                 if r is not None and r < 0 else
+                 "no residual measured for this backend; treat the number as indicative"),
+    }
 
 
 def predicted_offset_budget_mv(p):
@@ -1012,8 +1052,8 @@ def predicted_offset_budget_mv(p):
     di, dn = p["devices"]["input"], p["devices"]["ncc"]
     ratio = max((di["w_um"] * di["m"]) / max(dn["w_um"] * dn["m"], 1e-9), 1e-9)
     vcm_mult = math.exp(_OFFSET_NCC_VCM_K * (p["vcm_frac"] - _OFFSET_NCC_VCM_REF))
-    terms["ncc"] = (_OFFSET_NCC_K * (sig_ncc ** _OFFSET_NCC_A)
-                    * (ratio ** _OFFSET_NCC_B) * vcm_mult)
+    k = _OFFSET_NCC_K_BY_MODEL.get(p.get("model") or "ptm45", _OFFSET_NCC_K)
+    terms["ncc"] = k * (sig_ncc ** _OFFSET_NCC_A) * (ratio ** _OFFSET_NCC_B) * vcm_mult
     dp = p["devices"]["pcc"]
     terms["pcc"] = _OFFSET_PCC_K * max(dp["w_um"], 1e-9) ** _OFFSET_PCC_P
     terms.update(_OFFSET_FLAT_MV)

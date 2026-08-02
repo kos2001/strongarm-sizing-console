@@ -664,6 +664,11 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
                 f"only ~8-19% against a reference that itself scatters ~27%, so the "
                 f"search can land here legitimately; this is a pointer to the binding "
                 f"device, not evidence of a modelling gap.")
+    # The predictor's accuracy is per backend and only ptm45 is calibrated to a few
+    # per-cent; elsewhere it under-predicts, which is the direction that lets the search
+    # shrink the latch. Reported next to every number it produced rather than left for
+    # the reader to know.
+    off_accuracy = run_sim.offset_model_accuracy(best)
     meas, v = _verdicts(r["nominal"], r.get("offset"), targets)
     surrogate_note = f", {n_skip[0]} surrogate-skipped" if n_skip[0] else ""
     traj.append({"action": f"confirm best (Monte-Carlo offset) · {n_sims[0]} SPICE evals{surrogate_note}",
@@ -701,6 +706,7 @@ def optimize(base, targets, pop=12, gens=8, seed=1234, use_surrogate=True,
             # full offset budget of the winner + a loud flag if the cost function's
             # input-pair-only offset term is optimistic (it usually is — see above)
             "offset_budget": budget, "offset_budget_warning": budget_warning,
+            "offset_model_accuracy": off_accuracy,
             "kickback_target_mv": kb_t,
             "final_kickback": (run_sim.measure_kickback(best, **kb_drive) if kb_t else None),
             # gaa2nm: 자동 사이징이 실제로 찾은 것 = 소자별 나노시트 스택 수(정수)
@@ -1470,6 +1476,7 @@ def design_brief(params, targets=None):
     # should not lead with it. Both are returned so the difference is visible.
     offp_input = _pred_offset_mv(p)
     offp, offp_terms = run_sim.predicted_offset_budget_mv(p)
+    offp_accuracy = run_sim.offset_model_accuracy(p)
     dec, pw = nom.get("decision_time_ps"), nom.get("power_uw")
     margins = {
         "functional": bool(nom.get("functional")),
@@ -1496,6 +1503,10 @@ def design_brief(params, targets=None):
         "nominal": nom, "predicted_offset_sigma_mv": round(offp, 3),
         "predicted_offset_input_pair_only_mv": round(offp_input, 3),
         "predicted_offset_terms_mv": {k: round(v, 3) for k, v in offp_terms.items()},
+        # the predictor's own known error on THIS backend — only ptm45 is calibrated to a
+        # few per-cent, and everywhere else it under-predicts, so the figure above is
+        # optimistic in a way the reader cannot see from the number itself
+        "predicted_offset_accuracy": offp_accuracy,
         "targets": t, "margins": margins, "hints": hints,
         "devices": copy.deepcopy(p["devices"]),
     }

@@ -331,3 +331,46 @@ def test_optimizer_reports_which_device_binds_the_budget():
     b = r["offset_budget"]
     assert b["dominant"], b
     assert b["dominant"][0] in run_sim.OFFSET_PAIRS
+
+
+def test_the_latch_coefficient_is_per_backend():
+    """A single ptm45-fitted coefficient under-predicted the other three backends.
+
+    Measured: asap7 -41%, gaa2nm -31%, sky130 -14%, all optimistic — the direction that
+    lets the search shrink the latch believing offset is fine. K spans 6.5x across the
+    backends (0.115 to 0.747), which no single value covers."""
+    ks = run_sim._OFFSET_NCC_K_BY_MODEL
+    assert set(ks) == {"ptm45", "asap7", "gaa2nm", "sky130"}
+    assert max(ks.values()) / min(ks.values()) > 3.0, ks
+    # and the model must actually read the per-model slot, not a global scalar
+    seen = {}
+    for m in ks:
+        p = run_sim._full({"model": m, **({"vdd": 1.8} if m == "sky130" else {})})
+        seen[m] = run_sim.predicted_offset_budget_mv(p)[1]["ncc"]
+    saved = dict(ks)
+    try:
+        run_sim._OFFSET_NCC_K_BY_MODEL = {**saved, "asap7": saved["asap7"] * 2}
+        p = run_sim._full({"model": "asap7"})
+        assert run_sim.predicted_offset_budget_mv(p)[1]["ncc"] > 1.8 * seen["asap7"]
+        # ...and only that backend moves
+        p45 = run_sim._full({"model": "ptm45"})
+        assert run_sim.predicted_offset_budget_mv(p45)[1]["ncc"] == pytest.approx(seen["ptm45"])
+    finally:
+        run_sim._OFFSET_NCC_K_BY_MODEL = saved
+
+
+def test_an_uncalibrated_backend_is_flagged_rather_than_quietly_optimistic():
+    """Reporting a boolean 'calibrated' for a backend at -25% is false reassurance."""
+    good = run_sim.offset_model_accuracy({"model": "ptm45"})
+    assert abs(good["measured_residual"]) < 0.05 and "calibrated" in good["note"]
+
+    weak = run_sim.offset_model_accuracy({"model": "asap7"})
+    assert weak["measured_residual"] < 0          # optimistic, and says so
+    assert "under-predict" in weak["note"] and "offset_budget" in weak["note"]
+
+    unknown = run_sim.offset_model_accuracy({"model": "something_new"})
+    assert unknown["measured_residual"] is None
+    assert unknown["has_own_latch_coefficient"] is False
+    # every residual on record is negative — if that ever changes the note logic above
+    # needs revisiting rather than silently mislabelling an over-prediction
+    assert all(r <= 0.01 for r in run_sim._OFFSET_MODEL_RESIDUAL.values())

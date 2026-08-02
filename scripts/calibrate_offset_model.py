@@ -204,10 +204,19 @@ def predict(p, k, a, b, r_input, flat):
     This used to reimplement `predicted_offset_budget_mv`'s formula, and the two
     silently diverged the moment `pcc` stopped being a flat constant — a calibration
     loop fitting a formula the production code no longer uses is worse than none. Now
-    there is one formula and the loop only swaps its constants."""
+    there is one formula and the loop only swaps its constants.
+
+    The latch coefficient is per model, so it has to be installed into
+    `_OFFSET_NCC_K_BY_MODEL` and not only into the scalar fallback: patching the scalar
+    alone left the candidate K silently ignored for every backend that has its own
+    entry, which is all four of them.
+    """
+    model = p.get("model") or "ptm45"
     saved = (run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
-             run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV))
+             run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV),
+             dict(run_sim._OFFSET_NCC_K_BY_MODEL))
     try:
+        run_sim._OFFSET_NCC_K_BY_MODEL = {**run_sim._OFFSET_NCC_K_BY_MODEL, model: k}
         run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B = k, a, b
         run_sim._OFFSET_R_INPUT = r_input
         run_sim._OFFSET_FLAT_MV = {g: v for g, v in flat.items()
@@ -215,7 +224,8 @@ def predict(p, k, a, b, r_input, flat):
         return run_sim.predicted_offset_budget_mv(p)[0]
     finally:
         (run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
-         run_sim._OFFSET_R_INPUT, run_sim._OFFSET_FLAT_MV) = saved
+         run_sim._OFFSET_R_INPUT, run_sim._OFFSET_FLAT_MV,
+         run_sim._OFFSET_NCC_K_BY_MODEL) = saved
 
 
 def holdout_error(rows, k, a, b, r_input, flat):
@@ -229,23 +239,45 @@ def holdout_error(rows, k, a, b, r_input, flat):
     return statistics.median(errs) if errs else None
 
 
-def current():
-    return (run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
+def current(model="ptm45"):
+    return (run_sim._OFFSET_NCC_K_BY_MODEL.get(model, run_sim._OFFSET_NCC_K),
+            run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
             run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV))
 
 
-def apply_constants(k, a, b, r_input, flat):
-    """Rewrite the constants in run_sim.py, keeping a .bak."""
+def _sub1(src, pat, repl, what):
+    """re.sub that refuses to silently no-op.
+
+    Every one of these patterns has been broken once by an unrelated edit to the
+    constant block, and a regex that matches nothing turns --apply into a loop that
+    reports success and changes nothing."""
+    out, n = re.subn(pat, repl, src, count=1)
+    if n != 1:
+        raise SystemExit(f"apply: pattern for {what} matched {n} times in run_sim.py, "
+                         f"expected 1 — the constant block moved; fix the pattern "
+                         f"rather than letting --apply no-op")
+    return out
+
+
+def apply_constants(k, a, b, r_input, flat, model="ptm45"):
+    """Rewrite the constants in run_sim.py, keeping a .bak.
+
+    `k` lands in that model's slot in `_OFFSET_NCC_K_BY_MODEL`; the exponents, the
+    input referral factor and the flat terms are global."""
     path = os.path.join(ROOT, "run_sim.py")
-    src = open(path).read()
-    open(path + ".bak", "w").write(src)
-    src = re.sub(r"_OFFSET_R_INPUT = [\d.]+", f"_OFFSET_R_INPUT = {r_input:.4g}", src, count=1)
-    src = re.sub(r"_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = [^\n]+",
-                 f"_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = "
-                 f"{k:.4g}, {a:.4g}, {b:.4g}", src, count=1)
-    src = re.sub(r"_OFFSET_FLAT_MV = \{[^}]*\}",
-                 "_OFFSET_FLAT_MV = {" + ", ".join(
-                     f'"{g}": {v:.3g}' for g, v in flat.items()) + "}", src, count=1)
+    original = src = open(path).read()
+    # every substitution first, then the .bak, then the write: a failing pattern used to
+    # leave a stray .bak behind having changed nothing
+    src = _sub1(src, r"_OFFSET_R_INPUT = [\d.]+", f"_OFFSET_R_INPUT = {r_input:.4g}",
+                "R_input")
+    src = _sub1(src, rf'("{re.escape(model)}": )[\d.]+', rf"\g<1>{k:.4g}",
+                f"latch coefficient for {model}")
+    src = _sub1(src, r"_OFFSET_NCC_A, _OFFSET_NCC_B = [^\n]+",
+                f"_OFFSET_NCC_A, _OFFSET_NCC_B = {a:.4g}, {b:.4g}", "ncc exponents")
+    src = _sub1(src, r"_OFFSET_FLAT_MV = \{[^}]*\}",
+                "_OFFSET_FLAT_MV = {" + ", ".join(
+                    f'"{g}": {v:.3g}' for g, v in flat.items()) + "}", "flat terms")
+    open(path + ".bak", "w").write(original)
     open(path, "w").write(src)
 
 
@@ -317,7 +349,7 @@ def main():
     flat = {g: fit_flat(train, g) or run_sim._OFFSET_FLAT_MV[g]
             for g in run_sim._OFFSET_FLAT_MV}
 
-    ck, ca, cb, cr, cflat = current()
+    ck, ca, cb, cr, cflat = current(args.model)
     e_old = holdout_error(hold, ck, ca, cb, cr, cflat)
     e_new = holdout_error(hold, k, a, b, r_in, flat)
     print(f"\n  current : R_input {cr:.4g}  ncc k={ck:.4g} a={ca:.4g} b={cb:.4g}  flat {cflat}")
@@ -381,7 +413,7 @@ def main():
     print(f"  history appended to {os.path.relpath(HISTORY, ROOT)}")
 
     if accept and args.apply:
-        apply_constants(k, a, b, r_in, flat)
+        apply_constants(k, a, b, r_in, flat, model=args.model)
         print("  constants rewritten in run_sim.py (.bak kept) — run the test suite now")
     elif accept:
         print("  re-run with --apply to write them")

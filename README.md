@@ -402,7 +402,36 @@ penalised shrinking it — backwards. `pre`/`prei` are ~0.026 mV regardless of w
 **`ncc` is the one term that mattered and was missing**: its contribution falls 9.3x as
 its width goes 0.5 → 16 µm.
 
-Result, compared at the same 2.0 mV target across four seeds:
+**4. The latch coefficient is per backend, and only ptm45 was calibrated.** The three
+constants above were fitted on ptm45 and applied to all four backends. Two of the three
+transfer; the magnitude does not. Measured, predicted vs measured total budget at the
+seed sizing:
+
+| backend | one global K (ptm45 fit) | per-model K | fitted K |
+|---|---|---|---|
+| ptm45 (BSIM4 45nm) | +2% | **+1%** | 0.1147 |
+| asap7 (BSIM-CMG FinFET) | **−41%** | −25% | 0.7467 |
+| gaa2nm (scaled, trend-only) | −31% | −18% | 0.5179 |
+| sky130 (real PDK) | −14% | −11% | 0.3291 |
+
+Every error is *negative* — the model was optimistic everywhere it had not been fitted,
+which is the dangerous direction: the search shrinks the latch believing offset is fine.
+K spans 6.5x across the backends (0.115 → 0.747), which no single value covers, so it is
+now `_OFFSET_NCC_K_BY_MODEL`. What does transfer is the shape: the exponents, and the
+`exp(7.02·(vcm−0.62))` term, whose ratio at vcm 0.82 measures 3.55–4.30 across the four
+backends against a fit of 4.07 — within ~13%, and conservative on the FinFET/2nm ones.
+
+Splitting K does not close the gap; it halves it. The residual −11% to −25% is most
+likely the *other* ptm45 fits (`R_input`, the `pcc` law, the exponents), which are still
+global. Rather than leave that implicit, `run_sim.offset_model_accuracy(p)` reports the
+measured residual for the backend in use, and every server response carrying a predicted
+offset carries it alongside — `optimize` as `offset_model_accuracy`, `design_brief` as
+`predicted_offset_accuracy`. It deliberately reports the *number* rather than a
+`calibrated: true/false`: a boolean reading "true" for a backend sitting at −25% is the
+same false reassurance the single global constant provided. Per-backend calibration is
+`scripts/calibrate_offset_model.py --model asap7`.
+
+Result on ptm45, compared at the same 2.0 mV target across four seeds:
 
 | objective | ncc W median | measured budget | median | met target | power median |
 |---|---|---|---|---|---|

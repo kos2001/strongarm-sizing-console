@@ -231,16 +231,43 @@ def test_apply_is_reversible_and_rewrites_only_the_constants(cal, tmp_path):
     before = open(path).read()
     try:
         cal.apply_constants(0.1111, 0.5555, 0.2222, 1.2345,
-                            {"pcc": 0.111, "pre": 0.011, "prei": 0.012})
+                            {"pcc": 0.111, "pre": 0.011, "prei": 0.012}, model="asap7")
         after = open(path).read()
         assert "_OFFSET_R_INPUT = 1.234" in after
-        assert "0.1111, 0.5555, 0.2222" in after
+        assert "0.5555, 0.2222" in after
+        # the latch coefficient goes into the named model's slot, not the global fallback
+        assert '"asap7": 0.1111' in after
+        assert '"ptm45": 0.1147' in after
         assert os.path.exists(path + ".bak")
-        # only the three constant lines changed
+        # only the four constant lines changed
         diff = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]
-        assert len(diff) == 3, diff
+        assert len(diff) == 4, diff
     finally:
         shutil.copy(keep, path)
         if os.path.exists(path + ".bak"):
             os.remove(path + ".bak")
     assert open(path).read() == before
+
+
+def test_a_candidate_latch_coefficient_actually_reaches_the_model(cal):
+    import run_sim
+
+    """The loop installs K into the per-model table, not only the scalar fallback.
+
+    Patching `_OFFSET_NCC_K` alone left every candidate K silently ignored for all four
+    backends, because the model reads its own slot first — a calibration loop whose
+    candidates have no effect reports convergence on a constant it never varied."""
+    p = run_sim._full({"model": "ptm45"})
+    a, b = run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B
+    r, flat = run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV)
+    lo = cal.predict(p, 0.05, a, b, r, flat)
+    hi = cal.predict(p, 0.50, a, b, r, flat)
+    assert hi > lo * 1.2, (lo, hi)
+    # and it restores the table afterwards
+    assert run_sim._OFFSET_NCC_K_BY_MODEL["ptm45"] == 0.1147
+
+
+def test_apply_refuses_to_silently_no_op(cal, tmp_path):
+    """A pattern that stops matching must fail loudly instead of reporting success."""
+    with pytest.raises(SystemExit, match="matched 0 times"):
+        cal.apply_constants(0.1, 0.5, 0.2, 1.2, {"pre": 0.01}, model="no_such_backend")
