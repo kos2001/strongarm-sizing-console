@@ -365,6 +365,34 @@ switch and the precharge PMOS both driven from `clk`, so the race is between tho
 devices on one edge rather than between two clock phases. (`clkb_line` was dead code
 and is gone.)
 
+### BER was computed from a single Monte-Carlo draw
+
+Found by asking which *other* measurements still rested on unmeasured sampling noise once
+the offset reference was fixed. Two did, and they were the two that could least afford it.
+
+`_ber_at` is `erfc(v / (σ√2))` — **exponential in σ** — and both BER paths took σ from one
+Monte-Carlo draw of the input pair alone. On the seed design that returned 0.842 mV at the
+default seed (0.84–1.67 mV across four seeds, 62% spread) where the deterministic full
+budget is 1.873 mV: **2.2x low**. The consequences were not rounding:
+
+| | old (one MC draw, input pair) | deterministic full budget |
+|---|---|---|
+| σ used | 0.842 mV | **1.873 mV** |
+| input amplitude for BER 1e-3 | 2.607 mV | **5.792 mV** |
+| true BER at that amplitude | **8.2e-2** | 1e-3 |
+
+The page asked for 122% less input swing than the design needs, and the error rate at its
+own recommendation was **82x** the target — in the direction that signs off a comparator
+that does not work. `resolution_view` and `ber_curve` are two views of one quantity and were
+wrong the same way, so both were fixed together; a test asserts they agree.
+
+`cm_range_sweep(with_offset=True)` had the same source, and there the noise undermined the
+function's own claim. Its point is that the input pair's contribution is *flat* in Vcm while
+the total is not — which a ±24% estimate cannot demonstrate. Deterministically the input-only
+figure is **identical to four decimals** across a 0.55→0.86 Vcm sweep while the total rises
+**62%**, and the dominant device flips from the input pair to the latch at high Vcm. That
+flip is new information; the page never showed it.
+
 ### The optimizer now prices mismatch on every pair — and a loop keeps it honest
 
 Following the discovery that the search was gaming its input-pair-only offset term,

@@ -827,20 +827,33 @@ def _ber_at(v, sigma):
 
 
 def _input_sigmas(params):
-    """The two input-referred error sources, both measured: per-decision noise
-    (gm-based, SPICE) and chip-to-chip offset σ (Monte-Carlo Vth mismatch).
-    One `run_sim` call produces both — which is why the noise, offset and BER
-    views are three faces of a single measurement rather than three analyses."""
-    r = run_sim.run_sim(params, do_offset=True, with_noise=True)
+    """The two input-referred error sources: per-decision noise (gm-based, SPICE) and
+    chip-to-chip offset σ.
+
+    The offset comes from the **deterministic full budget**, not from one Monte-Carlo draw
+    of the input pair. Both halves of that mattered, and BER is where it showed: `_ber_at`
+    is `erfc(v / (σ√2))`, exponential in σ. On the seed design the old path returned
+    σ = 0.842 mV at its default seed (0.84–1.67 across four seeds, 62% spread) where the
+    deterministic total is 1.873 mV — 2.2x low. That made this page ask for **2.607 mV** of
+    input amplitude to reach BER 1e-3 when the real requirement is **5.792 mV**, and the
+    true BER at its own recommendation was **8.2e-2** — off by 82x. A design signed off
+    against that number would miss by two orders of magnitude.
+
+    Input-pair-only was the smaller half of the error and wrong on principle anyway: every
+    matched pair contributes chip-to-chip offset, so BER has to see the RSS over all of
+    them, exactly as the optimizer's cost function now does."""
+    r = run_sim.run_sim(params, do_offset=False, with_noise=True)
     nz_uv = r["nominal"].get("noise_uv_rms")
-    off = r.get("offset") or {}
-    os_mv = off.get("offset_sigma_mv")
     if not nz_uv:
         return None
+    budget = run_sim.offset_budget(params)
+    os_mv = budget.get("total_sigma_mv")
     sig_vn = nz_uv * 1e-6
     sig_os = (os_mv or 0.0) * 1e-3
-    return {"nominal": r["nominal"], "offset": off,
+    return {"nominal": r["nominal"], "offset": budget,
             "noise_uv_rms": nz_uv, "offset_sigma_mv": os_mv,
+            "offset_source": "deterministic full budget over all matched pairs",
+            "offset_input_only_mv": budget.get("input_only_sigma_mv"),
             "sigma_noise_v": sig_vn, "sigma_offset_v": sig_os,
             "sigma_total_v": math.sqrt(sig_vn ** 2 + sig_os ** 2)}
 
@@ -899,14 +912,22 @@ def resolution_view(params, ber_target=1e-3):
 
 
 def ber_curve(params, ber_target=1e-3):
-    """Decision error-rate vs input amplitude, from the SPICE-measured
-    input-referred noise (gm-based) and offset σ (Monte-Carlo). For a balanced
-    comparator the error probability at differential input Vin is
-    0.5·erfc(Vin/(σ·√2)); noise sets the per-decision floor, and adding the
-    chip-to-chip offset broadens it (σ_tot = √(σ_vn²+σ_os²))."""
-    r = run_sim.run_sim(params, do_offset=True, with_noise=True)
-    nz_uv = r["nominal"].get("noise_uv_rms")
-    os_mv = (r.get("offset") or {}).get("offset_sigma_mv")
+    """Decision error-rate vs input amplitude, from the SPICE-measured input-referred
+    noise (gm-based) and the deterministic full offset budget. For a balanced comparator
+    the error probability at differential input Vin is 0.5·erfc(Vin/(σ·√2)); noise sets the
+    per-decision floor, and adding the chip-to-chip offset broadens it
+    (σ_tot = √(σ_vn²+σ_os²)).
+
+    The offset σ is the deterministic budget over **all** matched pairs, for the reason
+    spelled out in `_input_sigmas`: this expression is exponential in σ, and the single
+    Monte-Carlo draw of the input pair that used to feed it was 2.2x low on the seed design
+    — enough to under-state the required input amplitude by 122% and mis-state the BER at
+    its own recommendation by 82x. `resolution_view` and this function are two views of the
+    same quantity and were both wrong the same way; fixing one and not the other would have
+    left them disagreeing."""
+    nz_uv = run_sim.run_sim(params, do_offset=False,
+                            with_noise=True)["nominal"].get("noise_uv_rms")
+    os_mv = run_sim.offset_budget(params).get("total_sigma_mv")
     if not nz_uv:
         return {"error": "noise not available (comparator did not resolve)"}
     sig_vn = nz_uv * 1e-6                       # V
