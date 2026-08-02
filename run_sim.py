@@ -1008,19 +1008,36 @@ _OFFSET_R_INPUT = 1.4142135623730951
 # direction, which is the dangerous one: the search shrinks the latch believing offset is
 # fine. The exponents and the vcm term do transfer — measured, the vcm ratio at 0.82 is
 # 3.55-4.30 across backends against a fit of 4.07 — so only K is split.
-_OFFSET_NCC_K_BY_MODEL = {"ptm45": 0.1175, "asap7": 0.9483,
-                          "gaa2nm": 0.6088, "sky130": 0.3984}
-#: How far K drifts across a 16x ncc-width sweep on each backend, measured against the
-#: DETERMINISTIC reference. This is the honest limit of the per-model-K patch: on ptm45,
-#: where the exponents were fitted, K holds to 39%; on gaa2nm and sky130 it drifts 174%
-#: and 176%, which means the FORM is wrong there, not just the magnitude. A single K
-#: cannot absorb that, so these numbers are published rather than averaged away — the
-#: Monte-Carlo reference hid this entirely, because 176% of drift is invisible behind an
-#: estimator that scattered 27% between seeds. Fixing it needs per-model exponents fitted
-#: on a 2-D (input W x ncc W) grid, which the deterministic reference now makes affordable.
-_OFFSET_NCC_K_WIDTH_DRIFT = {"ptm45": 0.39, "asap7": 0.82, "gaa2nm": 1.74, "sky130": 1.76}
-_OFFSET_NCC_K = _OFFSET_NCC_K_BY_MODEL["ptm45"]      # fallback for an unknown backend
-_OFFSET_NCC_A, _OFFSET_NCC_B = 0.6838, 0.3709
+# The whole ncc law is per model, exponents included — because the exponents were the
+# problem. Fitted on a 2-D grid (input W x ncc W varied independently, so the sigma
+# exponent and the geometry exponent are separable; on a 1-D ncc sweep they are
+# confounded) against the deterministic reference. The non-ptm45 backends want sigma^2.2
+# to sigma^2.5 and essentially NO geometry-ratio dependence, against ptm45's sigma^0.68
+# and ratio^0.37 — a different dependence, not a different scale, which is what the 174%
+# width drift of a per-model-K-only fit was telling us.
+#
+# ptm45 keeps its original exponents: refitting them there made held-out error slightly
+# WORSE (1.3% -> 1.6%), so the gate rejected it. Three of four accepted, one refused.
+_OFFSET_NCC_BY_MODEL = {
+    "ptm45":  (0.1175, 0.6838, 0.3709),
+    "asap7":  (0.1647, 2.2181, -0.1021),
+    "gaa2nm": (0.1536, 2.2385, -0.0217),
+    "sky130": (0.3173, 2.5475, -0.2251),
+}
+
+#: How far the implied K still drifts across a 16x ncc-width sweep. This is the diagnostic
+#: that found the problem: with global exponents it read 39% on ptm45 (where they were
+#: fitted) but 82 / 174 / 176% elsewhere, which said the FORM was wrong, not the scale — a
+#: single coefficient cannot absorb 176%. With per-model exponents it is 39 / 31 / 41 / 49%,
+#: i.e. the non-ptm45 backends are now no worse than the one the model was derived on.
+#: The Monte-Carlo reference hid all of this: 176% of drift is invisible behind an estimator
+#: that scattered 27% between seeds and read 11% low on top of that.
+_OFFSET_NCC_K_WIDTH_DRIFT = {"ptm45": 0.39, "asap7": 0.31, "gaa2nm": 0.41, "sky130": 0.49}
+# Fallback for a backend with no entry above. Deliberately NOT a derived view of the table:
+# a `{m: v[0] for ...}` convenience dict existed for one commit and immediately became a
+# trap — the calibration loop patched it, the model read the real table, and every
+# candidate was silently ignored. There is one place the ncc law lives.
+_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = _OFFSET_NCC_BY_MODEL["ptm45"]
 # The latch term also depends on the input common mode, and strongly — measured, ncc's
 # contribution grows 7x as vcm_frac goes 0.62 -> 0.90 while the input pair's stays flat.
 # The model had no such term, which is the bulk of why it under-predicted ~41% on
@@ -1041,19 +1058,21 @@ _OFFSET_FLAT_MV = {"pre": 0.0067, "prei": 0.0054}
 _OFFSET_PCC_K, _OFFSET_PCC_P = 0.3161, 0.1464
 
 
-#: Median |error| of the analytic budget against the deterministic reference on 8
-#: HELD-OUT sizings — not at the seed sizing. The distinction is the whole point: K is
-#: fitted at the seed, so the seed-point residual is -0.2% to -0.0% on every backend and
-#: reporting that would be self-congratulation. One sizing away the same model is 55%
-#: wrong on three of the four. Only ptm45, where the functional form was derived, holds
-#: up out of sample.
+#: Median |error| of the analytic budget against the deterministic reference on a
+#: validation set that neither the fit NOR the acceptance gate ever saw, and which
+#: deliberately reaches outside the fitted ranges (ncc 0.4 and 16 um, input 2 and 50 um).
+#: Worst case in that set: 24 / 38 / 57 / 42%.
 #:
-#: This became measurable only when the reference became deterministic. Against the old
-#: Monte-Carlo reference (21% standard error per estimate, 27% scatter between seeds) a
-#: 55% out-of-sample error was not distinguishable from noise, which is why the model
-#: passed its own validation for as long as it did.
-_OFFSET_MODEL_HELDOUT_ERR = {"ptm45": 0.013, "asap7": 0.232, "gaa2nm": 0.239,
-                             "sky130": 0.180}
+#: These are deliberately the pessimistic numbers. Three other figures were available and
+#: all of them flatter:
+#:   - at the SEED sizing, where K is fitted: -0.2% to -0.0% on every backend
+#:   - on the 8-sizing set used to ACCEPT the fit: 1.3 / 3.7 / 10.0 / 9.9%
+#:   - on this fresh set:                        3.9 / 11.4 / 21.9 / 16.6%   <- recorded
+#: The gap between the second and third is selection: gate on a set and it stops being an
+#: independent estimate of anything. Quoting the seed figure would have claimed a model
+#: exact everywhere while it was ~55% wrong one sizing away.
+_OFFSET_MODEL_HELDOUT_ERR = {"ptm45": 0.039, "asap7": 0.114, "gaa2nm": 0.219,
+                             "sky130": 0.166}
 
 
 def offset_model_accuracy(p):
@@ -1068,15 +1087,15 @@ def offset_model_accuracy(p):
         note = ("no held-out error measured for this backend; the constants are ptm45 "
                 "fits, and on the backends where that was tested they were 39-52% out")
     elif e < 0.05:
-        note = (f"the functional form was derived on this backend; held-out error "
-                f"{e:.0%} over 8 sizings")
+        note = (f"the functional form was derived on this backend; error {e:.0%} on a "
+                f"validation set the fit and the gate never saw")
     else:
-        note = (f"held-out error {e:.0%} over 8 sizings — the form is a ptm45 fit and "
-                f"only its magnitude is calibrated here, so this figure is a screening "
-                f"number. Judge a final design against a measured offset_budget()")
+        note = (f"error {e:.0%} on a validation set the fit and the gate never saw — the "
+                f"law is fitted per backend but this is a screening number, not a sign-off "
+                f"one. Judge a final design against a measured offset_budget()")
     return {
         "model": m,
-        "has_own_latch_coefficient": m in _OFFSET_NCC_K_BY_MODEL,
+        "has_own_latch_law": m in _OFFSET_NCC_BY_MODEL,
         "heldout_median_abs_error": e,
         "latch_k_width_drift": _OFFSET_NCC_K_WIDTH_DRIFT.get(m),
         "reference": "deterministic (Gauss-Hermite quadrature)",
@@ -1097,8 +1116,9 @@ def predicted_offset_budget_mv(p):
     ratio = max((di["w_um"] * di["m"]) / max(dn["w_um"] * dn["m"], 1e-9), 1e-9)
     vcm_mult = math.exp(_OFFSET_NCC_VCM_K * (p["vcm_frac"] - _OFFSET_NCC_VCM_REF))
     model = p.get("model") or "ptm45"
-    k = _OFFSET_NCC_K_BY_MODEL.get(model, _OFFSET_NCC_K)
-    terms["ncc"] = k * (sig_ncc ** _OFFSET_NCC_A) * (ratio ** _OFFSET_NCC_B) * vcm_mult
+    k, a, b = _OFFSET_NCC_BY_MODEL.get(
+        model, (_OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B))
+    terms["ncc"] = k * (sig_ncc ** a) * (ratio ** b) * vcm_mult
     dp = p["devices"]["pcc"]
     terms["pcc"] = _OFFSET_PCC_K * max(dp["w_um"], 1e-9) ** _OFFSET_PCC_P
     terms.update(_OFFSET_FLAT_MV)

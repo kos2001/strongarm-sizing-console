@@ -238,14 +238,15 @@ def test_apply_is_reversible_and_rewrites_only_the_constants(cal, tmp_path):
         # candidate value must NOT be written — rewriting it published 1.06 and 1.268
         assert "_OFFSET_R_INPUT = 1.234" not in after
         assert "1.4142135623730951" in after
-        assert "0.5555, 0.2222" in after
-        # the latch coefficient goes into the named model's slot, not the global fallback
-        assert '"asap7": 0.1111' in after
-        assert f'"ptm45": {run_sim._OFFSET_NCC_K_BY_MODEL["ptm45"]:.4g}' in after
+        # the whole law goes into the named model's slot, not the global fallback
+        assert "(0.1111, 0.5555, 0.2222)" in after
+        assert '"asap7"' in after
+        assert str(run_sim._OFFSET_NCC_BY_MODEL["ptm45"]) in after
         assert os.path.exists(path + ".bak")
-        # only the three fitted-constant lines changed (R_input is not one of them)
+        # only the two fitted-constant lines changed: R_input is not one of them, and the
+        # exponents now live inside the per-model tuple rather than on a line of their own
         diff = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]
-        assert len(diff) == 3, diff
+        assert len(diff) == 2, diff
     finally:
         shutil.copy(keep, path)
         if os.path.exists(path + ".bak"):
@@ -258,19 +259,20 @@ def test_a_candidate_latch_coefficient_actually_reaches_the_model(cal):
 
     """The loop installs K into the per-model table, not only the scalar fallback.
 
-    Patching `_OFFSET_NCC_K` alone left every candidate K silently ignored for all four
+    Patching the scalar fallbacks alone left every candidate silently ignored for all four
     backends, because the model reads its own slot first — a calibration loop whose
-    candidates have no effect reports convergence on a constant it never varied."""
+    candidates have no effect reports convergence on constants it never varied. This
+    happened twice: once when K became per model, again when the exponents did."""
     p = run_sim._full({"model": "ptm45"})
-    a, b = run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B
+    _, a, b = run_sim._OFFSET_NCC_BY_MODEL["ptm45"]
     r, flat = run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV)
-    snapshot = dict(run_sim._OFFSET_NCC_K_BY_MODEL)
+    snapshot = dict(run_sim._OFFSET_NCC_BY_MODEL)
     lo = cal.predict(p, 0.05, a, b, r, flat)
     hi = cal.predict(p, 0.50, a, b, r, flat)
     assert hi > lo * 1.2, (lo, hi)
     # and it restores the table afterwards. Compared against a snapshot, not a literal:
     # a test that pins the value the loop exists to improve is a test fighting its feature
-    assert run_sim._OFFSET_NCC_K_BY_MODEL == snapshot
+    assert run_sim._OFFSET_NCC_BY_MODEL == snapshot
 
 
 def test_apply_refuses_to_silently_no_op(cal, tmp_path):

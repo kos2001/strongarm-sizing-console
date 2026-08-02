@@ -358,33 +358,44 @@ def test_optimizer_reports_which_device_binds_the_budget():
     assert b["dominant"][0] in run_sim.OFFSET_PAIRS
 
 
-def test_the_latch_coefficient_is_per_backend():
-    """A single ptm45-fitted coefficient under-predicted the other three backends.
+def test_the_whole_latch_law_is_per_backend_exponents_included():
+    """A global law was 30-43% out of sample on the three non-ptm45 backends, optimistically
+    — the direction that lets the search shrink the latch believing offset is fine.
 
-    Measured: asap7 -41%, gaa2nm -31%, sky130 -14%, all optimistic — the direction that
-    lets the search shrink the latch believing offset is fine. K spans 6.5x across the
-    backends (0.115 to 0.747), which no single value covers."""
-    ks = run_sim._OFFSET_NCC_K_BY_MODEL
-    assert set(ks) == {"ptm45", "asap7", "gaa2nm", "sky130"}
-    assert max(ks.values()) / min(ks.values()) > 3.0, ks
-    # ...and the held-out record must cover exactly the same backends, or a caller can be
-    # handed a prediction with no statement of how far out of sample it is
-    assert set(run_sim._OFFSET_MODEL_HELDOUT_ERR) == set(ks)
-    # and the model must actually read the per-model slot, not a global scalar
+    The EXPONENTS were the problem, not just the scale: the non-ptm45 backends want
+    sigma^2.2 to sigma^2.5 with essentially no geometry-ratio dependence, against ptm45's
+    sigma^0.68 / ratio^0.37. Fitting them per model cut fresh-set median error 2-4x
+    (asap7 42.7 -> 11.4%, gaa2nm 30.6 -> 21.9%, sky130 34.5 -> 16.6%) and worst case 3-5x."""
+    laws = run_sim._OFFSET_NCC_BY_MODEL
+    assert set(laws) == {"ptm45", "asap7", "gaa2nm", "sky130"}
+    assert all(len(v) == 3 for v in laws.values())
+    exps = [a for _, a, _ in laws.values()]
+    assert max(exps) / min(exps) > 2.0, laws       # the exponents really do differ
+    # the held-out record must cover exactly the same backends, or a caller can be handed a
+    # prediction with no statement of how far out of sample it is
+    assert set(run_sim._OFFSET_MODEL_HELDOUT_ERR) == set(laws)
+    assert set(run_sim._OFFSET_NCC_K_WIDTH_DRIFT) == set(laws)
+
+    # and the model must read the per-model slot, not the fallback scalars
     seen = {}
-    for m in ks:
+    for m in laws:
         p = run_sim._full({"model": m, **({"vdd": 1.8} if m == "sky130" else {})})
         seen[m] = run_sim.predicted_offset_budget_mv(p)[1]["ncc"]
-    saved = dict(ks)
+    saved = dict(laws)
     try:
-        run_sim._OFFSET_NCC_K_BY_MODEL = {**saved, "asap7": saved["asap7"] * 2}
+        k, a, b = saved["asap7"]
+        run_sim._OFFSET_NCC_BY_MODEL = {**saved, "asap7": (k * 2, a, b)}
         p = run_sim._full({"model": "asap7"})
         assert run_sim.predicted_offset_budget_mv(p)[1]["ncc"] > 1.8 * seen["asap7"]
         # ...and only that backend moves
         p45 = run_sim._full({"model": "ptm45"})
         assert run_sim.predicted_offset_budget_mv(p45)[1]["ncc"] == pytest.approx(seen["ptm45"])
     finally:
-        run_sim._OFFSET_NCC_K_BY_MODEL = saved
+        run_sim._OFFSET_NCC_BY_MODEL = saved
+
+    # no derived convenience view may exist: a `{m: law[0]}` dict lived here for one commit
+    # and immediately became a trap the calibration loop patched instead of the real table
+    assert not hasattr(run_sim, "_OFFSET_NCC_K_BY_MODEL")
 
 
 def test_accuracy_is_reported_out_of_sample_not_at_the_fitted_point():
@@ -396,14 +407,18 @@ def test_accuracy_is_reported_out_of_sample_not_at_the_fitted_point():
     assert good["heldout_median_abs_error"] < 0.05
     assert "derived on this backend" in good["note"]
 
+    # A borrowed-form backend must report materially worse accuracy than the one the form
+    # was derived on, and say what to do about it. Asserted RELATIVE to ptm45 rather than
+    # against an absolute threshold: a 0.15 floor here broke the moment per-model exponents
+    # cut asap7 from 23% to 11%, which is a test fighting the improvement it should confirm.
     weak = run_sim.offset_model_accuracy({"model": "asap7"})
-    assert weak["heldout_median_abs_error"] > 0.15          # and it says so
-    assert "held-out" in weak["note"] and "offset_budget" in weak["note"]
-    assert weak["latch_k_width_drift"] > 0.5               # the form does not transfer
+    assert weak["heldout_median_abs_error"] > 2 * good["heldout_median_abs_error"]
+    assert "validation set" in weak["note"] and "offset_budget" in weak["note"]
+    assert "screening" in weak["note"]
 
     unknown = run_sim.offset_model_accuracy({"model": "something_new"})
     assert unknown["heldout_median_abs_error"] is None
-    assert unknown["has_own_latch_coefficient"] is False
+    assert unknown["has_own_latch_law"] is False
 
     # ptm45 is the only backend the form was derived on, and it must stay the only one
     # claiming few-per-cent accuracy — if another ever does, its form was refitted too

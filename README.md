@@ -438,27 +438,40 @@ penalised shrinking it — backwards. `pre`/`prei` are ~0.026 mV regardless of w
 **`ncc` is the one term that mattered and was missing**: its contribution falls 9.3x as
 its width goes 0.5 → 16 µm.
 
-**4. The latch coefficient is per backend — and out of sample the form still only works
-on ptm45.** The constants were fitted on ptm45 and applied to all four backends. The
-*shape* transfers: the exponents hold, and the `exp(7.02·(vcm−0.62))` term's ratio at
-vcm 0.82 measures 3.55–4.30 across the four backends against a fit of 4.07. The
-*magnitude* does not — K spans 8x (0.118 → 0.948) — so it is now
-`_OFFSET_NCC_K_BY_MODEL`, and that is worth 2x on held-out error:
+**4. The whole latch law is per backend — the exponents were the problem, not the scale.**
+The constants were fitted on ptm45 and applied to all four backends. The `exp(7.02·(vcm−
+0.62))` term does transfer (its ratio at vcm 0.82 measures 3.55–4.30 across the backends
+against a fit of 4.07). The rest does not, and the give-away was **K's drift across a 16x
+ncc-width sweep: 39% on ptm45, but 82/174/176% elsewhere.** A single coefficient cannot
+absorb 176% of drift — that is a wrong *shape*, and it stays wrong however the magnitude is
+rescaled. Refitting per model on a 2-D grid (input W × ncc W varied independently, so the
+σ exponent and the geometry exponent are separable) gives a genuinely different law:
 
-| backend | held-out error, global K | held-out error, per-model K | K |
-|---|---|---|---|
-| ptm45 (BSIM4 45nm) | **1.3%** | 1.3% (same fit) | 0.1175 |
-| asap7 (BSIM-CMG FinFET) | 49.4% | **23.2%** | 0.9483 |
-| gaa2nm (scaled, trend-only) | 39.4% | **23.9%** | 0.6088 |
-| sky130 (real PDK) | 17.7% | **18.0%** | 0.3984 |
+| backend | law | width drift | fresh-set error, global exponents | per-model |
+|---|---|---|---|---|
+| ptm45 (BSIM4 45nm) | 0.1175·σ^0.68·r^0.37 | 39% | **3.9%** (24.5% worst) | rejected |
+| asap7 (BSIM-CMG FinFET) | 0.1647·σ^2.22·r^−0.10 | 31% | 42.7% (177.8%) | **11.4%** (37.6%) |
+| gaa2nm (scaled, trend-only) | 0.1536·σ^2.24·r^−0.02 | 41% | 30.6% (136.0%) | **21.9%** (57.4%) |
+| sky130 (real PDK) | 0.3173·σ^2.55·r^−0.23 | 49% | 34.5% (185.7%) | **16.6%** (41.7%) |
 
-Read the *held-out* column, and note what it replaces. At the **seed sizing** — where K is
-fitted — the residual is −0.2% to −0.0% on every backend. Publishing that would have said
-"the model is now exact everywhere". One sizing away, three of the four are ~55% wrong.
-The give-away is K's drift across a 16x ncc-width sweep: **39% on ptm45, 82/174/176%** on
-the others. A single coefficient cannot absorb 176% of drift, which means the functional
-form — not just its magnitude — is ptm45-specific. Per-model exponents on a 2-D grid are
-the fix; the deterministic reference makes that affordable and is not yet done.
+σ^2.2–2.5 with essentially no geometry-ratio dependence, against ptm45's σ^0.68·r^0.37 —
+a different dependence, not a different scale. Median error falls 2–4x and worst case 3–5x,
+the width drift closes to ptm45's own level, and on ptm45 the refit was **rejected** (1.3%
+→ 1.6% on the gate set), so three of four accepted and one refused.
+
+**Which error figure gets published matters more than the fit.** Four were available:
+
+| measured on | ptm45 | asap7 | gaa2nm | sky130 |
+|---|---|---|---|---|
+| the **seed** sizing, where K is fitted | −0.2% | −0.2% | −0.0% | −0.0% |
+| the 8 sizings used to **accept** the fit | 1.3% | 3.7% | 10.0% | 9.9% |
+| a **fresh** set neither fit nor gate saw | **3.9%** | **11.4%** | **21.9%** | **16.6%** |
+
+The third row is what `offset_model_accuracy()` reports. The seed row would have claimed a
+model exact everywhere while it was ~55% wrong one sizing away; the gap between rows two
+and three is pure selection — gate on a set and it stops being an independent estimate of
+anything. The fresh set also reaches deliberately outside the fitted ranges (ncc 0.4 and
+16 µm, input 2 and 50 µm), because σ^2.2 extrapolates hard.
 
 Per-model `pcc` and precharge constants were also fitted, tested, and **not shipped**:
 they changed held-out error by ≲1 point and made sky130 worse (17.7% → 21.1%). Four

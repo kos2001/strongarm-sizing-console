@@ -228,16 +228,17 @@ def predict(p, k, a, b, r_input, flat):
     there is one formula and the loop only swaps its constants.
 
     The latch coefficient is per model, so it has to be installed into
-    `_OFFSET_NCC_K_BY_MODEL` and not only into the scalar fallback: patching the scalar
-    alone left the candidate K silently ignored for every backend that has its own
-    entry, which is all four of them.
+    `_OFFSET_NCC_BY_MODEL` and not only into the scalar fallbacks: patching those alone
+    left the candidate silently ignored for every backend that has its own entry, which is
+    all four of them. That happened twice — once when K became per model, again when the
+    exponents did — so the whole law is now installed as one tuple.
     """
     model = p.get("model") or "ptm45"
     saved = (run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
              run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV),
-             dict(run_sim._OFFSET_NCC_K_BY_MODEL))
+             dict(run_sim._OFFSET_NCC_BY_MODEL))
     try:
-        run_sim._OFFSET_NCC_K_BY_MODEL = {**run_sim._OFFSET_NCC_K_BY_MODEL, model: k}
+        run_sim._OFFSET_NCC_BY_MODEL = {**run_sim._OFFSET_NCC_BY_MODEL, model: (k, a, b)}
         run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B = k, a, b
         run_sim._OFFSET_R_INPUT = r_input
         run_sim._OFFSET_FLAT_MV = {g: v for g, v in flat.items()
@@ -246,7 +247,7 @@ def predict(p, k, a, b, r_input, flat):
     finally:
         (run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
          run_sim._OFFSET_R_INPUT, run_sim._OFFSET_FLAT_MV,
-         run_sim._OFFSET_NCC_K_BY_MODEL) = saved
+         run_sim._OFFSET_NCC_BY_MODEL) = saved
 
 
 def holdout_error(rows, k, a, b, r_input, flat):
@@ -261,8 +262,9 @@ def holdout_error(rows, k, a, b, r_input, flat):
 
 
 def current(model="ptm45"):
-    return (run_sim._OFFSET_NCC_K_BY_MODEL.get(model, run_sim._OFFSET_NCC_K),
-            run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
+    law = run_sim._OFFSET_NCC_BY_MODEL.get(
+        model, (run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B))
+    return (law[0], law[1], law[2],
             run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV))
 
 
@@ -283,8 +285,9 @@ def _sub1(src, pat, repl, what):
 def apply_constants(k, a, b, r_input, flat, model="ptm45"):
     """Rewrite the fitted constants in run_sim.py, keeping a .bak.
 
-    `k` lands in that model's slot in `_OFFSET_NCC_K_BY_MODEL`; the exponents and the flat
-    terms are global. `r_input` is accepted and IGNORED — it is sqrt(2) by the linearity of
+    `k, a, b` land as that model's tuple in `_OFFSET_NCC_BY_MODEL` — the exponents are per
+    model too, because refitting them is what cut out-of-sample error 2-4x on the three
+    non-ptm45 backends. Only the flat terms are global. `r_input` is accepted and IGNORED — it is sqrt(2) by the linearity of
     the input response, not a fit, and rewriting it is what produced two wrong published
     values. The parameter stays so callers do not silently pass a fit into nowhere."""
     if abs(r_input - run_sim._OFFSET_R_INPUT) > 1e-9:
@@ -293,10 +296,8 @@ def apply_constants(k, a, b, r_input, flat, model="ptm45"):
     original = src = open(path).read()
     # every substitution first, then the .bak, then the write: a failing pattern used to
     # leave a stray .bak behind having changed nothing
-    src = _sub1(src, rf'("{re.escape(model)}": )[\d.]+', rf"\g<1>{k:.4g}",
-                f"latch coefficient for {model}")
-    src = _sub1(src, r"_OFFSET_NCC_A, _OFFSET_NCC_B = [^\n]+",
-                f"_OFFSET_NCC_A, _OFFSET_NCC_B = {a:.4g}, {b:.4g}", "ncc exponents")
+    src = _sub1(src, rf'("{re.escape(model)}":\s*)\([^)]*\)',
+                rf"\g<1>({k:.4g}, {a:.4g}, {b:.4g})", f"ncc law for {model}")
     src = _sub1(src, r"_OFFSET_FLAT_MV = \{[^}]*\}",
                 "_OFFSET_FLAT_MV = {" + ", ".join(
                     f'"{g}": {v:.3g}' for g, v in flat.items()) + "}", "flat terms")
