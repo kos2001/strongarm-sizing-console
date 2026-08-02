@@ -82,3 +82,26 @@ def test_the_flat_input_pair_claim_is_now_provable(p):
     assert (max(tt) - min(tt)) / min(tt) > 0.3, tt     # the total is emphatically not
     dom = [x["offset_dominant"] for x in r["points"]]
     assert dom[0] == "input" and dom[-1] == "ncc", dom  # and the binding device changes
+
+
+def test_the_headline_offset_is_consistent_everywhere(p):
+    """One design must not show two different offset σ on two pages.
+
+    The sizing page read 1.83 mV (one MC draw of the input pair) while the resolution page
+    read 1.8734 mV (the deterministic total) for the same design. Whichever number the user
+    believed, the other one looked like a bug. `run_sim`'s headline σ is now the budget, and
+    the MC draws are kept only for the distribution plot that genuinely needs samples."""
+    r = run_sim.run_sim(p, do_offset=True)
+    budget = run_sim.offset_budget(p)
+    assert r["offset"]["offset_sigma_mv"] == pytest.approx(budget["total_sigma_mv"], rel=1e-9)
+    assert r["offset_budget"]["total_sigma_mv"] == pytest.approx(budget["total_sigma_mv"], rel=1e-9)
+    assert "deterministic" in r["offset"]["offset_sigma_source"]
+    # the samples are still there — a histogram needs draws, not moments
+    assert len(r["offset"]["samples_mv"]) > 1
+    assert r["offset"]["mc_offset_sigma_mv"] is not None
+    # ...and the MC figure is labelled as not the one to judge against
+    assert "standard error" in r["offset"]["mc_note"]
+
+    # and the same σ reaches BER, so the two pages agree
+    assert server.ber_curve(p)["offset_sigma_mv"] == pytest.approx(
+        r["offset"]["offset_sigma_mv"], rel=1e-9)

@@ -8,6 +8,7 @@ import VcoSchematic from './VcoSchematic'
 import NetlistImport from './NetlistImport'
 import VcoAgentSizing from './VcoAgentSizing'
 import AgentDock from './AgentDock'
+import StatusStrip from './StatusStrip'
 import { downloadNetlist } from '../netlist'
 import VcoWaveformChart from './VcoWaveformChart'
 import VcoPvtView from './VcoPvtView'
@@ -143,7 +144,31 @@ export default function VcoPage({ lang, theme, view = 'main' }: { lang: Lang; th
             }} />
     </AgentDock>
   )
-  const withDock = (node: React.ReactNode) => <>{node}{agentDock}</>
+  // Same anchor as the comparator side: on every VCO page, does this oscillator hit its
+  // target and stay in budget? It used to be answerable only from the sizing page.
+  // `oscillates` is the functional gate — a VCO that does not start has no frequency, and
+  // reporting "0 GHz, 100% below target" would bury that.
+  const vcoStrip = (
+    <StatusStrip
+      lang={lang}
+      profileLabel={`f → ${targetF} GHz`}
+      functional={res ? (res.error ? null : !!nom?.oscillates) : null}
+      error={res?.error ?? null}
+      busy={busy}
+      onRun={run}
+      onFix={() => setView('opt')}
+      fixLabel={T(lang, '목표로 재사이징', 'resize to target')}
+      metrics={[
+        { key: 'f', label: T(lang, '발진 주파수', 'frequency'), value: nom?.f_osc_ghz ?? null,
+          limit: targetF, unit: 'GHz', mode: 'target' as const },
+        // no limit: this UI has no user-set VCO power budget, and inventing one to make the
+        // row look symmetric would assert a spec the user never chose
+        { key: 'p', label: T(lang, '전력', 'power'), value: nom?.power_uw ?? null,
+          limit: null, unit: 'µW' },
+      ]}
+    />
+  )
+  const withDock = (node: React.ReactNode) => <><div className="mb-4">{vcoStrip}</div>{node}{agentDock}</>
 
   if (view === 'circuit') {
     return withDock(

@@ -6,6 +6,7 @@ import BerChart from './components/BerChart'
 import DeviceEditor from './components/DeviceEditor'
 import FclkChart from './components/FclkChart'
 import Gauge from './components/Gauge'
+import StatusStrip from './components/StatusStrip'
 import LayoutView from './components/LayoutView'
 import MetastabilityChart from './components/MetastabilityChart'
 import ResolutionChart from './components/ResolutionChart'
@@ -22,7 +23,7 @@ import VcoPage from './components/VcoPage'
 import WaveformChart from './components/WaveformChart'
 import WickedPage from './components/WickedPage'
 import YieldView from './components/YieldView'
-import { NAV_LABELS, NAV_SUBS, t, UI, type Lang } from './i18n'
+import { NAV_LABELS, NAV_SUBS, t, UI, type Bi, type Lang } from './i18n'
 
 // metric metadata is fixed; the *limits* are editable (see spec profiles below)
 type TargetKey = 'decision_time_ps' | 'power_uw' | 'offset_sigma_mv' | 'noise_uv_rms'
@@ -73,34 +74,59 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
 type Page = 'sizing' | 'circuit' | 'resolution' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'wicked' | 'layout' | 'flow'
   | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopareto' | 'vcopn' | 'vcopvt' | 'vcoyield' | 'vcopushing' | 'vcolayout' | 'vcoflow'
 type Domain = 'comparator' | 'vco'
-const NAV_COMPARATOR: { id: Page; glyph: string }[] = [
-  { id: 'sizing', glyph: '▦' },
-  { id: 'circuit', glyph: '⎓' },
-  { id: 'resolution', glyph: '◎' },
-  { id: 'metastability', glyph: '⧗' },
-  { id: 'maxfclk', glyph: '⎍' },
-  { id: 'optimizer', glyph: '◴' },
-  { id: 'sensitivity', glyph: '⇕' },
-  { id: 'pareto', glyph: '⤢' },
-  { id: 'montecarlo', glyph: '∿' },
-  { id: 'ber', glyph: '⊹' },
-  { id: 'pvt', glyph: '◫' },
-  { id: 'yield', glyph: '⊞' },
-  { id: 'wicked', glyph: 'β' },
-  { id: 'layout', glyph: '▧' },
-  { id: 'flow', glyph: '⇉' },
+// Nav is grouped by the stage of the design it belongs to, not listed flat. Fifteen
+// equal-looking entries gave no clue that Resolution / Metastability / BER all read the
+// same amplitude axis, or that Monte-Carlo / PVT / Yield / WiCkeD are four depths of the
+// same variation question — so a newcomer had to open pages to find out what they were.
+// The group label carries that meaning, and the order is the order you actually work in.
+type NavGroup = { label: Bi; items: { id: Page; glyph: string }[] }
+
+const NAV_COMPARATOR: NavGroup[] = [
+  {
+    label: { ko: '1 · 설계 입력', en: '1 · Design input' },
+    items: [{ id: 'sizing', glyph: '▦' }, { id: 'circuit', glyph: '⎓' }],
+  },
+  {
+    label: { ko: '2 · 무엇을 하는 회로인가', en: '2 · What it does' },
+    items: [{ id: 'resolution', glyph: '◎' }, { id: 'metastability', glyph: '⧗' },
+            { id: 'ber', glyph: '⊹' }, { id: 'maxfclk', glyph: '⎍' }],
+  },
+  {
+    label: { ko: '3 · 더 좋게 만들기', en: '3 · Make it better' },
+    items: [{ id: 'optimizer', glyph: '◴' }, { id: 'sensitivity', glyph: '⇕' },
+            { id: 'pareto', glyph: '⤢' }],
+  },
+  {
+    label: { ko: '4 · 변동에도 살아남는가', en: '4 · Will it survive variation' },
+    items: [{ id: 'montecarlo', glyph: '∿' }, { id: 'pvt', glyph: '◫' },
+            { id: 'yield', glyph: '⊞' }, { id: 'wicked', glyph: 'β' }],
+  },
+  {
+    label: { ko: '5 · 사인오프', en: '5 · Sign-off' },
+    items: [{ id: 'flow', glyph: '⇉' }, { id: 'layout', glyph: '▧' }],
+  },
 ]
-const NAV_VCO: { id: Page; glyph: string }[] = [
-  { id: 'vcocircuit', glyph: '⎓' },
-  { id: 'vco', glyph: '∿' },
-  { id: 'vcoopt', glyph: '◴' },
-  { id: 'vcopareto', glyph: '⤢' },
-  { id: 'vcopn', glyph: '⌇' },
-  { id: 'vcopvt', glyph: '◫' },
-  { id: 'vcoyield', glyph: '⊞' },
-  { id: 'vcopushing', glyph: '⇅' },
-  { id: 'vcolayout', glyph: '▧' },
-  { id: 'vcoflow', glyph: '⇉' },
+const NAV_VCO: NavGroup[] = [
+  {
+    label: { ko: '1 · 설계 입력', en: '1 · Design input' },
+    items: [{ id: 'vcocircuit', glyph: '⎓' }, { id: 'vco', glyph: '∿' }],
+  },
+  {
+    label: { ko: '2 · 더 좋게 만들기', en: '2 · Make it better' },
+    items: [{ id: 'vcoopt', glyph: '◴' }, { id: 'vcopareto', glyph: '⤢' }],
+  },
+  {
+    label: { ko: '3 · 신호 품질', en: '3 · Signal quality' },
+    items: [{ id: 'vcopn', glyph: '⌇' }, { id: 'vcopushing', glyph: '⇅' }],
+  },
+  {
+    label: { ko: '4 · 변동에도 살아남는가', en: '4 · Will it survive variation' },
+    items: [{ id: 'vcopvt', glyph: '◫' }, { id: 'vcoyield', glyph: '⊞' }],
+  },
+  {
+    label: { ko: '5 · 사인오프', en: '5 · Sign-off' },
+    items: [{ id: 'vcoflow', glyph: '⇉' }, { id: 'vcolayout', glyph: '▧' }],
+  },
 ]
 const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vcocircuit' }
 const DOMAIN_OF: Record<string, Domain> = { vcocircuit: 'vco', vco: 'vco', vcoopt: 'vco', vcopareto: 'vco', vcopn: 'vco', vcopvt: 'vco', vcoyield: 'vco', vcopushing: 'vco', vcolayout: 'vco', vcoflow: 'vco' }
@@ -520,24 +546,32 @@ export default function App() {
             )
           })}
         </div>
-        <nav className="flex flex-col gap-1 p-2 overflow-y-auto">
-          {navList.map((n) => {
-            const on = page === n.id
-            return (
-              <button
-                key={n.id}
-                onClick={() => setPage(n.id)}
-                className="flex items-start gap-2.5 px-3 py-2 rounded-lg text-left"
-                style={{ background: on ? `color-mix(in srgb, ${accent} 13%, transparent)` : 'transparent', border: `1px solid ${on ? `color-mix(in srgb, ${accent} 35%, var(--line))` : 'transparent'}` }}
-              >
-                <span className="mono text-sm mt-0.5" style={{ color: on ? accent : 'var(--faint)' }}>{n.glyph}</span>
-                <span className="min-w-0">
-                  <span className="block text-sm" style={{ color: on ? 'var(--text)' : 'var(--muted)' }}>{t(lang, NAV_LABELS[n.id])}</span>
-                  <span className="block mono text-[10px]" style={{ color: 'var(--faint)' }}>{t(lang, NAV_SUBS[n.id])}</span>
-                </span>
-              </button>
-            )
-          })}
+        <nav className="flex flex-col p-2 overflow-y-auto">
+          {navList.map((group, gi) => (
+            <div key={gi} className={gi ? 'mt-3' : ''}>
+              <div className="mono text-[9.5px] uppercase tracking-[0.14em] px-3 pb-1.5"
+                   style={{ color: 'var(--faint)' }}>{t(lang, group.label)}</div>
+              <div className="flex flex-col gap-1">
+                {group.items.map((n) => {
+                  const on = page === n.id
+                  return (
+                    <button
+                      key={n.id}
+                      onClick={() => setPage(n.id)}
+                      className="flex items-start gap-2.5 px-3 py-2 rounded-lg text-left"
+                      style={{ background: on ? `color-mix(in srgb, ${accent} 13%, transparent)` : 'transparent', border: `1px solid ${on ? `color-mix(in srgb, ${accent} 35%, var(--line))` : 'transparent'}` }}
+                    >
+                      <span className="mono text-sm mt-0.5" style={{ color: on ? accent : 'var(--faint)' }}>{n.glyph}</span>
+                      <span className="min-w-0">
+                        <span className="block text-sm" style={{ color: on ? 'var(--text)' : 'var(--muted)' }}>{t(lang, NAV_LABELS[n.id])}</span>
+                        <span className="block mono text-[10px]" style={{ color: 'var(--faint)' }}>{t(lang, NAV_SUBS[n.id])}</span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
         <div className="mt-auto p-3 flex flex-col gap-2" style={{ borderTop: '1px solid var(--line-soft)' }}>
           <div className="mono text-[11px] flex items-center gap-2" style={{ color: 'var(--muted)' }}>
@@ -558,12 +592,34 @@ export default function App() {
           <div className="flex items-baseline justify-between gap-4">
             <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{pageTitle}</h1>
             <div className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
-              StrongARM latch · {params.model === 'gaa2nm' ? 'GAA 2nm≈ (BSIM4 근사)' : params.model === 'asap7' ? 'ASAP7 7nm FinFET (BSIM-CMG·OSDI)' : params.model === 'sky130' ? 'SKY130 (real PDK)' : 'BSIM4 PTM 45nm'}
+              {/* the subtitle used to say "StrongARM latch" on VCO pages too, which told the
+                  reader they were looking at the wrong circuit */}
+              {domain === 'vco' ? 'Cross-coupled ring VCO' : 'StrongARM latch'} · {params.model === 'gaa2nm' ? 'GAA 2nm≈ (BSIM4 근사)' : params.model === 'asap7' ? 'ASAP7 7nm FinFET (BSIM-CMG·OSDI)' : params.model === 'sky130' ? 'SKY130 (real PDK)' : 'BSIM4 PTM 45nm'}
             </div>
           </div>
 
+
           {/* beginner-friendly explanation for the current page (KO/EN) */}
           <PageHelp page={page} lang={lang} />
+
+          {/* The same answer on every page: does this design meet its spec? It used to be
+              reachable only from the Sizing page's gauges, so on the other 14 pages the
+              user was reading an analysis without knowing whether its subject passed. */}
+          {domain === 'comparator' && (
+            <StatusStrip
+              lang={lang}
+              profileLabel={profile === 'custom' ? (lang === 'ko' ? '사용자 스펙' : 'custom spec') : (SPEC_PROFILES.find((p) => p.id === profile)?.label ?? profile)}
+              functional={result ? (result.error ? null : !!result.nominal?.functional) : null}
+              error={result?.error ?? null}
+              busy={busy}
+              onRun={() => run()}
+              onFix={() => setPage('sensitivity')}
+              metrics={TARGET_KEYS.map((k) => ({
+                key: k, label: TARGET_META[k].label, value: measured[k],
+                limit: targets[k], unit: TARGET_META[k].unit,
+              }))}
+            />
+          )}
 
           {page === 'sizing' && (
             <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0, 420px) 1fr' }}>
@@ -1337,7 +1393,7 @@ export default function App() {
           )}
 
           <p className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
-            {ngspice ? `ngspice: ${ngspice}` : ''} · model: {params.model === 'gaa2nm' ? 'GAA 2nm≈ (scaled BSIM4)' : params.model === 'asap7' ? 'ASAP7 7nm (BSIM-CMG via OSDI)' : params.model === 'sky130' ? 'SKY130 PDK' : 'BSIM4 PTM 45nm bulk'} · offset via Monte-Carlo Vth mismatch
+            {ngspice ? `ngspice: ${ngspice}` : ''} · model: {params.model === 'gaa2nm' ? 'GAA 2nm≈ (scaled BSIM4)' : params.model === 'asap7' ? 'ASAP7 7nm (BSIM-CMG via OSDI)' : params.model === 'sky130' ? 'SKY130 PDK' : 'BSIM4 PTM 45nm bulk'} {domain === 'comparator' ? ' · offset σ from the deterministic full budget (Gauss-Hermite quadrature over every matched pair)' : ' · ring oscillator, 27-corner PVT available'}
           </p>
         </div>
       </main>
