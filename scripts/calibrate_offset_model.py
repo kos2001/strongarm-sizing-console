@@ -31,6 +31,7 @@ Usage:
 Applying edits `run_sim.py` in place and leaves a `.bak`. Run the test suite after.
 """
 import argparse
+import copy
 import json
 import math
 import os
@@ -54,7 +55,7 @@ HISTORY = os.path.join(ROOT, "out", "offset_model_history.jsonl")
 # extrapolating exactly there. Diagnosed from a per-term comparison on optimizer output:
 # the input term was accurate to +1% while the ncc term under-predicted 26%, and the
 # geometry ratio at input 40 / ncc 2.25 sat outside the fitted range.
-TRAIN = [{"input": {"w_um": iw}, "ncc": {"w_um": nw}}
+TRAIN = [{"devices": {"input": {"w_um": iw}, "ncc": {"w_um": nw}}}
          for iw in (4.0, 8.0, 16.0, 32.0, 40.0)
          for nw in (0.5, 1.0, 2.0, 4.0, 8.0)]
 
@@ -66,7 +67,8 @@ TRAIN = [{"input": {"w_um": iw}, "ncc": {"w_um": nw}}
 # the trap a held-out gate is supposed to catch and would not have.
 # Widths chosen to avoid HOLDOUT's input-only points (3.0 and 24.0) — they were in
 # both until a test noticed, which made two of the eight gate points training data.
-TRAIN_INPUT = [{"input": {"w_um": w}} for w in (2.0, 4.0, 5.0, 10.0, 16.0, 30.0)]
+TRAIN_INPUT = [{"devices": {"input": {"w_um": w}}}
+               for w in (2.0, 4.0, 5.0, 10.0, 16.0, 30.0)]
 # The grids above are hand-chosen, and that turned out to be the model's biggest
 # weakness rather than a detail. Validated on them the predictor is off by a median
 # -10%; on the sizings the *optimizer actually converges to* it is off by -35%
@@ -81,15 +83,15 @@ TRAIN_INPUT = [{"input": {"w_um": w}} for w in (2.0, 4.0, 5.0, 10.0, 16.0, 30.0)
 # separately so the selection effect stays visible instead of averaging away.
 HOLDOUT = [
     {},                                                        # the seed itself
-    {"input": {"w_um": 24.0}},
-    {"input": {"w_um": 3.0}},
-    {"ncc": {"w_um": 0.8}},
-    {"ncc": {"w_um": 12.0}},
-    {"input": {"w_um": 19.12}, "ncc": {"w_um": 1.16}, "pcc": {"w_um": 0.79}},
+    {"devices": {"input": {"w_um": 24.0}}},
+    {"devices": {"input": {"w_um": 3.0}}},
+    {"devices": {"ncc": {"w_um": 0.8}}},
+    {"devices": {"ncc": {"w_um": 12.0}}},
+    {"devices": {"input": {"w_um": 19.12}, "ncc": {"w_um": 1.16}, "pcc": {"w_um": 0.79}}},
     # the extreme corner — deliberately just off the training grid, which now reaches
     # input 40.0, so this stays a genuine gate point
-    {"input": {"w_um": 36.0}, "ncc": {"w_um": 0.6}},
-    {"input": {"w_um": 6.0}, "ncc": {"w_um": 3.0}, "pcc": {"w_um": 6.0}},
+    {"devices": {"input": {"w_um": 36.0}, "ncc": {"w_um": 0.6}}},
+    {"devices": {"input": {"w_um": 6.0}, "ncc": {"w_um": 3.0}, "pcc": {"w_um": 6.0}}},
 ]
 
 
@@ -109,14 +111,28 @@ def optimizer_sizings(model, targets=None, seeds=(1234, 7, 99, 4242)):
         # levels the optimizer's Vt pass assigns — so the loop was calibrating on a
         # different device than the optimizer produces, and the measured bias in this
         # region came out 13.6% instead of the ~35% a direct measurement shows.
-        out.append({g: dict(d) for g, d in fin["devices"].items()})
+        # the WHOLE params, scalars included — vcm_frac especially, which the
+        # corner-feasibility step raises and which changes the measured offset by ~2x
+        out.append({k: (copy.deepcopy(v) if k == "devices" else v)
+                    for k, v in fin.items()})
     return out
 
 
-def measured(model, dev, n_mc, seeds):
+def measured(model, override, n_mc, seeds):
     """Median measured contribution per group over estimator seeds — one draw is not
-    a reference (~27% scatter), so the loop never fits to a single draw."""
-    p = run_sim._full({"model": model, "devices": dev})
+    a reference (~27-33% scatter, and it does not tighten with n_mc), so the loop never
+    fits to a single draw.
+
+    `override` is a full params override, not just a devices dict. Passing only devices
+    silently dropped whatever scalars the optimizer had changed — it raises `vcm_frac`
+    from 0.62 to 0.82 in its corner-feasibility step — and measuring at 0.62 gave an ncc
+    contribution of 0.98 where the real circuit gives 2.03. A 2.1x error from a dropped
+    field, and the third time this loop lost information by reconstructing a sizing from
+    a subset of it (first `w_um` only, losing `vt`; then `devices` only, losing this).
+    So nothing is reconstructed any more: overrides are whole params."""
+    ov = dict(override or {})
+    ov.setdefault("model", model)
+    p = run_sim._full(ov)
     out = {}
     for g in run_sim.OFFSET_PAIRS:
         sig = run_sim.pelgrom_sigma_v(p, g)
@@ -245,6 +261,10 @@ def main():
                          "are the region the predictor is actually used in and where "
                          "it is worst, so excluding them reproduces the blind spot "
                          "this loop exists to close")
+    ap.add_argument("--region-slack", type=float, default=0.10,
+                    help="how much the optimizer-converged region may regress before it "
+                         "vetoes an otherwise-improving refit (default 10%%, to absorb "
+                         "estimator noise without letting a real regression through)")
     ap.add_argument("--limit", type=int, default=0,
                     help="subsample every grid to N sizings — for smoke-testing the "
                          "loop end to end without a full measurement run (a full run "
@@ -302,22 +322,40 @@ def main():
           + f"  ncc k={k:.4g} a={a:.4g} b={b:.4g}  flat "
           + "{" + ", ".join(f"{g}: {v:.3g}" for g, v in flat.items()) + "}")
     print(f"\n  held-out median |error|:  current {e_old:.1%}   refitted {e_new:.1%}")
+    e_opt_old = e_opt_new = None
     if opt_grid:
-        # report the two regions separately — an average hides the selection effect
-        hand_rows = [r for r in hold if r[0]["devices"] not in
-                     [{**run_sim._full({"model": args.model, "devices": d})["devices"]}
-                      for d in opt_grid]]
-        opt_rows = [measured(args.model, d, args.n_mc, seeds) for d in opt_grid]
+        # report the two regions separately — an average hides the selection effect,
+        # and the optimizer region also gets veto power over the verdict below
+        # partition by position, not by comparing reconstructed device dicts — the
+        # optimizer rows are exactly the tail that was appended to hold_grid, and
+        # matching on a reconstruction is what lost vcm_frac in the first place
+        n_opt = len(opt_grid)
+        hand_rows, opt_rows = hold[:-n_opt], hold[-n_opt:]
         for label, rows in (("hand-chosen", hand_rows), ("optimizer-converged", opt_rows)):
             if not rows:
                 continue
             eo = holdout_error(rows, ck, ca, cb, cr, cflat)
             en = holdout_error(rows, k, a, b, r_in, flat)
             print(f"    {label:22s} current {eo:.1%}   refitted {en:.1%}")
+            if label == "optimizer-converged":
+                e_opt_old, e_opt_new = eo, en
 
+    # The gate cannot be a median over the whole holdout. Its first real run improved
+    # the hand-chosen region 13.0% -> 3.4% while making the optimizer-converged region
+    # WORSE (6.4% -> 9.2%) and accepted anyway, because eight hand-chosen points outvote
+    # four optimizer ones. That is backwards: the optimizer region is the only one the
+    # predictor is used in. So the overall error must improve AND the optimizer region
+    # must not regress.
     accept = e_new is not None and e_old is not None and e_new < e_old
-    print("  verdict: " + ("ACCEPT — held-out error improved"
-                           if accept else "REJECT — no held-out improvement, keeping current"))
+    reason = "held-out error improved" if accept else "no held-out improvement"
+    if accept and opt_grid and e_opt_old is not None and e_opt_new is not None:
+        if e_opt_new > e_opt_old * (1.0 + args.region_slack):
+            accept = False
+            reason = (f"overall improved but the optimizer-converged region regressed "
+                      f"({e_opt_old:.1%} -> {e_opt_new:.1%}) — that is the region the "
+                      f"predictor is actually used in, so it vetoes")
+    print("  verdict: " + ("ACCEPT — " + reason if accept else "REJECT — " + reason
+                           + ", keeping current"))
 
     os.makedirs(os.path.dirname(HISTORY), exist_ok=True)
     with open(HISTORY, "a") as f:
@@ -330,6 +368,8 @@ def main():
             "refitted": {"r_input": r_in, "r_input_spread": r_spread,
                          "k": k, "a": a, "b": b, "flat": flat},
             "holdout_err_current": e_old, "holdout_err_refit": e_new,
+            "holdout_err_optimizer_region": {"current": e_opt_old, "refit": e_opt_new},
+            "verdict_reason": reason,
             "accepted": bool(accept and args.apply),
             "applied": bool(accept and args.apply),
             "seconds": round(time.time() - t0, 1),

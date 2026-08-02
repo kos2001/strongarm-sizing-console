@@ -35,10 +35,25 @@ def cal():
 
 # ── the grids ───────────────────────────────────────────────────────────────
 
+def _devs(override):
+    """Grid entries are full params overrides now, not devices dicts — they had to be,
+    because passing only devices dropped the vcm_frac the optimizer raises."""
+    return (override or {}).get("devices", {})
+
+
+def test_grid_entries_are_full_params_overrides(cal):
+    """Pins the shape, since three separate bugs came from passing a subset of a sizing
+    around: w_um only (lost vt), devices only (lost vcm_frac)."""
+    for grid in (cal.TRAIN, cal.TRAIN_INPUT, cal.HOLDOUT):
+        for d in grid:
+            assert set(d) <= {"devices", "model", "vdd", "vcm_frac", "cload_ff",
+                              "avt_mv_um", "n_mc"}, d
+
+
 def test_holdout_is_disjoint_from_training(cal):
     """A gate over data the fit has already seen is not a gate."""
     def key(d):
-        return tuple(sorted((g, v.get("w_um")) for g, v in d.items()))
+        return tuple(sorted((g, v.get("w_um")) for g, v in _devs(d).items()))
     train = {key(d) for d in cal.TRAIN} | {key(d) for d in cal.TRAIN_INPUT}
     hold = {key(d) for d in cal.HOLDOUT}
     assert not (train & hold), sorted(train & hold)
@@ -47,8 +62,8 @@ def test_holdout_is_disjoint_from_training(cal):
 def test_holdout_reaches_outside_the_training_range(cal):
     """It must include sizings the grid does not bracket, or it only proves
     interpolation."""
-    tr_ncc = [d["ncc"]["w_um"] for d in cal.TRAIN if "ncc" in d]
-    ho_ncc = [d["ncc"]["w_um"] for d in cal.HOLDOUT if "ncc" in d]
+    tr_ncc = [_devs(d)["ncc"]["w_um"] for d in cal.TRAIN if "ncc" in _devs(d)]
+    ho_ncc = [_devs(d)["ncc"]["w_um"] for d in cal.HOLDOUT if "ncc" in _devs(d)]
     assert ho_ncc, cal.HOLDOUT
     assert max(ho_ncc) > max(tr_ncc) or min(ho_ncc) < min(tr_ncc), (tr_ncc, ho_ncc)
 
@@ -57,7 +72,7 @@ def test_input_sweep_keeps_the_latch_nominal(cal):
     """The trap: fitting R_input where the latch has been deliberately weakened.
     TRAIN_INPUT must not touch ncc."""
     for d in cal.TRAIN_INPUT:
-        assert set(d) <= {"input"}, d
+        assert set(_devs(d)) <= {"input"}, d
 
 
 # ── the fits ────────────────────────────────────────────────────────────────
@@ -157,6 +172,32 @@ def test_holdout_error_is_zero_for_a_perfect_model(cal):
         m["pcc"] = (run_sim.predicted_offset_budget_mv(p)[1]["pcc"], m["pcc"][1])
         rows.append((p, m))
     assert cal.holdout_error(rows, K, A, B, 1.1, flat) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_the_gate_vetoes_an_optimizer_region_regression(cal):
+    """The gate's first real run accepted a refit that improved the hand-chosen region
+    13.0% -> 3.4% while making the optimizer-converged region worse, 6.4% -> 9.2%, because
+    eight hand-chosen holdout points outvoted four optimizer ones in the median. That is
+    backwards — the optimizer region is the only one the predictor is used in. The veto
+    logic lives in main(), so this pins the arithmetic it rests on."""
+    slack = 0.10
+    # overall improves, optimizer region regresses beyond slack -> must not accept
+    assert not (0.034 < 0.126 and not (0.092 > 0.064 * (1 + slack)))
+    # a regression inside the slack is tolerated (estimator noise)
+    assert not (0.068 > 0.064 * (1 + slack))
+    # and a genuine improvement in both is accepted
+    assert 0.030 < 0.126 and not (0.050 > 0.064 * (1 + slack))
+
+
+def test_region_split_partitions_measured_rows_without_reconstructing(cal):
+    """Two properties, both learned the hard way. The split must partition rows that
+    were already measured — re-measuring one region compares the two against different
+    draws of a reference that scatters ~27-33%. And it must not match rows by rebuilding
+    a sizing from a subset of its fields, which is how vcm_frac got lost."""
+    src = open(os.path.join(ROOT, "scripts", "calibrate_offset_model.py")).read()
+    assert "hand_rows, opt_rows = hold[:-n_opt], hold[-n_opt:]" in src
+    assert "opt_rows = [measured(" not in src
+    assert 'run_sim._full({"model": args.model, "devices": d})["devices"]' not in src
 
 
 def test_a_worse_model_scores_worse_on_holdout(cal):
