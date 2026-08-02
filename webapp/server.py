@@ -59,10 +59,17 @@ def _arg_port(default=8770):
             return int(sys.argv[1])
         except ValueError:
             pass   # e.g. imported under pytest where argv[1] is a test path
-    return default
+    try:
+        return int(os.environ.get("STRONGARM_PORT") or default)
+    except ValueError:
+        return default
 
 
 PORT = _arg_port()
+# Bind address. Defaults to loopback, which is right for a dev machine and wrong inside a
+# container — there it must be 0.0.0.0 or the published port reaches nothing. Env rather
+# than a flag so the container image needs no custom command.
+HOST = os.environ.get("STRONGARM_HOST") or "127.0.0.1"
 DIST = os.path.join(HERE, "dist")  # production build (npm run build)
 
 # P1_SAR_ADC spec targets the UI checks against
@@ -1767,8 +1774,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/health":
+            # `availability` matters most in a container, where asap7 (needs a natively
+            # compiled OSDI) and sky130 (needs the mounted PDK) may be absent. Without it
+            # the first symptom is a raw ngspice parse error inside a sizing run, which
+            # reads as a broken simulator rather than an uninstalled backend.
             self._json({"ok": True, "ngspice": run_sim.NGSPICE,
-                        "sim_cache": run_sim.ngspice_cache_stats()})
+                        "sim_cache": run_sim.ngspice_cache_stats(),
+                        "availability": run_sim.model_availability()})
         elif path == "/api/defaults":
             self._json({"defaults": run_sim.DEFAULT_PARAMS, "targets": SPEC_TARGETS})
         elif path.startswith("/api/"):
@@ -2293,5 +2305,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"StrongARM sizing API on http://127.0.0.1:{PORT}  (ngspice: {run_sim.NGSPICE})")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    shown = "127.0.0.1" if HOST in ("0.0.0.0", "::") else HOST
+    print(f"StrongARM sizing API on http://{shown}:{PORT}  (ngspice: {run_sim.NGSPICE})")
+    av = run_sim.model_availability()
+    for name, st in av["models"].items():
+        if not st["available"]:
+            # said at startup, not on first use: a backend missing here is a deployment
+            # fact, and finding out via a parse error mid-sizing wastes the user's run
+            print(f"  model {name}: UNAVAILABLE — {st['reason']}")
+    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

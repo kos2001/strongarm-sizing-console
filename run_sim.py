@@ -682,6 +682,12 @@ def _sky130_lib_path():
         "SKY130_NGSPICE_LIB", "~/pdk/sky130A/libs.tech/ngspice/sky130.lib.spice"))
 
 
+def sky130_lib_path():
+    """Where the real PDK is expected. Separate so `model_availability` can report it
+    without triggering the corner extraction."""
+    return _sky130_lib_path()
+
+
 # cache of one-corner libs (keeps ngspice from re-parsing all 51 corners each run)
 _SKY_CACHE = os.path.join(tempfile.gettempdir(), "strongarm_sky130_corners")
 
@@ -819,6 +825,63 @@ def sky130_corner_lib(corner="tt"):
         return out
     except OSError:
         return full
+
+
+def model_availability():
+    """Which device-model backends this installation can actually run, and why not.
+
+    Written for containers, where two of the four are conditional. `asap7` needs a compiled
+    `bsimcmg107.osdi`, and OSDI is a **native shared library** — the one vendored in the
+    repo is Mach-O/arm64, so it cannot load inside a Linux image and must be rebuilt there
+    (`scripts/build_bsimcmg_osdi.sh`). `sky130` needs the real PDK on disk, which is far too
+    large to vendor and is mounted instead (`SKY130_NGSPICE_LIB`).
+
+    Without this the failure is a raw ngspice parse error from inside a sizing run, which
+    reads as "the simulator is broken" rather than "this backend is not installed here"."""
+    import platform
+    import shutil
+
+    def _osdi_state():
+        if not os.path.exists(ASAP7_OSDI):
+            return False, (f"missing {os.path.relpath(ASAP7_OSDI, os.path.dirname(os.path.abspath(__file__)))}"
+                           " — build it with scripts/build_bsimcmg_osdi.sh (needs openvaf-r)")
+        # a native .so for the wrong platform loads as a parse failure deep in a sim, so
+        # check the container magic rather than waiting for that
+        try:
+            with open(ASAP7_OSDI, "rb") as f:
+                magic = f.read(4)
+        except OSError as e:
+            return False, f"unreadable: {e}"
+        is_elf, is_macho = magic[:4] == b"\x7fELF", magic[:4] in (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
+        host = platform.system()
+        if host == "Linux" and not is_elf:
+            return False, ("the vendored bsimcmg107.osdi is a macOS (Mach-O) library and "
+                           "cannot load on Linux — rebuild it in this image with "
+                           "scripts/build_bsimcmg_osdi.sh")
+        if host == "Darwin" and not is_macho:
+            return False, ("bsimcmg107.osdi is not a macOS library — rebuild it with "
+                           "scripts/build_bsimcmg_osdi.sh")
+        return True, None
+
+    ok_osdi, why_osdi = _osdi_state()
+    sky_lib = sky130_lib_path()
+    ok_sky = os.path.exists(sky_lib)
+    ng = shutil.which(NGSPICE) or (NGSPICE if os.path.exists(NGSPICE) else None)
+    return {
+        "ngspice": {"path": ng, "available": bool(ng)},
+        "models": {
+            "ptm45":  {"available": os.path.exists(MODEL_PATH), "reason": None,
+                       "note": "BSIM4 PTM 45nm, vendored"},
+            "gaa2nm": {"available": os.path.exists(GAA2NM_PATH), "reason": None,
+                       "note": "scaled BSIM4, trend-only, vendored"},
+            "asap7":  {"available": ok_osdi, "reason": why_osdi,
+                       "note": "real BSIM-CMG 107 via ngspice OSDI"},
+            "sky130": {"available": ok_sky, "note": "real SkyWater PDK",
+                       "reason": (None if ok_sky else
+                                  f"PDK not found at {sky_lib} — mount it and set "
+                                  f"SKY130_NGSPICE_LIB")},
+        },
+    }
 
 
 def _model_header(p):

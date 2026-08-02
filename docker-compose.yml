@@ -1,0 +1,57 @@
+# Two of the four device-model backends are conditional, and this file is where that is
+# resolved: `ptm45` and `gaa2nm` are vendored and always work, `sky130` needs the real PDK
+# mounted, and `asap7` needs an OSDI compiled for this platform. `/api/health` reports which
+# of them the running container actually has.
+
+services:
+  console:
+    image: strongarm-console:latest
+    build:
+      context: .
+      # override to pin a different simulator; every number in the repo was measured on 46
+      args:
+        NGSPICE_VERSION: "46"
+    ports:
+      - "8770:8770"
+    environment:
+      # The simulator semaphore sizes itself to the host CPU count, which oversubscribes a
+      # container with a smaller quota — set this to roughly the cpu limit below.
+      NGSPICE_MAX_PROCS: "8"
+      # Deck memoisation (sha1 of the netlist). Sweeps and coordinate descent revisit
+      # identical decks constantly; 0 disables it.
+      NGSPICE_CACHE: "4096"
+      SKY130_NGSPICE_LIB: /pdk/sky130A/libs.tech/ngspice/sky130.lib.spice
+    volumes:
+      # Bring your own SkyWater PDK — several GB, so it is mounted rather than vendored.
+      # Read-only: the console only ever reads model cards. Drop this mount and everything
+      # except the sky130 backend still works.
+      - ${SKY130_PDK_ROOT:-~/pdk}:/pdk:ro
+      # Optional: a Linux-built bsimcmg107.osdi enables the asap7 (BSIM-CMG FinFET) backend.
+      # The repo's copy is macOS/arm64 and cannot load here; build one with
+      #   docker compose run --rm osdi-build
+      - ./models/asap7:/app/models/asap7
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+    restart: unless-stopped
+
+  # One-shot: compile the vendored BSIM-CMG Verilog-A into a Linux .osdi so the asap7
+  # backend works in the container. Separate service because it needs a Rust + LLVM
+  # toolchain that has no business in the runtime image.
+  osdi-build:
+    image: rust:1-bookworm
+    working_dir: /work
+    volumes:
+      - .:/work
+    environment:
+      OPENVAF_REF: "master"
+    command: >
+      bash -euxc '
+        apt-get update && apt-get install -y --no-install-recommends llvm-16-dev libclang-16-dev clang-16 git;
+        test -d /tmp/OpenVAF || git clone --depth 1 --branch "$$OPENVAF_REF" https://github.com/arpadbuermen/OpenVAF /tmp/OpenVAF;
+        cd /tmp/OpenVAF && cargo build --release --bin openvaf-r;
+        cd /work && OPENVAF=/tmp/OpenVAF/target/release/openvaf-r sh scripts/build_bsimcmg_osdi.sh;
+        echo "wrote models/asap7/bsimcmg107.osdi — restart the console service";
+      '
+    profiles: ["tools"]

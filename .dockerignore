@@ -1,0 +1,27 @@
+# The build context is 1.1 GB without this, almost all of it toolchain sources that the
+# image does not need: OpenVAF (808 M, a Rust/LLVM compiler) and spicelib-mcp (276 M).
+# `third_party/bsimcmg107` IS needed — it is the Verilog-A source for the OSDI rebuild — so
+# third_party is excluded selectively rather than wholesale.
+third_party/OpenVAF
+third_party/spicelib-mcp
+third_party/VA-Models
+
+# build outputs and caches
+webapp/node_modules
+webapp/dist
+out
+**/__pycache__
+**/*.pyc
+.pytest_cache
+*.bak
+
+# not needed at runtime, and .git alone is tens of MB
+.git
+.gitignore
+.playwright-mcp
+claudedocs
+
+# host-specific: the vendored OSDI is a macOS arm64 library and cannot load on Linux.
+# Leaving it out means `model_availability()` reports "missing" (actionable) instead of
+# "wrong platform" (which looks like corruption).
+models/asap7/bsimcmg107.osdi
