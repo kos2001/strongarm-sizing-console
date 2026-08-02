@@ -37,16 +37,19 @@ def test_optimizer_measures_the_full_budget_of_its_winner(opt):
     assert set(b["per_device"]) == set(run_sim.OFFSET_PAIRS)
 
 
-def test_optimizer_warns_when_the_reported_offset_is_optimistic(opt):
-    """On this circuit the search reliably shrinks the latch, so the warning should
-    fire. If it stops firing, either the cost function started pricing mismatch or
-    the search changed — both worth noticing."""
+def test_optimizer_flags_which_device_dominates_the_offset(opt):
+    """The warning's job changed once the cost function started pricing every pair: it
+    is no longer evidence of a modelling gap but a pointer to the binding device. It
+    must name that device and send the reader to the measured total."""
     b = opt["offset_budget"]
     ratio = b["total_sigma_mv"] / b["input_only_sigma_mv"]
     if ratio > 1.25:
-        assert opt["offset_budget_warning"], (ratio, b)
-        assert "understates" in opt["offset_budget_warning"]
-        assert b["dominant"][0] in opt["offset_budget_warning"]
+        w = opt["offset_budget_warning"]
+        assert w, (ratio, b)
+        assert b["dominant"][0] in w
+        assert "total_sigma_mv" in w
+        # and it must not still claim the objective ignores latch mismatch
+        assert "does not price" not in w
     else:
         assert opt["offset_budget_warning"] is None
 

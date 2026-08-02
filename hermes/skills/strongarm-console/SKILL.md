@@ -146,10 +146,14 @@ dominant. Across four seeds `ncc` was dominant **every time** and the real-to-re
 ratio ran **2.3×–7.1×** — the mechanism is reliable, the magnitude is not, so read the
 budget rather than predicting the factor.
 
-The result now carries `offset_budget` and `offset_budget_warning`. **When the warning
-is present, quote `offset_budget.total_sigma_mv`, not the `offset` field**, and tell
-the user which device dominates. Recommending "grow the input pair to cut offset"
-after an optimize run is usually wrong — the latch is the problem by then.
+The result carries `offset_budget` and `offset_budget_warning`. **When the warning is
+present, quote `offset_budget.total_sigma_mv`, not the `offset` field**, and name the
+dominant device. Recommending "grow the input pair to cut offset" after an optimize run
+is usually wrong — the latch is the problem by then.
+
+The warning no longer means the objective ignores latch mismatch (it does not, since
+#64); it means the offset is dominated by something other than the input pair, which is
+a legitimate place for the search to land given the predictor's accuracy.
 
 `strongarm_fullflow` now includes offset budget, kickback, hysteresis (at the design's
 own max f_clk) and common-mode range. Stages with no target come back `ok: null` and

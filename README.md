@@ -479,15 +479,14 @@ ratio as "large and unpredictable", not as a number. The σ estimates themselves
 ~15–35% run-to-run spread at these Monte-Carlo sample counts, which is why the warning
 triggers on a coarse 1.25× threshold rather than reporting a precise factor.
 
-Pricing every pair inside the search needs a per-group referral factor this code does
-not have — and fitting one on two data points is not something to slip into a cost
-function. So instead `optimize` measures the winner once against the full budget and
-**reports the discrepancy** (`offset_budget`, `offset_budget_warning`), naming the
-dominant contributor and saying why the search behaves this way. `budget_check=False`
-skips it; cost is 6.2 s → 9.1 s on ptm45.
+`optimize` measures the winner once against the full budget and reports it
+(`offset_budget`, `offset_budget_warning`). `budget_check=False` skips it; cost is
+6.2 s → 9.1 s on ptm45.
 
-That leaves a known, labelled gap rather than a silent one: judge sizing against
-`total_sigma_mv`, or size the latch pairs by hand.
+**Superseded in part:** the cost function now prices every pair (see below), so the
+warning is no longer evidence of a modelling gap — it is a pointer to whichever device
+is binding, which is usually `ncc`. Judge a design against `total_sigma_mv` and grow
+the device the warning names; growing the input pair will not help.
 
 ## Merging related sidebar pages
 
