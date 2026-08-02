@@ -151,6 +151,10 @@ def test_holdout_error_is_zero_for_a_perfect_model(cal):
         m["ncc"] = (K * sig_n ** A * ratio ** B, sig_n)
         for g, v in flat.items():
             m[g] = (v, m[g][1])
+        # pcc is a power law in its own width, not one of the flat constants, so a
+        # "perfect" planted measurement has to include the model's own pcc term —
+        # otherwise this asserts zero error against a term nobody planted
+        m["pcc"] = (run_sim.predicted_offset_budget_mv(p)[1]["pcc"], m["pcc"][1])
         rows.append((p, m))
     assert cal.holdout_error(rows, K, A, B, 1.1, flat) == pytest.approx(0.0, abs=1e-9)
 
@@ -170,6 +174,7 @@ def test_a_worse_model_scores_worse_on_holdout(cal):
         m["ncc"] = (0.2 * sig_n ** 0.7 * ratio ** 0.4, sig_n)
         for g, v in flat.items():
             m[g] = (v, m[g][1])
+        m["pcc"] = (run_sim.predicted_offset_budget_mv(p)[1]["pcc"], m["pcc"][1])
         rows.append((p, m))
     good = cal.holdout_error(rows, 0.2, 0.7, 0.4, 1.1, flat)
     bad = cal.holdout_error(rows, 0.2 * 3, 0.7, 0.4, 1.1 * 2, flat)

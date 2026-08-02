@@ -971,16 +971,21 @@ def pelgrom_sigma_v(p, dev):
 #          is genuinely expensive. Fitted over a 20-point grid in (input W, ncc W):
 #          mean |error| 12.7%, worst 29.1% — crude, but the term it replaces was zero.
 #
-#   pcc    deliberately modelled as a constant. Measured, its contribution *rises*
-#          with its own width (0.286 -> 0.442 mV over 0.5 -> 16 um) because its
-#          leverage on the regeneration grows faster than its sigma_Vth falls. A
-#          sigma-proportional term would penalise shrinking it, which is backwards.
+#   pcc    a weak power law in its OWN width, contrib = 0.318 * W^0.128, fitting the
+#          measured 0.286 -> 0.442 mV over 0.5 -> 16 um to within 3%. Note the sign: its
+#          contribution *rises* with width, because its leverage on the regeneration
+#          grows faster than its sigma_Vth falls — so a sigma-proportional term would
+#          penalise shrinking it, backwards. It was a flat constant until a per-term
+#          comparison on optimizer output showed the constant over-predicting 111% at
+#          the sub-micron widths the search picks, which cancelled ncc's
+#          under-prediction in the RSS and made the total look better than it was.
 #   pre,
 #   prei   ~0.025-0.03 mV regardless of width, i.e. 150x below the input pair.
 #          Negligible; carried as constants so the RSS is complete.
 _OFFSET_R_INPUT = 1.06
 _OFFSET_NCC_K, _OFFSET_NCC_A, _OFFSET_NCC_B = 0.1249, 0.679, 0.372
-_OFFSET_FLAT_MV = {"pcc": 0.36, "pre": 0.026, "prei": 0.027}
+_OFFSET_FLAT_MV = {"pre": 0.026, "prei": 0.027}
+_OFFSET_PCC_K, _OFFSET_PCC_P = 0.3176, 0.1283
 
 
 def predicted_offset_budget_mv(p):
@@ -995,6 +1000,8 @@ def predicted_offset_budget_mv(p):
     di, dn = p["devices"]["input"], p["devices"]["ncc"]
     ratio = max((di["w_um"] * di["m"]) / max(dn["w_um"] * dn["m"], 1e-9), 1e-9)
     terms["ncc"] = _OFFSET_NCC_K * (sig_ncc ** _OFFSET_NCC_A) * (ratio ** _OFFSET_NCC_B)
+    dp = p["devices"]["pcc"]
+    terms["pcc"] = _OFFSET_PCC_K * max(dp["w_um"], 1e-9) ** _OFFSET_PCC_P
     terms.update(_OFFSET_FLAT_MV)
     return math.sqrt(sum(v * v for v in terms.values())), terms
 

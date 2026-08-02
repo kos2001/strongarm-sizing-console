@@ -49,8 +49,14 @@ HISTORY = os.path.join(ROOT, "out", "offset_model_history.jsonl")
 # Training grid and a disjoint validation set. The split is by *sizing*, not by
 # random sample, because the failure mode being guarded against is a model that
 # works where it was fitted and nowhere else.
+# Input widths must reach the optimizer's own search bound (40 µm — `HI = log10(40)` in
+# server.optimize), because that is where it lands and a fit that stops at 32 is
+# extrapolating exactly there. Diagnosed from a per-term comparison on optimizer output:
+# the input term was accurate to +1% while the ncc term under-predicted 26%, and the
+# geometry ratio at input 40 / ncc 2.25 sat outside the fitted range.
 TRAIN = [{"input": {"w_um": iw}, "ncc": {"w_um": nw}}
-         for iw in (4.0, 8.0, 16.0, 32.0) for nw in (0.5, 1.0, 2.0, 4.0, 8.0)]
+         for iw in (4.0, 8.0, 16.0, 32.0, 40.0)
+         for nw in (0.5, 1.0, 2.0, 4.0, 8.0)]
 
 # R_input gets its OWN sweep, at nominal ncc. Fitting it on TRAIN is wrong and the
 # loop caught me doing it: that grid drives ncc down to 0.5 µm to expose the latch
@@ -61,6 +67,18 @@ TRAIN = [{"input": {"w_um": iw}, "ncc": {"w_um": nw}}
 # Widths chosen to avoid HOLDOUT's input-only points (3.0 and 24.0) — they were in
 # both until a test noticed, which made two of the eight gate points training data.
 TRAIN_INPUT = [{"input": {"w_um": w}} for w in (2.0, 4.0, 5.0, 10.0, 16.0, 30.0)]
+# The grids above are hand-chosen, and that turned out to be the model's biggest
+# weakness rather than a detail. Validated on them the predictor is off by a median
+# -10%; on the sizings the *optimizer actually converges to* it is off by -35%
+# (worst -42%), because the search seeks out precisely the region where the model is
+# most optimistic — that is where it reports "cheap and compliant". The gate never saw
+# that region, so the validation missed it.
+#
+# `optimizer_sizings()` adds those points. It makes the calibration depend on the
+# optimizer, which depends on the constants being calibrated, so this is a fixed-point
+# iteration rather than a one-shot fit: one pass moves the model toward the region that
+# matters, and re-running moves it further. The loop reports the two regions' bias
+# separately so the selection effect stays visible instead of averaging away.
 HOLDOUT = [
     {},                                                        # the seed itself
     {"input": {"w_um": 24.0}},
@@ -68,9 +86,31 @@ HOLDOUT = [
     {"ncc": {"w_um": 0.8}},
     {"ncc": {"w_um": 12.0}},
     {"input": {"w_um": 19.12}, "ncc": {"w_um": 1.16}, "pcc": {"w_um": 0.79}},
-    {"input": {"w_um": 40.0}, "ncc": {"w_um": 0.5}},            # the extreme corner
+    # the extreme corner — deliberately just off the training grid, which now reaches
+    # input 40.0, so this stays a genuine gate point
+    {"input": {"w_um": 36.0}, "ncc": {"w_um": 0.6}},
     {"input": {"w_um": 6.0}, "ncc": {"w_um": 3.0}, "pcc": {"w_um": 6.0}},
 ]
+
+
+def optimizer_sizings(model, targets=None, seeds=(1234, 7, 99, 4242)):
+    """Sizings the optimizer actually lands on — the region the predictor is used in.
+
+    Imported lazily: the calibration script is useful without a webapp on the path, and
+    only this function needs it."""
+    sys.path.insert(0, os.path.join(ROOT, "webapp"))
+    import server                                              # noqa: E402
+    t = targets or {"decision_time_ps": 400, "power_uw": 150, "offset_sigma_mv": 2.0}
+    out = []
+    for s in seeds:
+        fin = server.optimize(run_sim._full({"model": model}), t,
+                              seed=s, budget_check=False)["final_params"]
+        # the WHOLE device dict, not just w_um. Taking only the width dropped the `vt`
+        # levels the optimizer's Vt pass assigns — so the loop was calibrating on a
+        # different device than the optimizer produces, and the measured bias in this
+        # region came out 13.6% instead of the ~35% a direct measurement shows.
+        out.append({g: dict(d) for g, d in fin["devices"].items()})
+    return out
 
 
 def measured(model, dev, n_mc, seeds):
@@ -143,13 +183,23 @@ def fit_flat(rows, group):
 
 
 def predict(p, k, a, b, r_input, flat):
-    terms = {"input": r_input * run_sim.pelgrom_sigma_v(p, "input") * 1e3}
-    sig = run_sim.pelgrom_sigma_v(p, "ncc") * 1e3
-    di, dn = p["devices"]["input"], p["devices"]["ncc"]
-    ratio = max((di["w_um"] * di["m"]) / max(dn["w_um"] * dn["m"], 1e-9), 1e-9)
-    terms["ncc"] = k * (sig ** a) * (ratio ** b)
-    terms.update(flat)
-    return math.sqrt(sum(v * v for v in terms.values()))
+    """Predict with a candidate constant set by installing it and calling the model.
+
+    This used to reimplement `predicted_offset_budget_mv`'s formula, and the two
+    silently diverged the moment `pcc` stopped being a flat constant — a calibration
+    loop fitting a formula the production code no longer uses is worse than none. Now
+    there is one formula and the loop only swaps its constants."""
+    saved = (run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
+             run_sim._OFFSET_R_INPUT, dict(run_sim._OFFSET_FLAT_MV))
+    try:
+        run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B = k, a, b
+        run_sim._OFFSET_R_INPUT = r_input
+        run_sim._OFFSET_FLAT_MV = {g: v for g, v in flat.items()
+                                   if g in run_sim._OFFSET_FLAT_MV}
+        return run_sim.predicted_offset_budget_mv(p)[0]
+    finally:
+        (run_sim._OFFSET_NCC_K, run_sim._OFFSET_NCC_A, run_sim._OFFSET_NCC_B,
+         run_sim._OFFSET_R_INPUT, run_sim._OFFSET_FLAT_MV) = saved
 
 
 def holdout_error(rows, k, a, b, r_input, flat):
@@ -190,6 +240,11 @@ def main():
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--apply", action="store_true",
                     help="rewrite the constants if the held-out error improves")
+    ap.add_argument("--no-optimizer-sizings", action="store_true",
+                    help="skip adding optimizer-converged sizings to the grids. They "
+                         "are the region the predictor is actually used in and where "
+                         "it is worst, so excluding them reproduces the blind spot "
+                         "this loop exists to close")
     ap.add_argument("--limit", type=int, default=0,
                     help="subsample every grid to N sizings — for smoke-testing the "
                          "loop end to end without a full measurement run (a full run "
@@ -205,6 +260,18 @@ def main():
         train_grid = ends(TRAIN, max(args.limit, 6))
         input_grid = ends(TRAIN_INPUT, max(args.limit, 3))
         hold_grid = ends(HOLDOUT, max(args.limit, 3))
+
+    # Appended AFTER --limit on purpose: that branch rebuilds the grids from the module
+    # constants, so adding these earlier silently dropped them — which is how the first
+    # run of this feature measured the optimizer region for reporting while excluding it
+    # from the fit, i.e. exactly the blind spot it was meant to close.
+    opt_grid = []
+    if not args.no_optimizer_sizings:
+        print("running the optimizer to collect the sizings it converges to…")
+        opt_grid = optimizer_sizings(args.model)
+        # into BOTH: training so the fit covers the region, holdout so the gate sees it
+        train_grid = train_grid + opt_grid
+        hold_grid = hold_grid + opt_grid
 
     t0 = time.time()
     print(f"measuring {len(train_grid)} latch-grid + {len(input_grid)} input-sweep + "
@@ -235,6 +302,18 @@ def main():
           + f"  ncc k={k:.4g} a={a:.4g} b={b:.4g}  flat "
           + "{" + ", ".join(f"{g}: {v:.3g}" for g, v in flat.items()) + "}")
     print(f"\n  held-out median |error|:  current {e_old:.1%}   refitted {e_new:.1%}")
+    if opt_grid:
+        # report the two regions separately — an average hides the selection effect
+        hand_rows = [r for r in hold if r[0]["devices"] not in
+                     [{**run_sim._full({"model": args.model, "devices": d})["devices"]}
+                      for d in opt_grid]]
+        opt_rows = [measured(args.model, d, args.n_mc, seeds) for d in opt_grid]
+        for label, rows in (("hand-chosen", hand_rows), ("optimizer-converged", opt_rows)):
+            if not rows:
+                continue
+            eo = holdout_error(rows, ck, ca, cb, cr, cflat)
+            en = holdout_error(rows, k, a, b, r_in, flat)
+            print(f"    {label:22s} current {eo:.1%}   refitted {en:.1%}")
 
     accept = e_new is not None and e_old is not None and e_new < e_old
     print("  verdict: " + ("ACCEPT — held-out error improved"
@@ -245,6 +324,7 @@ def main():
         f.write(json.dumps({
             "model": args.model, "n_mc": args.n_mc, "seeds": seeds,
             "limit": args.limit or None,
+            "optimizer_sizings": len(opt_grid),
             "grid_sizes": [len(train_grid), len(input_grid), len(hold_grid)],
             "current": {"r_input": cr, "k": ck, "a": ca, "b": cb, "flat": cflat},
             "refitted": {"r_input": r_in, "r_input_spread": r_spread,
