@@ -372,6 +372,39 @@ the cost function now uses an analytic budget over all matched pairs
 (`run_sim.predicted_offset_budget_mv`). Getting there needed three corrections, each
 found by measurement rather than reasoning:
 
+**0. The reference is deterministic — and everything above it depended on that.** Each
+group's mismatch enters as a **single scalar** `d ~ N(0, σ√2)`, so the offset σ is a
+one-dimensional expectation, not a sampling problem. Monte Carlo on a 1-D Gaussian buys
+nothing but variance. `offset_budget` now evaluates it by **Gauss-Hermite quadrature**:
+5 nodes at 16 bisection steps, agreeing to **0.04%** across 3, 5, 7 and 9 nodes, and
+repeating bit-for-bit. It is also *cheaper* than what it replaced — 5 bisections per group
+against 12 — so the old path was paying more for a worse answer.
+
+How much worse:
+
+| | Monte Carlo, n_mc=12 | quadrature |
+|---|---|---|
+| same sizing, repeated | 0.42 / 0.51 / 0.39 mV | identical every time |
+| standard error per estimate | 21% | — |
+| bias vs the exact answer | **−10.7%** (7 of 8 seeds low) | 0.04% |
+| bisections per group | 12 | 5 |
+
+The bias is the part that matters. The old reference was not merely noisy, it read
+**optimistic** at the sample count actually used (closing to −1.6% only at n_mc=32) — the
+same direction as the model's own error, so the two compounded instead of cancelling, and
+no amount of seed-averaging could remove a bias. This is the single root cause behind
+every mis-fitted constant in this section, including two wrong published values of the
+dominant one. The MC path is kept as `method="mc"` for comparison.
+
+Two defects fell out of looking at it. `_offset_of_pair` seeded its RNG with
+`seed + hash(group)`, and `hash` on a `str` is **salted per process** — so a function that
+took a `seed` returned a different draw set on every interpreter (`hash("ncc") % 10000`
+gave 7174, 8200, 5952 on three consecutive runs). Every non-input reference number ever
+recorded, including the calibration history, came from an unreplayable draw set; it uses
+`zlib.crc32` now. And a quadrature node that fails to converge reports **no number** rather
+than a partial rule, whose weights no longer sum to 1 and whose variance therefore comes
+out low — optimistic again.
+
 **1. The offset bisection was too coarse to measure what was being fitted.** 7 steps
 over ±60 mV quantise to 0.47 mV. The latch and precharge contributions land *at* that
 step — measured values pinned at 0.494 mV across sizings that should have differed —
@@ -381,18 +414,21 @@ also biased the headline input-pair σ up to **19% high** for large-area designs
 produces. Default is now 11 steps (0.029 mV); 13 gives the same numbers. Cost: offset
 MC 0.85 s → 1.34 s. The search itself uses the analytic path, so only explicit MC pays.
 
-**2. The input referral factor is 1.268.** Referring a gate-side Vth shift back to the
-input is not quite 1:1 — the shift also moves the tail current and common mode — so the
-textbook √2 = 1.414 is about 11% high. Measured as a median over 5 estimator seeds it is
-1.268, stable to 0.5% across a 13x input-width sweep (1.268–1.275).
+**2. The input referral factor is exactly √2, and it is not a fitted number.** Measured
+deterministically, the input pair's input-referred offset is `v = −d` for a differential
+Vth mismatch `d`: the ratio is 1.0000 to within **0.06% on all four backends and out to
+4σ**. A linear response has σ_out = σ_in exactly, and two independent devices give
+σ_diff = √2·σ_1dev. So the textbook value was right, and `input_referral_is_linear()`
+verifies the property instead of refitting the constant.
 
-> **Correction.** This was first published here as **1.06**, with a claimed 0.5%
-> agreement against Monte-Carlo. That was wrong. The agreement came from a *single* MC
-> draw (seed 4242) that happened to land there; the same sizing medians to 1.585 mV, not
-> the 1.326 that draw gave. So √2 was ~11% high rather than 33% high, and replacing it
-> with 1.06 made the **dominant** term ~16% low — a regression published as a fix. The
-> calibration loop is what surfaced it, by refitting the constant to 1.179 and failing a
-> test that had pinned the literal 1.06.
+> **Correction (third and final on this constant).** It was published as √2, "corrected"
+> to **1.06**, then "corrected" to **1.268**. Both corrections were wrong — by −25% and
+> −10%, on the model's **dominant** term, in the optimistic direction. All three errors
+> have one cause: a Monte-Carlo reference with a 21% standard error per estimate was
+> treated as ground truth. It converges to √2 as n grows — −16.7% at n_mc=12, −3.4% at 64,
+> +2.5% at 256 — so it was never in conflict with the textbook, it was just noisy. The
+> lesson is not about this constant. It is that **a fit is only as good as its
+> reference**, which is why the reference is now deterministic.
 
 **3. `pcc` had to be modelled as a constant, not σ-proportional.** Its contribution
 *rises* with its own width (0.286 → 0.442 mV over 0.5 → 16 µm) because its leverage on
@@ -402,34 +438,39 @@ penalised shrinking it — backwards. `pre`/`prei` are ~0.026 mV regardless of w
 **`ncc` is the one term that mattered and was missing**: its contribution falls 9.3x as
 its width goes 0.5 → 16 µm.
 
-**4. The latch coefficient is per backend, and only ptm45 was calibrated.** The three
-constants above were fitted on ptm45 and applied to all four backends. Two of the three
-transfer; the magnitude does not. Measured, predicted vs measured total budget at the
-seed sizing:
+**4. The latch coefficient is per backend — and out of sample the form still only works
+on ptm45.** The constants were fitted on ptm45 and applied to all four backends. The
+*shape* transfers: the exponents hold, and the `exp(7.02·(vcm−0.62))` term's ratio at
+vcm 0.82 measures 3.55–4.30 across the four backends against a fit of 4.07. The
+*magnitude* does not — K spans 8x (0.118 → 0.948) — so it is now
+`_OFFSET_NCC_K_BY_MODEL`, and that is worth 2x on held-out error:
 
-| backend | one global K (ptm45 fit) | per-model K | fitted K |
+| backend | held-out error, global K | held-out error, per-model K | K |
 |---|---|---|---|
-| ptm45 (BSIM4 45nm) | +2% | **+1%** | 0.1147 |
-| asap7 (BSIM-CMG FinFET) | **−41%** | −25% | 0.7467 |
-| gaa2nm (scaled, trend-only) | −31% | −18% | 0.5179 |
-| sky130 (real PDK) | −14% | −11% | 0.3291 |
+| ptm45 (BSIM4 45nm) | **1.3%** | 1.3% (same fit) | 0.1175 |
+| asap7 (BSIM-CMG FinFET) | 49.4% | **23.2%** | 0.9483 |
+| gaa2nm (scaled, trend-only) | 39.4% | **23.9%** | 0.6088 |
+| sky130 (real PDK) | 17.7% | **18.0%** | 0.3984 |
 
-Every error is *negative* — the model was optimistic everywhere it had not been fitted,
-which is the dangerous direction: the search shrinks the latch believing offset is fine.
-K spans 6.5x across the backends (0.115 → 0.747), which no single value covers, so it is
-now `_OFFSET_NCC_K_BY_MODEL`. What does transfer is the shape: the exponents, and the
-`exp(7.02·(vcm−0.62))` term, whose ratio at vcm 0.82 measures 3.55–4.30 across the four
-backends against a fit of 4.07 — within ~13%, and conservative on the FinFET/2nm ones.
+Read the *held-out* column, and note what it replaces. At the **seed sizing** — where K is
+fitted — the residual is −0.2% to −0.0% on every backend. Publishing that would have said
+"the model is now exact everywhere". One sizing away, three of the four are ~55% wrong.
+The give-away is K's drift across a 16x ncc-width sweep: **39% on ptm45, 82/174/176%** on
+the others. A single coefficient cannot absorb 176% of drift, which means the functional
+form — not just its magnitude — is ptm45-specific. Per-model exponents on a 2-D grid are
+the fix; the deterministic reference makes that affordable and is not yet done.
 
-Splitting K does not close the gap; it halves it. The residual −11% to −25% is most
-likely the *other* ptm45 fits (`R_input`, the `pcc` law, the exponents), which are still
-global. Rather than leave that implicit, `run_sim.offset_model_accuracy(p)` reports the
-measured residual for the backend in use, and every server response carrying a predicted
-offset carries it alongside — `optimize` as `offset_model_accuracy`, `design_brief` as
-`predicted_offset_accuracy`. It deliberately reports the *number* rather than a
-`calibrated: true/false`: a boolean reading "true" for a backend sitting at −25% is the
-same false reassurance the single global constant provided. Per-backend calibration is
-`scripts/calibrate_offset_model.py --model asap7`.
+Per-model `pcc` and precharge constants were also fitted, tested, and **not shipped**:
+they changed held-out error by ≲1 point and made sky130 worse (17.7% → 21.1%). Four
+per-backend micro-decisions worth a point each is fitting the validation set. Their
+*global* values are updated against the clean reference (`0.3176·W^0.1283` →
+`0.3161·W^0.1464`; the flats 0.030 → 0.0067/0.0054).
+
+`run_sim.offset_model_accuracy(p)` reports the held-out error for the backend in use, and
+every server response carrying a predicted offset carries it — `optimize` as
+`offset_model_accuracy`, `design_brief` as `predicted_offset_accuracy`. It reports the
+*number*, not a `calibrated: true/false`: a boolean reading "true" for a backend 23% wrong
+out of sample is the same false reassurance a single global constant gave.
 
 Result on ptm45, compared at the same 2.0 mV target across four seeds:
 

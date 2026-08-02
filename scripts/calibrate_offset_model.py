@@ -118,10 +118,18 @@ def optimizer_sizings(model, targets=None, seeds=(1234, 7, 99, 4242)):
     return out
 
 
-def measured(model, override, n_mc, seeds):
-    """Median measured contribution per group over estimator seeds — one draw is not
-    a reference (~27-33% scatter, and it does not tighten with n_mc), so the loop never
-    fits to a single draw.
+def measured(model, override, n_mc, seeds, method="quadrature"):
+    """Measured contribution per group, from the DETERMINISTIC reference by default.
+
+    This used to be a median over estimator seeds, because one Monte-Carlo draw scatters
+    ~27-33% and does not tighten with n_mc. Averaging noise was the best available answer
+    while the reference was Monte Carlo; it is not any more. `offset_budget`'s quadrature
+    path evaluates the same expectation exactly — each group's mismatch is a single scalar,
+    so it is a 1-D integral, not a sampling problem — and it repeats bit-for-bit.
+
+    That matters more than precision. The old reference could not tell a real 55%
+    out-of-sample error from noise, so the gate below was passing fits that did not
+    generalise. `seeds` and `n_mc` now apply only to `method="mc"`, kept for comparison.
 
     `override` is a full params override, not just a devices dict. Passing only devices
     silently dropped whatever scalars the optimizer had changed — it raises `vcm_frac`
@@ -133,6 +141,10 @@ def measured(model, override, n_mc, seeds):
     ov = dict(override or {})
     ov.setdefault("model", model)
     p = run_sim._full(ov)
+    if method == "quadrature":
+        b = run_sim.offset_budget(p)
+        return p, {g: (v.get("offset_sigma_mv"), v["pelgrom_sigma_vth_mv"])
+                   for g, v in b["per_device"].items()}
     out = {}
     for g in run_sim.OFFSET_PAIRS:
         sig = run_sim.pelgrom_sigma_v(p, g)
@@ -152,9 +164,18 @@ def measured(model, override, n_mc, seeds):
 
 def fit_input_R(rows):
     """R_input = contribution / sigma_Vth, a plain ratio, so a median is the whole fit.
+
+    NOTE this is now a CHECK, not a fit. Measured deterministically the input pair's
+    response is v = -d to within 0.06% on all four backends out to 4 sigma, so a linear
+    response gives R_input = sqrt(2) exactly and there is nothing to fit. This function
+    stays because the ratio is worth watching — if a backend ever breaks linearity it will
+    show up here — but `main` no longer writes what it returns. Fitting it is how the
+    constant got published as 1.06 and then 1.268, both wrong, both times because a
+    reference with a 21% standard error was treated as ground truth.
+
     Must be given the nominal-latch sweep: on the latch-fitting grid the weakened
-    latch inflates the input pair's measured offset and this returns ~1.36 instead of
-    ~1.06. The spread across the sweep is reported so a drift in stability shows up."""
+    latch inflates the input pair's measured offset. The spread across the sweep is
+    reported so a drift in stability shows up."""
     rs = [c / s for _, m in rows for c, s in [m["input"]] if c and s]
     if not rs:
         return None, None
@@ -260,16 +281,18 @@ def _sub1(src, pat, repl, what):
 
 
 def apply_constants(k, a, b, r_input, flat, model="ptm45"):
-    """Rewrite the constants in run_sim.py, keeping a .bak.
+    """Rewrite the fitted constants in run_sim.py, keeping a .bak.
 
-    `k` lands in that model's slot in `_OFFSET_NCC_K_BY_MODEL`; the exponents, the
-    input referral factor and the flat terms are global."""
+    `k` lands in that model's slot in `_OFFSET_NCC_K_BY_MODEL`; the exponents and the flat
+    terms are global. `r_input` is accepted and IGNORED — it is sqrt(2) by the linearity of
+    the input response, not a fit, and rewriting it is what produced two wrong published
+    values. The parameter stays so callers do not silently pass a fit into nowhere."""
+    if abs(r_input - run_sim._OFFSET_R_INPUT) > 1e-9:
+        print(f"  note: R_input {r_input:.4g} not applied — held at sqrt(2) by linearity")
     path = os.path.join(ROOT, "run_sim.py")
     original = src = open(path).read()
     # every substitution first, then the .bak, then the write: a failing pattern used to
     # leave a stray .bak behind having changed nothing
-    src = _sub1(src, r"_OFFSET_R_INPUT = [\d.]+", f"_OFFSET_R_INPUT = {r_input:.4g}",
-                "R_input")
     src = _sub1(src, rf'("{re.escape(model)}": )[\d.]+', rf"\g<1>{k:.4g}",
                 f"latch coefficient for {model}")
     src = _sub1(src, r"_OFFSET_NCC_A, _OFFSET_NCC_B = [^\n]+",
@@ -290,6 +313,12 @@ def main():
                          "referral factor — it refitted to 1.179 where 5 seeds give a "
                          "stable 1.268 — and a single draw is how the value got "
                          "published as 1.06 in the first place")
+    ap.add_argument("--mc-reference", action="store_true",
+                    help="use the Monte-Carlo reference instead of the deterministic "
+                         "quadrature one. Kept for comparison only: it carries a 21%% "
+                         "standard error per estimate, which is larger than most of the "
+                         "differences this loop is asked to resolve, and it could not "
+                         "distinguish a real 55%% out-of-sample error from noise")
     ap.add_argument("--apply", action="store_true",
                     help="rewrite the constants if the held-out error improves")
     ap.add_argument("--no-optimizer-sizings", action="store_true",
@@ -334,15 +363,25 @@ def main():
           f"{len(hold_grid)} held-out sizings "
           f"(model={args.model}, n_mc={args.n_mc}, {args.seeds} estimator seeds"
           + (f", subsampled --limit {args.limit}" if args.limit else "") + ")…")
-    train = [measured(args.model, d, args.n_mc, seeds) for d in train_grid]
-    train_in = [measured(args.model, d, args.n_mc, seeds) for d in input_grid]
-    hold = [measured(args.model, d, args.n_mc, seeds) for d in hold_grid]
+    train = [measured(args.model, d, args.n_mc, seeds,
+                       method="mc" if args.mc_reference else "quadrature") for d in train_grid]
+    train_in = [measured(args.model, d, args.n_mc, seeds,
+                       method="mc" if args.mc_reference else "quadrature") for d in input_grid]
+    hold = [measured(args.model, d, args.n_mc, seeds,
+                       method="mc" if args.mc_reference else "quadrature") for d in hold_grid]
     print(f"  measured in {time.time() - t0:.0f}s")
 
     fit = fit_ncc(train)
-    r_in = fit_input_R(train_in)      # own sweep, at nominal latch — see TRAIN_INPUT
-    r_in, r_spread = r_in if isinstance(r_in, tuple) else (r_in, None)
-    if not fit or not r_in:
+    # R_input is NOT fitted any more. It is sqrt(2) exactly, because the input pair's
+    # response to a differential Vth mismatch is linear — verified directly rather than
+    # inferred. The measured ratio is still computed and reported so a backend that broke
+    # linearity would be visible, but the loop no longer writes it: refitting this constant
+    # against a noisy reference is how it got published as 1.06 and then 1.268.
+    r_check = fit_input_R(train_in)   # own sweep, at nominal latch — see TRAIN_INPUT
+    r_check, r_spread = r_check if isinstance(r_check, tuple) else (r_check, None)
+    r_in = run_sim._OFFSET_R_INPUT
+    lin = run_sim.input_referral_is_linear({"model": args.model})
+    if not fit:
         print("not enough usable measurements — nothing to fit")
         return 1
     k, a, b = fit
@@ -352,10 +391,15 @@ def main():
     ck, ca, cb, cr, cflat = current(args.model)
     e_old = holdout_error(hold, ck, ca, cb, cr, cflat)
     e_new = holdout_error(hold, k, a, b, r_in, flat)
-    print(f"\n  current : R_input {cr:.4g}  ncc k={ck:.4g} a={ca:.4g} b={cb:.4g}  flat {cflat}")
-    print(f"  refitted: R_input {r_in:.4g}"
-          + (f" (spread {r_spread:.0%} over the input sweep)" if r_spread is not None else "")
-          + f"  ncc k={k:.4g} a={a:.4g} b={b:.4g}  flat "
+    print(f"\n  R_input   : held at sqrt(2) = {r_in:.6g} — linear={lin['linear']}, "
+          f"max deviation {lin['max_deviation']:.2%} out to 4 sigma"
+          + (f"; measured ratio/sigma_1dev {r_check:.4g}" if r_check else "")
+          + (f" (spread {r_spread:.0%})" if r_spread is not None else ""))
+    if not lin["linear"]:
+        print("  WARNING: the input response is no longer linear on this backend, so "
+              "R_input = sqrt(2) is not safe here. Investigate before trusting any fit.")
+    print(f"  current : ncc k={ck:.4g} a={ca:.4g} b={cb:.4g}  flat {cflat}")
+    print(f"  refitted: ncc k={k:.4g} a={a:.4g} b={b:.4g}  flat "
           + "{" + ", ".join(f"{g}: {v:.3g}" for g, v in flat.items()) + "}")
     print(f"\n  held-out median |error|:  current {e_old:.1%}   refitted {e_new:.1%}")
     e_opt_old = e_opt_new = None
@@ -401,8 +445,11 @@ def main():
             "optimizer_sizings": len(opt_grid),
             "grid_sizes": [len(train_grid), len(input_grid), len(hold_grid)],
             "current": {"r_input": cr, "k": ck, "a": ca, "b": cb, "flat": cflat},
-            "refitted": {"r_input": r_in, "r_input_spread": r_spread,
-                         "k": k, "a": a, "b": b, "flat": flat},
+            "reference": "quadrature" if not args.mc_reference else "mc",
+            "r_input": {"held_at": r_in, "measured_ratio": r_check,
+                        "spread": r_spread, "linear": lin["linear"],
+                        "max_deviation": lin["max_deviation"]},
+            "refitted": {"k": k, "a": a, "b": b, "flat": flat},
             "holdout_err_current": e_old, "holdout_err_refit": e_new,
             "holdout_err_optimizer_region": {"current": e_opt_old, "refit": e_opt_new},
             "verdict_reason": reason,
