@@ -40,8 +40,8 @@ export default function VcoSchematic({ devices, nStages, starved = true }: { dev
     const RING_P = 52 // 수평 링 stage pitch
     const W = 640 + N * RING_P + 70
     svg.setAttribute('viewBox', `0 0 ${W} 300`)
-    // 원본 크기 유지 — 좁은 패널에서는 부모(overflow-x-auto)가 가로 스크롤 제공
-    svg.style.minWidth = `${W}px`
+    // Fit the complete ring inside the workbench pane at every stage count.
+    svg.style.minWidth = '0'
     // grid
     const grid = add('pattern', { id: 'vcg', width: 12, height: 12, patternUnits: 'userSpaceOnUse' }); grid.appendChild(el('circle', { cx: 0.6, cy: 0.6, r: 0.6, fill: C.grid })); (svg.querySelector('defs') || svg.insertBefore(el('defs', {}), svg.firstChild)).appendChild(grid)
     add('rect', { x: 0, y: 0, width: W, height: 300, fill: 'url(#vcg)' })

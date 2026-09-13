@@ -1,3 +1,5 @@
+import { analysisKey } from '../analysis'
+import { useAnalysisState } from '../useAnalysisState'
 import { useState } from 'react'
 import type { Params, WcdResult, WickedCornersResult, WickedFlowResult, WickedImportanceResult } from '../types'
 import { wickedCorners, wickedFullflow, wickedImportance, wickedWcd } from '../api'
@@ -28,13 +30,15 @@ const fmtDetail = (d: unknown): string => {
 const sigmaColor = (beta: number) => (beta >= 3 ? 'var(--good)' : beta >= 2 ? 'var(--warn)' : 'var(--bad)')
 
 export default function WickedPage({ params, targets, busy, apiUp, onApply }: Props) {
-  const [wcd, setWcd] = useState<WcdResult | null>(null)
+  const scope = analysisKey(params, targets)
+  const [error, setError] = useAnalysisState<string>(scope)
+  const [wcd, setWcd] = useAnalysisState<WcdResult>(scope)
   const [wcdLoading, setWcdLoading] = useState(false)
-  const [imp, setImp] = useState<WickedImportanceResult | null>(null)
+  const [imp, setImp] = useAnalysisState<WickedImportanceResult>(scope)
   const [impLoading, setImpLoading] = useState(false)
-  const [corners, setCorners] = useState<WickedCornersResult | null>(null)
+  const [corners, setCorners] = useAnalysisState<WickedCornersResult>(scope)
   const [cornersLoading, setCornersLoading] = useState(false)
-  const [flow, setFlow] = useState<WickedFlowResult | null>(null)
+  const [flow, setFlow, , isCurrent] = useAnalysisState<WickedFlowResult>(scope)
   const [flowLoading, setFlowLoading] = useState(false)
 
   const anyLoading = wcdLoading || impLoading || cornersLoading || flowLoading
@@ -42,47 +46,52 @@ export default function WickedPage({ params, targets, busy, apiUp, onApply }: Pr
 
   const runWcd = async () => {
     setWcdLoading(true)
+    setError(null)
     try {
       const r = await wickedWcd(params, targets)
       if (!r.error) setWcd(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setWcdLoading(false)
     }
   }
   const runImp = async () => {
     setImpLoading(true)
+    setError(null)
     try {
       const r = await wickedImportance(params, targets)
       if (!r.error) setImp(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setImpLoading(false)
     }
   }
   const runCorners = async () => {
     setCornersLoading(true)
+    setError(null)
     try {
       const r = await wickedCorners(params, targets)
       if (!r.error) setCorners(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setCornersLoading(false)
     }
   }
   const runFlow = async () => {
     setFlowLoading(true)
+    setError(null)
     try {
       const r = await wickedFullflow(params, targets)
+      if (!isCurrent()) return
       if (!r.error) {
-        setFlow(r)
+        setFlow(r, analysisKey(r.final_params, targets))
         onApply(r.final_params) // land the flow's sized design in the editor
       }
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setFlowLoading(false)
     }
@@ -90,8 +99,9 @@ export default function WickedPage({ params, targets, busy, apiUp, onApply }: Pr
 
   return (
     <div className="flex flex-col gap-4">
+      {error && <div className="analysis-notice" role="alert">{error}</div>}
       {/* WCD + importance sampling side by side */}
-      <div className="grid gap-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="analysis-columns grid gap-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
         <div className="rounded-2xl p-5 flex flex-col gap-3" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
           <div className="flex items-center justify-between gap-3">
             <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Worst-case distance · β</div>
@@ -172,7 +182,7 @@ export default function WickedPage({ params, targets, busy, apiUp, onApply }: Pr
       {/* worst-case corners */}
       <div className="rounded-2xl p-5 flex flex-col gap-3" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
         <div className="flex items-center justify-between gap-3">
-          <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Worst-case corner extraction · 27-corner PVT grid</div>
+          <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Worst-case corner extraction · 45-corner PVT grid</div>
           <button onClick={runCorners} disabled={disabled} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
             {cornersLoading ? 'sweeping… (~30s)' : '◫ extract corners'}
           </button>
@@ -251,7 +261,7 @@ export default function WickedPage({ params, targets, busy, apiUp, onApply }: Pr
           </div>
         ) : (
           <p className="text-sm" style={{ color: 'var(--muted)' }}>
-            End-to-end robustness sign-off: feasibility check → sensitivity-guided nominal refinement → worst-case-operation refinement → 27-corner WCO → WCD/yield proxy → mismatch budget → importance-sampled high-sigma check → parameter screening → post-layout WCD (~3 min). The refined sizing lands in the editor.
+            End-to-end robustness sign-off: feasibility check → sensitivity-guided nominal refinement → worst-case-operation refinement → 45-corner WCO → WCD/yield proxy → mismatch budget → importance-sampled high-sigma check → parameter screening → post-layout WCD (~3 min). The refined sizing lands in the editor.
           </p>
         )}
       </div>

@@ -1,8 +1,8 @@
+import { requestJson } from './execution'
 import type { ResolutionResult, BerResult, VcoWickedMismatch, VcoWickedVerdict, VcoWickedWcd, VcoWickedYieldSweep, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, OptimizeResult, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Target, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPostLayout, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, Waveform, WcdResult, WickedCornersResult, WickedFlowResult, WickedImportanceResult, YieldResult } from './types'
 
 async function post<T>(path: string, params: Params): Promise<T> {
-  const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
-  return r.json()
+  return requestJson(path, { params })
 }
 export const metastability = (params: Params) => post<MetastabilityResult>('/api/metastability', params)
 export const ber = (params: Params) => post<BerResult>('/api/ber', params)
@@ -12,27 +12,24 @@ export const maxfclk = (params: Params) => post<MaxFclkResult>('/api/maxfclk', p
 export const resolution = (params: Params) => post<ResolutionResult>('/api/resolution', params)
 
 export async function vcoSimulate(params: VcoParams, doTuning = false): Promise<VcoResult> {
-  const r = await fetch('/api/vco/simulate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, do_tuning: doTuning }) })
-  return r.json()
+  return requestJson('/api/vco/simulate', { params, do_tuning: doTuning })
 }
 export async function vcoTuning(params: VcoParams): Promise<VcoTuning> {
-  const r = await fetch('/api/vco/tuning', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
-  return r.json()
+  return requestJson('/api/vco/tuning', { params })
 }
 export async function vcoOptimize(params: VcoParams, targetFGhz: number): Promise<VcoOptimizeResult> {
-  const r = await fetch('/api/vco/optimize', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, targets: { f_ghz: targetFGhz } }) })
-  return r.json()
+  return requestJson('/api/vco/optimize', { params, targets: { f_ghz: targetFGhz } })
 }
 // VCO WiCkeD — targets/샘플 수를 함께 보내는 호출
 const wpost = <T,>(path: string, params: VcoParams, extra: Record<string, unknown> = {}): Promise<T> =>
-  fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, ...extra }) }).then((r) => r.json())
+  requestJson<T>(path, { params, ...extra })
 export const vcoWickedVerdict = (p: VcoParams, targets?: Record<string, number>) => wpost<VcoWickedVerdict>('/api/vco/wicked/verdict', p, { targets })
 export const vcoWickedWcd = (p: VcoParams, targets?: Record<string, number>) => wpost<VcoWickedWcd>('/api/vco/wicked/wcd', p, { targets, n_samples: 12 })
 export const vcoWickedMismatch = (p: VcoParams) => wpost<VcoWickedMismatch>('/api/vco/wicked/mismatch', p, { n: 10 })
 export const vcoWickedYieldsweep = (p: VcoParams, targets?: Record<string, number>) => wpost<VcoWickedYieldSweep>('/api/vco/wicked/yieldsweep', p, { targets, n_points: 5, n_mc: 4 })
 
 const vpost = <T,>(path: string, params: VcoParams): Promise<T> =>
-  fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) }).then((r) => r.json())
+  requestJson<T>(path, { params })
 export const vcoWaveform = (p: VcoParams) => vpost<VcoWaveform>('/api/vco/waveform', p)
 export const vcoPvt = (p: VcoParams) => vpost<VcoPvtResult>('/api/vco/pvt', p)
 export const vcoPushing = (p: VcoParams) => vpost<VcoPushing>('/api/vco/pushing', p)
@@ -40,12 +37,12 @@ export const vcoPhaseNoise = (p: VcoParams) => vpost<VcoPhaseNoise>('/api/vco/ph
 export const vcoLayout = (p: VcoParams) => vpost<LayoutResult>('/api/vco/layout', p)
 export const vcoPostlayout = (p: VcoParams) => vpost<VcoPostLayout>('/api/vco/postlayout', p)
 export const vcoPareto = (p: VcoParams) => vpost<VcoParetoResult>('/api/vco/pareto', p)
-export const vcoFullflow = (p: VcoParams) => vpost<VcoFullflow>('/api/vco/fullflow', p)
+export const vcoFullflow = (p: VcoParams, targetFGhz = 1.5) => wpost<VcoFullflow>('/api/vco/fullflow', p, { targets: { f_ghz: targetFGhz } })
 // Comparator WiCkeD robustness bridge — body carries params + spec targets
 // (+ knobs). Distinct from the VCO's `wpost` above, which takes VcoParams and
 // merges `extra`; this one posts a body the caller has already assembled.
 const cwpost = <T,>(path: string, body: Record<string, unknown>): Promise<T> =>
-  fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json())
+  requestJson<T>(path, body)
 export const wickedWcd = (params: Params, targets: Record<string, number>, nSamples = 24) =>
   cwpost<WcdResult>('/api/wicked/wcd', { params, targets, n_samples: nSamples })
 export const wickedImportance = (params: Params, targets: Record<string, number>, n = 24) =>
@@ -56,88 +53,45 @@ export const wickedFullflow = (params: Params, targets: Record<string, number>) 
   cwpost<WickedFlowResult>('/api/wicked/fullflow', { params, targets, importance_samples: 8 })
 
 export async function yieldRun(params: Params, targets: Record<string, number>, n = 48): Promise<YieldResult> {
-  const r = await fetch('/api/yield', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params, targets, n }) })
-  return r.json()
+  return requestJson('/api/yield', { params, targets, n })
 }
 
 export async function health(): Promise<{ ok: boolean; ngspice: string }> {
-  const r = await fetch('/api/health')
-  return r.json()
+  return requestJson('/api/health')
 }
 
 export async function getDefaults(): Promise<{ defaults: Params; targets: Record<string, Target> }> {
-  const r = await fetch('/api/defaults')
-  return r.json()
+  return requestJson('/api/defaults')
 }
 
 export async function simulate(params: Params, doOffset: boolean): Promise<SimResult> {
-  const r = await fetch('/api/simulate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params, do_offset: doOffset }),
-  })
-  return r.json()
+  return requestJson('/api/simulate', { params, do_offset: doOffset })
 }
 
 export async function optimize(params: Params, targets: Record<string, number>): Promise<OptimizeResult> {
-  const r = await fetch('/api/optimize', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params, targets }),
-  })
-  return r.json()
+  return requestJson('/api/optimize', { params, targets })
 }
 
 export async function waveform(params: Params): Promise<Waveform> {
-  const r = await fetch('/api/waveform', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params }),
-  })
-  return r.json()
+  return requestJson('/api/waveform', { params })
 }
 
 export async function postlayout(params: Params): Promise<PostLayout> {
-  const r = await fetch('/api/postlayout', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params }),
-  })
-  return r.json()
+  return requestJson('/api/postlayout', { params })
 }
 
 export async function pvt(params: Params): Promise<PvtResult> {
-  const r = await fetch('/api/pvt', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params }),
-  })
-  return r.json()
+  return requestJson('/api/pvt', { params })
 }
 
 export async function pareto(params: Params, targets: Record<string, number>): Promise<ParetoResult> {
-  const r = await fetch('/api/pareto', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params, targets }),
-  })
-  return r.json()
+  return requestJson('/api/pareto', { params, targets })
 }
 
 export async function fullflow(params: Params, targets: Record<string, number>): Promise<FlowResult> {
-  const r = await fetch('/api/fullflow', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params, targets }),
-  })
-  return r.json()
+  return requestJson('/api/fullflow', { params, targets })
 }
 
 export async function layout(params: Params): Promise<LayoutResult> {
-  const r = await fetch('/api/layout', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params }),
-  })
-  return r.json()
+  return requestJson('/api/layout', { params })
 }

@@ -12,6 +12,7 @@ Run:  python3 server.py [port]     (default 8770)
 The Vite dev server proxies /api to this port (see vite.config.ts).
 """
 import copy
+import hashlib
 import gzip
 import json
 import math
@@ -19,6 +20,7 @@ import mimetypes
 import os
 import sys
 import threading
+from urllib.parse import unquote, parse_qs, urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -32,6 +34,7 @@ _GZIP_MIN = 1024
 _GZIP_LEVEL = 6
 # The built assets are content-hashed and immutable, so their compressed bytes
 # are worth keeping instead of re-gzipping ~370 KiB of JS on every page load.
+# Bounded cache of original and compressed assets; no repeated file reads.
 _static_gz = {}
 _static_gz_lock = threading.Lock()
 
@@ -49,6 +52,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 import run_sim  # noqa: E402
 import layout  # noqa: E402
+import physical_reference  # noqa: E402
 import vco_sim  # noqa: E402
 import wicked  # noqa: E402
 import vco_wicked  # noqa: E402
@@ -1574,7 +1578,7 @@ def vco_design_brief(params, targets=None):
 
 
 def vco_pvt(params):
-    """VCO across 27 PVT corners: process SS/TT/FF (±50mV Vth via delvto) ×
+    """VCO across 45 PVT corners: process SS/SF/TT/FS/FF ×
     temp −40/27/125 × VDD 0.9/1.0/1.1×. Frequency + does-it-oscillate per corner."""
     p = vco_sim._full(params)
     base_vdd = float(p["vdd"])
@@ -1738,6 +1742,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _accepts_gzip(self):
+        qualities = {}
+        for entry in self.headers.get("Accept-Encoding", "").split(","):
+            name, *params = entry.strip().lower().split(";")
+            quality = 1.0
+            for param in params:
+                key, _, value = param.strip().partition("=")
+                if key == "q":
+                    try:
+                        quality = float(value)
+                    except ValueError:
+                        quality = 0.0
+            qualities[name] = quality if 0 <= quality <= 1 else 0.0
+        return qualities.get("gzip", qualities.get("*", 0)) > 0
+
     def _send(self, body, ctype, code=200, headers=(), precompressed=None):
         """One exit for every response, so compression is decided in one place.
 
@@ -1746,7 +1765,7 @@ class Handler(BaseHTTPRequestHandler):
         wire. Below the threshold the framing overhead outweighs the saving, so
         small bodies go out as-is."""
         enc = None
-        if len(body) >= _GZIP_MIN and "gzip" in self.headers.get("Accept-Encoding", ""):
+        if len(body) >= _GZIP_MIN and self._accepts_gzip():
             if precompressed is not None:
                 body, enc = precompressed, "gzip"
             else:
@@ -1756,7 +1775,7 @@ class Handler(BaseHTTPRequestHandler):
         self._cors()
         if enc:
             self.send_header("Content-Encoding", enc)
-            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         for k, v in headers:
             self.send_header(k, v)
@@ -1783,6 +1802,26 @@ class Handler(BaseHTTPRequestHandler):
                         "availability": run_sim.model_availability()})
         elif path == "/api/defaults":
             self._json({"defaults": run_sim.DEFAULT_PARAMS, "targets": SPEC_TARGETS})
+        elif path.startswith("/api/physical/"):
+            query = parse_qs(urlsplit(self.path).query)
+            try:
+                if path == "/api/physical/cases":
+                    data = physical_reference.list_cases()
+                elif path == "/api/physical/case":
+                    data = physical_reference.case_summary(query.get("file", [""])[0])
+                elif path == "/api/physical/candidate":
+                    data = physical_reference.candidate(query.get("file", [""])[0],
+                        int(query.get("iteration", ["0"])[0]), query.get("tag", [""])[0])
+                else:
+                    self._json({"error": "not found"}, 404)
+                    return
+                self._json(data)
+            except FileNotFoundError:
+                self._json({"error": "Reference case not found"}, 404)
+            except (ValueError, TypeError, KeyError) as exc:
+                self._json({"error": str(exc)}, 400)
+            except OSError:
+                self._json({"error": "Cannot read the reference store"}, 503)
         elif path.startswith("/api/"):
             self._json({"error": "not found"}, 404)
         else:
@@ -1793,40 +1832,54 @@ class Handler(BaseHTTPRequestHandler):
         if not os.path.isdir(DIST):
             self._json({"error": "no build; run: npm run build"}, 503)
             return
-        rel = "index.html" if path == "/" else path.lstrip("/")
-        target = os.path.normpath(os.path.join(DIST, rel))
-        if not target.startswith(DIST):  # path traversal guard
+        root = os.path.realpath(DIST)
+        rel = "index.html" if path == "/" else unquote(path).lstrip("/")
+        target = os.path.realpath(os.path.join(root, rel))
+        if os.path.commonpath((root, target)) != root:
             self._json({"error": "forbidden"}, 403)
             return
         if not os.path.isfile(target):
-            target = os.path.join(DIST, "index.html")  # SPA fallback
+            if rel.startswith("assets/") or os.path.splitext(rel)[1]:
+                self._json({"error": "not found"}, 404)
+                return
+            target = os.path.realpath(os.path.join(root, "index.html"))
+            if os.path.commonpath((root, target)) != root:
+                self._json({"error": "forbidden"}, 403)
+                return
         try:
             st = os.stat(target)
-            with open(target, "rb") as fh:
-                body = fh.read()
+            key = (target, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+            with _static_gz_lock:
+                asset = _static_gz.get(key)
+                if asset is None:
+                    with open(target, "rb") as fh:
+                        body = fh.read()
+                    gz = gzip.compress(body, _GZIP_LEVEL, mtime=0) if len(body) >= _GZIP_MIN else None
+                    asset = (body, gz, hashlib.sha256(body).hexdigest())
+                    # Bound retained bytes as well as entries, including old builds.
+                    if len(_static_gz) >= 64 or sum(len(v[0]) + len(v[1] or b"") for v in _static_gz.values()) + len(body) + len(gz or b"") > 32 * 1024 * 1024:
+                        _static_gz.clear()
+                    if len(body) + len(gz or b"") <= 32 * 1024 * 1024:
+                        _static_gz[key] = asset
         except OSError:
             self._json({"error": "not found"}, 404)
             return
-        # keep the compressed bytes for the (immutable) built assets — mtime+size
-        # in the key means an edited or rebuilt file is never served stale
-        gz, gzkey = None, (target, st.st_mtime_ns, st.st_size)
-        if len(body) >= _GZIP_MIN:
-            with _static_gz_lock:
-                gz = _static_gz.get(gzkey)
-            if gz is None:
-                gz = gzip.compress(body, _GZIP_LEVEL)
-                with _static_gz_lock:
-                    if len(_static_gz) > 64:     # a build has a handful of files
-                        _static_gz.clear()
-                    _static_gz[gzkey] = gz
+        body, gz, digest = asset
+        etag = 'W/"' + digest + '"'
         ctype = mimetypes.guess_type(target)[0] or "application/octet-stream"
-        # index.html 은 절대 캐시 금지(회로 변경 후 '옛 화면' 재발 방지) —
-        # 해시된 assets/* 는 immutable 캐시 허용
-        hdrs = []
-        if target.endswith("index.html"):
-            hdrs.append(("Cache-Control", "no-cache, must-revalidate"))
-        elif "/assets/" in target.replace(os.sep, "/"):
-            hdrs.append(("Cache-Control", "public, max-age=31536000, immutable"))
+        cache = "no-cache, must-revalidate"
+        if os.path.relpath(target, root).startswith("assets" + os.sep):
+            cache = "public, max-age=31536000, immutable"
+        hdrs = [("Cache-Control", cache), ("ETag", etag)]
+        candidates = self.headers.get("If-None-Match", "").split(",")
+        if any(tag.strip() == "*" or tag.strip().removeprefix("W/") == etag[2:] for tag in candidates):
+            self.send_response(304)
+            self._cors()
+            self.send_header("Vary", "Accept-Encoding")
+            for k, v in hdrs:
+                self.send_header(k, v)
+            self.end_headers()
+            return
         self._send(body, ctype, 200, hdrs, precompressed=gz)
 
     def _read_json(self):
