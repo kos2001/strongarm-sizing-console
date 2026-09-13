@@ -71,8 +71,42 @@ metastability τ, layout DRC + parasitic extraction, BER monotonicity,
 sensitivity coverage, and optimizer convergence.
 
 ```sh
-cd strongarm_sim && python3 -m pytest tests/ -q      # ~2 min (runs real ngspice)
+cd strongarm_sim && python3 -m pytest tests/ -q      # runs real ngspice; duration depends on host
 ```
+
+## Workspace and execution workflow
+
+The explorer groups each domain into Design editor, Characterization, Optimization,
+Variation and Implementation. Device inputs, schematic and nominal results share
+one editor. Implementation → Layout also reads actual recorded P&R artifacts from
+the sibling `ppa-eda-agent` repository. See [EDA workspace guide](../docs/eda-workspace.md)
+for the layout data sources, verification scope and integration tests.
+
+Inputs, targets, design names, language and theme are saved in the current browser.
+Use **Save file** to export a named `.strongarm.json` design and **Open file** to
+validate and preview a design before applying it. Undo restores the preceding
+inputs. Measurements are tied to the inputs and targets used for that run;
+editing either prevents stale results from appearing current.
+
+The execution panel shows running tasks, elapsed time, errors and the latest
+20 completed tasks. VCO and robustness work survives navigation within the tab;
+**Open workspace** returns to it. Identical pending requests share one operation.
+Running work has a browser leave guard, but does not resume after a reload or
+server restart. Completion indicates a successful request, not a spec pass.
+
+From the project root, after starting a production server on port 8771:
+
+```sh
+npm --prefix webapp test
+npm --prefix webapp run test:browser
+npm --prefix webapp run test:live
+```
+
+Browser checks require Playwright. Set `PLAYWRIGHT_MODULE` to its `index.mjs`
+path if installed outside the project, and `CONSOLE_URL` to override
+`http://127.0.0.1:8771`. The live check uses real ngspice and writes measurements
+and screenshots to `/tmp/strongarm-live-qa` by default.
+See [performance measurements and completion audit](../docs/product-upgrade.md).
 
 ## What it does
 
@@ -134,11 +168,11 @@ cd strongarm_sim && python3 -m pytest tests/ -q      # ~2 min (runs real ngspice
   end-to-end: DE+GP sizing → MC offset confirm → post-layout parasitic re-sim →
   PVT sign-off → **GDSII layout + rule DRC**, with a per-stage verdict, overall
   SIGNED-OFF / NOT-CLEAN, and the final layout rendered inline.
-- **PVT corners** (PVT page, `/api/pvt`) — worst-case sign-off across 27 corners:
-  process SS/TT/FF (±50 mV Vth skew via BSIM4 `delvto`) × temperature
+- **PVT corners** (PVT page, `/api/pvt`) — worst-case sign-off across 45 corners:
+  process SS/SF/TT/FS/FF (independent NMOS/PMOS Vth skew) × temperature
   −40/27/125 °C (`.option temp`) × voltage 0.9/1.0/1.1×VDD. Shows a colored
   corner grid + worst-case decision/power vs the P1 targets — nominal-passing
-  sizings often miss at the slow-cold-low-V corner. All 27 corners run in
+  sizings often miss at the slow-cold-low-V corner. All 45 corners run in
   parallel (`ThreadPoolExecutor`; ngspice is a subprocess so it releases the
   GIL) — ~0.9 s instead of serial. DE/NSGA-II/full-flow are parallelized too.
 - **Metastability** (Metastability page, `/api/metastability`) — decision time

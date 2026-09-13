@@ -37,7 +37,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 def _find_ngspice():
     import shutil
@@ -595,11 +595,12 @@ _NG_CACHE_MAX = 4096 if os.environ.get("NGSPICE_CACHE") is None else int(os.envi
 _ng_cache = {}
 _ng_order = []                      # LRU order, newest last; guarded by _ng_lock
 _ng_lock = threading.Lock()
-_ng_stats = {"hits": 0, "misses": 0}
+_ng_stats = {"hits": 0, "misses": 0, "shared": 0}
+_ng_pending = {}                    # identical in-flight deterministic decks
 
 # Decks that write files (waveform capture, user `wrdata` decks) have a side
 # effect beyond their stdout, so a hit would silently skip producing the file.
-_NG_SIDE_EFFECT = re.compile(r"^\s*(wrdata|write|print\s*>)", re.MULTILINE)
+_NG_SIDE_EFFECT = re.compile(r"^\s*(wrdata|write|print\s*>)", re.MULTILINE | re.IGNORECASE)
 
 
 def pmap(fn, items):
@@ -619,21 +620,7 @@ def ngspice_cache_stats():
     rather than a silent behaviour change."""
     with _ng_lock:
         return {**_ng_stats, "size": len(_ng_cache), "max": _NG_CACHE_MAX,
-                "max_procs": _NG_SLOTS}
-
-
-def _ng_cache_get(key):
-    with _ng_lock:
-        if key not in _ng_cache:
-            _ng_stats["misses"] += 1
-            return None
-        _ng_stats["hits"] += 1
-        try:
-            _ng_order.remove(key)
-        except ValueError:
-            pass
-        _ng_order.append(key)
-        return _ng_cache[key]
+                "max_procs": _NG_SLOTS, "in_flight": len(_ng_pending)}
 
 
 def _ng_cache_put(key, val):
@@ -648,23 +635,51 @@ def _ng_cache_put(key, val):
 def _run(netlist, cache=True):
     cacheable = cache and _NG_CACHE_MAX > 0 and not _NG_SIDE_EFFECT.search(netlist)
     key = hashlib.sha1(netlist.encode()).hexdigest() if cacheable else None
+    pending = None
     if key is not None:
-        hit = _ng_cache_get(key)
-        if hit is not None:
-            return hit
-    with _ng_gate:                  # bound total concurrent ngspice, not per pool
-        with tempfile.NamedTemporaryFile("w", suffix=".sp", delete=False) as f:
-            f.write(netlist)
-            path = f.name
-        try:
-            r = subprocess.run([NGSPICE, "-b", path], capture_output=True,
-                               text=True, timeout=60)
-            out = r.stdout + "\n" + r.stderr
-        finally:
-            os.unlink(path)
-    if key is not None:
-        _ng_cache_put(key, out)
-    return out
+        # Register the owner atomically with the lookup. Followers never occupy
+        # simulator slots; independent decks can still use the whole gate.
+        with _ng_lock:
+            if key in _ng_cache:
+                _ng_stats["hits"] += 1
+                _ng_order.remove(key)
+                _ng_order.append(key)
+                return _ng_cache[key]
+            pending = _ng_pending.get(key)
+            owner = pending is None
+            if owner:
+                pending = _ng_pending[key] = Future()
+                _ng_stats["misses"] += 1
+            else:
+                _ng_stats["shared"] += 1
+        if not owner:
+            return pending.result()
+    try:
+        with _ng_gate:
+            with tempfile.NamedTemporaryFile("w", suffix=".sp", delete=False) as f:
+                f.write(netlist)
+                path = f.name
+            try:
+                r = subprocess.run([NGSPICE, "-b", path], capture_output=True,
+                                   text=True, timeout=60)
+                out = r.stdout + "\n" + r.stderr
+            finally:
+                os.unlink(path)
+        if key is not None:
+            # Preserve diagnostic output for this request, but let a later call
+            # retry failed processes (e.g. a temporarily unavailable model).
+            if r.returncode == 0:
+                _ng_cache_put(key, out)
+            pending.set_result(out)
+        return out
+    except BaseException as exc:
+        if pending is not None:
+            pending.set_exception(exc)
+        raise
+    finally:
+        if key is not None:
+            with _ng_lock:
+                _ng_pending.pop(key, None)
 
 
 def _parse(out, key):

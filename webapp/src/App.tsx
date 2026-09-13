@@ -1,29 +1,37 @@
-import { useEffect, useRef, useState } from 'react'
+import LayoutWorkspace from './components/LayoutWorkspace'
+import AnalysisBoundary from './components/AnalysisBoundary'
+import { analysisKey, comparatorVerdicts } from './analysis'
+import { useAnalysisState } from './useAnalysisState'
+import { requestJson, getExecutions, subscribeExecutions } from './execution'
+import ExecutionPanel, { ElapsedTime } from './components/ExecutionPanel'
+import { useDraft } from './useDraft'
+import ProjectToolbar from './components/ProjectToolbar'
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ResolutionResult, BerResult, ProbitResult, Device, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
 import { DEVICE_META } from './types'
-import { ber, fullflow, getDefaults, health, layout, maxfclk, metastability, resolution as apiResolution, optimize, pareto, postlayout, pvt, sensitivity, simulate, waveform, yieldRun } from './api'
-import BerChart from './components/BerChart'
+import { fullflow, getDefaults, health, layout, maxfclk, resolution as apiResolution, optimize, pareto, postlayout, pvt, sensitivity, simulate, waveform, yieldRun } from './api'
+const BerChart = lazy(() => import('./components/BerChart'))
 import DeviceEditor from './components/DeviceEditor'
-import FclkChart from './components/FclkChart'
+const FclkChart = lazy(() => import('./components/FclkChart'))
 import Gauge from './components/Gauge'
 import StatusStrip from './components/StatusStrip'
-import LayoutView from './components/LayoutView'
-import MetastabilityChart from './components/MetastabilityChart'
-import ResolutionChart from './components/ResolutionChart'
-import MonteCarloChart from './components/MonteCarloChart'
-import ParetoChart from './components/ParetoChart'
+const LayoutView = lazy(() => import('./components/LayoutView'))
+const MetastabilityChart = lazy(() => import('./components/MetastabilityChart'))
+const ResolutionChart = lazy(() => import('./components/ResolutionChart'))
+const MonteCarloChart = lazy(() => import('./components/MonteCarloChart'))
+const ParetoChart = lazy(() => import('./components/ParetoChart'))
 import PageHelp from './components/PageHelp'
-import Schematic from './components/Schematic'
+const Schematic = lazy(() => import('./components/Schematic'))
 import { downloadNetlist } from './netlist'
 import NetlistImport from './components/NetlistImport'
-import AgentSizing from './components/AgentSizing'
+const AgentSizing = lazy(() => import('./components/AgentSizing'))
 import AgentDock from './components/AgentDock'
-import SensitivityChart from './components/SensitivityChart'
-import VcoPage from './components/VcoPage'
-import WaveformChart from './components/WaveformChart'
-import WickedPage from './components/WickedPage'
-import YieldView from './components/YieldView'
-import { NAV_LABELS, NAV_SUBS, t, UI, type Bi, type Lang } from './i18n'
+const SensitivityChart = lazy(() => import('./components/SensitivityChart'))
+const VcoPage = lazy(() => import('./components/VcoPage'))
+const WaveformChart = lazy(() => import('./components/WaveformChart'))
+const WickedPage = lazy(() => import('./components/WickedPage'))
+const YieldView = lazy(() => import('./components/YieldView'))
+import { NAV_LABELS, t, UI, type Bi, type Lang } from './i18n'
 
 // metric metadata is fixed; the *limits* are editable (see spec profiles below)
 type TargetKey = 'decision_time_ps' | 'power_uw' | 'offset_sigma_mv' | 'noise_uv_rms'
@@ -74,61 +82,23 @@ const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = 
 type Page = 'sizing' | 'circuit' | 'resolution' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'wicked' | 'layout' | 'flow'
   | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopareto' | 'vcopn' | 'vcopvt' | 'vcoyield' | 'vcopushing' | 'vcolayout' | 'vcoflow'
 type Domain = 'comparator' | 'vco'
-// Nav is grouped by the stage of the design it belongs to, not listed flat. Fifteen
-// equal-looking entries gave no clue that Resolution / Metastability / BER all read the
-// same amplitude axis, or that Monte-Carlo / PVT / Yield / WiCkeD are four depths of the
-// same variation question — so a newcomer had to open pages to find out what they were.
-// The group label carries that meaning, and the order is the order you actually work in.
-type NavGroup = { label: Bi; items: { id: Page; glyph: string }[] }
-
-const NAV_COMPARATOR: NavGroup[] = [
-  {
-    label: { ko: '1 · 설계 입력', en: '1 · Design input' },
-    items: [{ id: 'sizing', glyph: '▦' }, { id: 'circuit', glyph: '⎓' }],
-  },
-  {
-    label: { ko: '2 · 무엇을 하는 회로인가', en: '2 · What it does' },
-    items: [{ id: 'resolution', glyph: '◎' }, { id: 'metastability', glyph: '⧗' },
-            { id: 'ber', glyph: '⊹' }, { id: 'maxfclk', glyph: '⎍' }],
-  },
-  {
-    label: { ko: '3 · 더 좋게 만들기', en: '3 · Make it better' },
-    items: [{ id: 'optimizer', glyph: '◴' }, { id: 'sensitivity', glyph: '⇕' },
-            { id: 'pareto', glyph: '⤢' }],
-  },
-  {
-    label: { ko: '4 · 변동에도 살아남는가', en: '4 · Will it survive variation' },
-    items: [{ id: 'montecarlo', glyph: '∿' }, { id: 'pvt', glyph: '◫' },
-            { id: 'yield', glyph: '⊞' }, { id: 'wicked', glyph: 'β' }],
-  },
-  {
-    label: { ko: '5 · 사인오프', en: '5 · Sign-off' },
-    items: [{ id: 'flow', glyph: '⇉' }, { id: 'layout', glyph: '▧' }],
-  },
+// Each workspace owns related analyses; leaf views stay addressable for run history.
+type Workspace = { id: string; label: Bi; glyph: string; pages: Page[] }
+const NAV_COMPARATOR: Workspace[] = [
+  { id: 'design', label: { ko: '설계 편집', en: 'Design editor' }, glyph: '⎓', pages: ['sizing', 'circuit'] },
+  { id: 'characterization', label: { ko: '특성 분석', en: 'Characterization' }, glyph: '∿', pages: ['resolution', 'metastability', 'ber', 'maxfclk'] },
+  { id: 'optimization', label: { ko: '최적화', en: 'Optimization' }, glyph: '◴', pages: ['optimizer', 'sensitivity', 'pareto'] },
+  { id: 'variation', label: { ko: '변동성 검증', en: 'Variation' }, glyph: '◫', pages: ['pvt', 'montecarlo', 'yield', 'wicked'] },
+  { id: 'implementation', label: { ko: '구현 · 검증', en: 'Implementation' }, glyph: '▧', pages: ['layout', 'flow'] },
 ]
-const NAV_VCO: NavGroup[] = [
-  {
-    label: { ko: '1 · 설계 입력', en: '1 · Design input' },
-    items: [{ id: 'vcocircuit', glyph: '⎓' }, { id: 'vco', glyph: '∿' }],
-  },
-  {
-    label: { ko: '2 · 더 좋게 만들기', en: '2 · Make it better' },
-    items: [{ id: 'vcoopt', glyph: '◴' }, { id: 'vcopareto', glyph: '⤢' }],
-  },
-  {
-    label: { ko: '3 · 신호 품질', en: '3 · Signal quality' },
-    items: [{ id: 'vcopn', glyph: '⌇' }, { id: 'vcopushing', glyph: '⇅' }],
-  },
-  {
-    label: { ko: '4 · 변동에도 살아남는가', en: '4 · Will it survive variation' },
-    items: [{ id: 'vcopvt', glyph: '◫' }, { id: 'vcoyield', glyph: '⊞' }],
-  },
-  {
-    label: { ko: '5 · 사인오프', en: '5 · Sign-off' },
-    items: [{ id: 'vcoflow', glyph: '⇉' }, { id: 'vcolayout', glyph: '▧' }],
-  },
+const NAV_VCO: Workspace[] = [
+  { id: 'design', label: { ko: '설계 편집', en: 'Design editor' }, glyph: '⎓', pages: ['vco', 'vcocircuit'] },
+  { id: 'optimization', label: { ko: '최적화', en: 'Optimization' }, glyph: '◴', pages: ['vcoopt', 'vcopareto'] },
+  { id: 'characterization', label: { ko: '특성 분석', en: 'Characterization' }, glyph: '∿', pages: ['vcopn', 'vcopushing'] },
+  { id: 'variation', label: { ko: '변동성 검증', en: 'Variation' }, glyph: '◫', pages: ['vcopvt', 'vcoyield'] },
+  { id: 'implementation', label: { ko: '구현 · 검증', en: 'Implementation' }, glyph: '▧', pages: ['vcolayout', 'vcoflow'] },
 ]
-const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vcocircuit' }
+const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vco' }
 const DOMAIN_OF: Record<string, Domain> = { vcocircuit: 'vco', vco: 'vco', vcoopt: 'vco', vcopareto: 'vco', vcopn: 'vco', vcopvt: 'vco', vcoyield: 'vco', vcopushing: 'vco', vcolayout: 'vco', vcoflow: 'vco' }
 const VCO_VIEW: Record<string, 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'> = { vcocircuit: 'circuit', vco: 'main', vcoopt: 'opt', vcopareto: 'pareto', vcopn: 'pn', vcopvt: 'pvt', vcoyield: 'yield', vcopushing: 'pushing', vcolayout: 'layout', vcoflow: 'flow' }
 const domainOf = (p: Page): Domain => DOMAIN_OF[p] ?? 'comparator'
@@ -141,63 +111,76 @@ interface HistoryItem {
 }
 
 export default function App() {
-  const [params, setParams] = useState<Params>(DEFAULTS)
-  const [profile, setProfile] = useState<string>('P1')
-  const [targets, setTargets] = useState<Targets>(SPEC_PROFILES[0].targets)
+  const [params, setParams, draft] = useDraft<Params>('comparator', DEFAULTS)
+  const [profile, setProfile] = useDraft<string>('comparator-profile', 'P1')
+  const [targets, setTargets] = useDraft<Targets>('comparator-targets', SPEC_PROFILES[0].targets)
+  const designKey = analysisKey(params)
+  const specKey = analysisKey(params, targets)
   const [doOffset, setDoOffset] = useState(true)
   const [running, setRunning] = useState(false)
   const [optimizing, setOptimizing] = useState(false)
-  const [elapsed, setElapsed] = useState(0)
-  const [result, setResult] = useState<SimResult | null>(null)
-  const [opt, setOpt] = useState<OptimizeResult | null>(null)
-  const [play, setPlay] = useState<{ steps: OptStep[]; idx: number; auto: boolean } | null>(null)
+  const [startedAt, setStartedAt] = useState(0)
+  const executions = useSyncExternalStore(subscribeExecutions, getExecutions)
+  const comparatorActive = executions.some(task => task.domain === 'comparator' && task.state === 'running')
+  const [resultData, setResult, resultStale] = useAnalysisState<SimResult>(designKey)
+  const result = resultData ? { ...resultData, verdicts: comparatorVerdicts(resultData, targets) } : null
+  const [opt, setOpt, , optimizationIsCurrent] = useAnalysisState<OptimizeResult>(specKey)
+  const [play, setPlay] = useAnalysisState<{ steps: OptStep[]; idx: number; auto: boolean }>(specKey)
   const [page, setPage] = useState<Page>('sizing')
-  const [wf, setWf] = useState<Waveform | null>(null)
-  const [wfBefore, setWfBefore] = useState<Waveform | null>(null)
-  const [mcBefore, setMcBefore] = useState<Offset | null>(null)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [wf, setWf] = useAnalysisState<Waveform>(designKey)
+  const [wfBefore, setWfBefore] = useAnalysisState<Waveform>(designKey)
+  const [mcBefore, setMcBefore] = useAnalysisState<Offset>(designKey)
   const [wfLoading, setWfLoading] = useState(false)
-  const [postLayout, setPostLayout] = useState<PostLayout | null>(null)
+  const [postLayout, setPostLayout] = useAnalysisState<PostLayout>(designKey)
   const [plLoading, setPlLoading] = useState(false)
-  const [pvtRes, setPvtRes] = useState<PvtResult | null>(null)
+  const [pvtRes, setPvtRes] = useAnalysisState<PvtResult>(specKey)
   const [pvtLoading, setPvtLoading] = useState(false)
-  const [paretoRes, setParetoRes] = useState<ParetoResult | null>(null)
+  const [paretoRes, setParetoRes] = useAnalysisState<ParetoResult>(specKey)
   const [paretoSel, setParetoSel] = useState<number | null>(null) // 파레토 front 선택점(상세 패널)
   const [paretoLoading, setParetoLoading] = useState(false)
-  const [flowRes, setFlowRes] = useState<FlowResult | null>(null)
+  const [flowRes, setFlowRes, , flowIsCurrent] = useAnalysisState<FlowResult>(specKey)
   const [flowLoading, setFlowLoading] = useState(false)
-  const [layoutRes, setLayoutRes] = useState<LayoutResult | null>(null)
+  const [layoutRes, setLayoutRes] = useAnalysisState<LayoutResult>(designKey)
   const [layoutLoading, setLayoutLoading] = useState(false)
-  const [metaRes, setMetaRes] = useState<MetastabilityResult | null>(null)
-  const [resRes, setResRes] = useState<ResolutionResult | null>(null)
+  const [metaRes, setMetaRes] = useAnalysisState<MetastabilityResult>(designKey)
+  const [resRes, setResRes] = useAnalysisState<ResolutionResult>(designKey)
   const [resLoading, setResLoading] = useState(false)
   const [metaSel, setMetaSel] = useState<number | null>(null) // 메타안정성 선택점(상세)
-  const [metaLoading, setMetaLoading] = useState(false)
-  const [berRes, setBerRes] = useState<BerResult | null>(null)
-  const [probitRes, setProbitRes] = useState<ProbitResult | null>(null)
+  const [berRes, setBerRes] = useAnalysisState<BerResult>(designKey)
+  const [probitRes, setProbitRes] = useAnalysisState<ProbitResult>(designKey)
   const [probitLoading, setProbitLoading] = useState(false)
-  const [berLoading, setBerLoading] = useState(false)
-  const [sensRes, setSensRes] = useState<SensitivityResult | null>(null)
+  const [sensRes, setSensRes] = useAnalysisState<SensitivityResult>(designKey)
   const [sensLoading, setSensLoading] = useState(false)
-  const [fclkRes, setFclkRes] = useState<MaxFclkResult | null>(null)
+  const [fclkRes, setFclkRes] = useAnalysisState<MaxFclkResult>(designKey)
   const [fclkLoading, setFclkLoading] = useState(false)
-  const [yieldRes, setYieldRes] = useState<YieldResult | null>(null)
+  const [yieldRes, setYieldRes] = useAnalysisState<YieldResult>(specKey)
   const [yieldLoading, setYieldLoading] = useState(false)
   const [history, setHistory] = useState<HistoryItem[]>([])
+  const [analysisError, setAnalysisError] = useAnalysisState<string>(specKey)
   const [apiUp, setApiUp] = useState<boolean | null>(null)
   const [ngspice, setNgspice] = useState('')
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark')
-  const [lang, setLang] = useState<Lang>('ko')
+  const [theme, setTheme] = useDraft<'dark' | 'light'>('theme', 'dark')
+  const [lang, setLang] = useDraft<Lang>('language', 'ko')
   const idRef = useRef(1)
-  const timerRef = useRef<number | null>(null)
+  const currentPage = useRef(page)
+  currentPage.current = page
+  const [vcoVisited, setVcoVisited] = useState(false)
+  const [wickedVisited, setWickedVisited] = useState(false)
+  useEffect(() => {
+    if (domainOf(page) === 'vco') setVcoVisited(true)
+    if (page === 'wicked') setWickedVisited(true)
+  }, [page])
 
   const loadWaveform = async (p: Params) => {
     setWfLoading(true)
+    setAnalysisError(null)
     setWfBefore(null) // single-trace mode (overlay only set by the optimizer)
     try {
       const w = await waveform(p)
       if (!w.error) setWf(w)
-    } catch {
-      /* leave previous waveform */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setWfLoading(false)
     }
@@ -205,11 +188,12 @@ export default function App() {
 
   const runPostLayout = async () => {
     setPlLoading(true)
+    setAnalysisError(null)
     try {
       const r = await postlayout(params)
       if (!r.error) setPostLayout(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setPlLoading(false)
     }
@@ -217,11 +201,12 @@ export default function App() {
 
   const runPvt = async () => {
     setPvtLoading(true)
+    setAnalysisError(null)
     try {
       const r = await pvt(params)
       if (!r.error) setPvtRes(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setPvtLoading(false)
     }
@@ -229,11 +214,12 @@ export default function App() {
 
   const runPareto = async () => {
     setParetoLoading(true)
+    setAnalysisError(null)
     try {
       const r = await pareto(params, targets)
       if (!r.error) setParetoRes(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setParetoLoading(false)
     }
@@ -241,14 +227,16 @@ export default function App() {
 
   const runFlow = async () => {
     setFlowLoading(true)
+    setAnalysisError(null)
     try {
       const r = await fullflow(params, targets)
+      if (!flowIsCurrent()) return
       if (!r.error) {
-        setFlowRes(r)
+        setFlowRes(r, analysisKey(r.final_params, targets))
         updateParams(r.final_params) // land the flow's sized design in the editor
       }
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setFlowLoading(false)
     }
@@ -256,11 +244,12 @@ export default function App() {
 
   const runLayout = async () => {
     setLayoutLoading(true)
+    setAnalysisError(null)
     try {
       const r = await layout(params)
       if (!r.error) setLayoutRes(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setLayoutLoading(false)
     }
@@ -270,54 +259,38 @@ export default function App() {
   // shared amplitude axis (see server.resolution_view)
   const runResolution = async () => {
     setResLoading(true)
+    setAnalysisError(null)
     try {
       const r = await apiResolution(params)
-      if (!r.error) setResRes(r)
-    } catch {
-      /* ignore */
+      if (!r.error) {
+        setResRes(r)
+        setMetaRes({ points: r.points, tau_ps: r.tau_ps, intercept_ps: r.intercept_ps, min_resolved_v: r.min_resolved_v })
+        setBerRes({ points: r.points, noise_uv_rms: r.sigma.noise_uv, offset_sigma_mv: r.sigma.offset_mv,
+          sigma_total_uv: r.sigma.total_uv, ber_target: r.ber_target,
+          min_input_noise_uv: r.markers_uv.min_input_noise, min_input_total_uv: r.markers_uv.min_input_total })
+      }
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setResLoading(false)
     }
   }
 
-  const runMeta = async () => {
-    setMetaLoading(true)
-    try {
-      const r = await metastability(params)
-      if (!r.error) setMetaRes(r)
-    } catch {
-      /* ignore */
-    } finally {
-      setMetaLoading(false)
-    }
-  }
-
   const runProbit = async () => {
     setProbitLoading(true)
+    setAnalysisError(null)
     try {
-      const r = await fetch('/api/noise/probit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params }) })
-      setProbitRes(await r.json())
+      setProbitRes(await requestJson<ProbitResult>('/api/noise/probit', { params }))
     } catch (e) { setProbitRes({ error: String(e) } as ProbitResult) } finally { setProbitLoading(false) }
   }
-  const runBer = async () => {
-    setBerLoading(true)
-    try {
-      const r = await ber(params)
-      if (!r.error) setBerRes(r)
-    } catch {
-      /* ignore */
-    } finally {
-      setBerLoading(false)
-    }
-  }
-
   const runSens = async () => {
     setSensLoading(true)
+    setAnalysisError(null)
     try {
       const r = await sensitivity(params)
       if (!r.error) setSensRes(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setSensLoading(false)
     }
@@ -325,11 +298,12 @@ export default function App() {
 
   const runFclk = async () => {
     setFclkLoading(true)
+    setAnalysisError(null)
     try {
       const r = await maxfclk(params)
       if (!r.error) setFclkRes(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setFclkLoading(false)
     }
@@ -337,11 +311,12 @@ export default function App() {
 
   const runYield = async () => {
     setYieldLoading(true)
+    setAnalysisError(null)
     try {
       const r = await yieldRun(params, targets, 48)
       if (!r.error) setYieldRes(r)
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setAnalysisError(e instanceof Error ? e.message : String(e))
     } finally {
       setYieldLoading(false)
     }
@@ -395,9 +370,10 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
-    void loadWaveform(DEFAULTS) // show the seed transient on first load
+    if (page === 'circuit' && !wf && !wfLoading && !comparatorActive) void loadWaveform(params)
+    // Fetch only when the waveform workspace is first opened.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [page])
 
   // step the schematic through the optimizer trajectory (one device change per tick)
   useEffect(() => {
@@ -422,67 +398,68 @@ export default function App() {
       })
       .catch(() => setApiUp(false))
     getDefaults()
-      .then((d) => d?.defaults && setParams(d.defaults))
+      .then((d) => {
+        if (!draft.restored && d?.defaults) setParams((current) => current === DEFAULTS ? d.defaults : current)
+      })
       .catch(() => {})
   }, [])
 
   const run = async (forceOffset = false) => {
     setRunning(true)
+    setAnalysisError(null)
     setMcBefore(null) // single distribution (before/after only from optimizer)
-    setElapsed(0)
-    const t0 = performance.now()
-    timerRef.current = window.setInterval(() => setElapsed((performance.now() - t0) / 1000), 100)
+    setStartedAt(Date.now())
     try {
       const res = await simulate(params, forceOffset || doOffset)
       setResult(res)
       if (!res.error) {
-        setHistory((h) => [{ id: idRef.current++, params: structuredClone(params), result: res, doOffset }, ...h].slice(0, 8))
+        setHistory((h) => [{ id: idRef.current++, params: structuredClone(params), result: { ...res, verdicts: comparatorVerdicts(res, targets) }, doOffset: forceOffset || doOffset }, ...h].slice(0, 8))
         void loadWaveform(params)
       }
     } catch (e) {
       setResult({ nominal: { decision_time_ps: null, power_uw: null, final_diff_v: null, functional: false }, verdicts: {}, error: String(e) })
     } finally {
-      if (timerRef.current) clearInterval(timerRef.current)
       setRunning(false)
     }
   }
 
   const runOptimize = async () => {
     setOptimizing(true)
+    setAnalysisError(null)
     setOpt(null)
-    setElapsed(0)
-    const t0 = performance.now()
-    timerRef.current = window.setInterval(() => setElapsed((performance.now() - t0) / 1000), 100)
+    setStartedAt(Date.now())
     try {
       // capture the "before" transient + a real Monte-Carlo offset on the starting design
       const beforeWf = await waveform(params).catch(() => null)
       const beforeSim = await simulate(params, true).catch(() => null)
       const res = await optimize(params, targets)
-      setOpt(res)
+      if (!optimizationIsCurrent()) return
       if (!res.error) {
-        setPlay({ steps: res.trajectory, idx: 0, auto: true }) // replay the search on the schematic
-        setPage('optimizer') // surface the search result
-        setMcBefore(beforeSim && !beforeSim.error ? beforeSim.offset ?? null : null)
+        const finalKey = analysisKey(res.final_params)
+        const finalSpecKey = analysisKey(res.final_params, targets)
+        setOpt(res, finalSpecKey)
+        setPlay({ steps: res.trajectory, idx: 0, auto: true }, finalSpecKey) // replay the search on the schematic
+        if (currentPage.current === page) setPage('optimizer') // keep background work from stealing navigation
+        setMcBefore(beforeSim && !beforeSim.error ? beforeSim.offset ?? null : null, finalKey)
         setParams(res.final_params)
         const fr: SimResult = { ...res.final_result, verdicts: res.verdicts }
-        setResult(fr)
-        setHistory((h) => [{ id: idRef.current++, params: structuredClone(res.final_params), result: fr, doOffset: true }, ...h].slice(0, 8))
+        setResult(fr, finalKey)
+        setHistory((h) => [{ id: idRef.current++, params: structuredClone(res.final_params), result: { ...fr, verdicts: comparatorVerdicts(fr, targets) }, doOffset: true }, ...h].slice(0, 8))
         // "after" transient (optimized) on top, "before" faint underneath
         const afterWf = await waveform(res.final_params).catch(() => null)
-        if (afterWf && !afterWf.error) {
-          setWf(afterWf)
-          setWfBefore(beforeWf && !beforeWf.error ? beforeWf : null)
+        if (optimizationIsCurrent(finalSpecKey) && afterWf && !afterWf.error) {
+          setWf(afterWf, finalKey)
+          setWfBefore(beforeWf && !beforeWf.error ? beforeWf : null, finalKey)
         }
       }
     } catch (e) {
       setOpt({ trajectory: [], final_params: params, final_result: {} as SimResult, verdicts: {}, success: false, targets: {}, error: String(e) })
     } finally {
-      if (timerRef.current) clearInterval(timerRef.current)
       setOptimizing(false)
     }
   }
 
-  const busy = running || optimizing
+  const busy = comparatorActive || running || optimizing || wfLoading || plLoading || pvtLoading || paretoLoading || flowLoading || layoutLoading || resLoading || probitLoading || sensLoading || fclkLoading || yieldLoading
   const dispDevices = play ? play.steps[play.idx].params : params.devices
   const stepChanged: DeviceKey | null = (() => {
     if (!play || play.idx === 0) return null
@@ -515,14 +492,14 @@ export default function App() {
   }
   const allPass = result && !result.error && Object.values(result.verdicts).every((v) => v === true)
 
-  const pageTitle = t(lang, NAV_LABELS[page])
   const domain = domainOf(page)
   const navList = domain === 'vco' ? NAV_VCO : NAV_COMPARATOR
-  const accent = domain === 'vco' ? 'var(--ag)' : 'var(--si)'      // VCO world reads in indigo, comparator in teal
+  const workspace = navList.find(item => item.pages.includes(page))!
+  const pageTitle = t(lang, workspace.label)
   return (
-    <div className="min-h-screen flex">
+    <div className="console-shell eda-shell min-h-screen flex">
       {/* SIDEBAR */}
-      <aside className="shrink-0 sticky top-0 self-start h-screen flex flex-col" style={{ width: 210, borderRight: '1px solid var(--line-soft)', background: 'var(--surface-2)' }}>
+      <aside data-menu-open={mobileNavOpen} onKeyDown={e => { if (e.key === 'Escape') { setMobileNavOpen(false); document.querySelector<HTMLButtonElement>('.mobile-nav-toggle')?.focus() } }} className="app-sidebar shrink-0 sticky top-0 self-start h-screen flex flex-col" style={{ borderRight: '1px solid var(--line-soft)', background: 'var(--surface-2)' }}>
         <div className="px-4 py-4 flex items-center gap-2.5" style={{ borderBottom: '1px solid var(--line-soft)' }}>
           <div className="relative w-8 h-8 rounded-lg overflow-hidden shrink-0" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }} aria-hidden>
             <div className="absolute top-1/2 left-0 w-1/3 h-[2px]" style={{ background: 'var(--si)', boxShadow: '0 0 8px var(--si)', animation: 'sweep 2.2s linear infinite' }} />
@@ -532,12 +509,14 @@ export default function App() {
             <div className="mono text-[10px]" style={{ color: 'var(--faint)' }}>{t(lang, UI.appSub)}</div>
           </div>
         </div>
+        <button className="mobile-nav-toggle" aria-expanded={mobileNavOpen} aria-controls="workspace-navigation"
+          onClick={() => setMobileNavOpen(open => !open)}>{mobileNavOpen ? (lang === 'ko' ? '메뉴 닫기' : 'Close menu') : (lang === 'ko' ? '분석 메뉴' : 'Analysis menu')}</button>
         {/* domain switch — Comparator vs VCO are two separate worlds */}
         <div className="grid grid-cols-2 gap-1.5 p-2" style={{ borderBottom: '1px solid var(--line-soft)' }}>
           {([['comparator', '⚖', 'var(--si)', UI.domainComparator], ['vco', '∿', 'var(--ag)', UI.domainVco]] as const).map(([d, glyph, col, label]) => {
             const on = domain === d
             return (
-              <button key={d} onClick={() => setPage(DOMAIN_HOME[d])}
+              <button key={d} onClick={() => { setPage(DOMAIN_HOME[d]); setMobileNavOpen(false) }}
                 className="flex flex-col items-center gap-0.5 py-2 rounded-lg transition-colors"
                 style={{ background: on ? `color-mix(in srgb, ${col} 16%, transparent)` : 'var(--surface)', border: `1px solid ${on ? col : 'var(--line)'}` }}>
                 <span className="text-base" style={{ color: on ? col : 'var(--faint)' }}>{glyph}</span>
@@ -546,34 +525,15 @@ export default function App() {
             )
           })}
         </div>
-        <nav className="flex flex-col p-2 overflow-y-auto">
-          {navList.map((group, gi) => (
-            <div key={gi} className={gi ? 'mt-3' : ''}>
-              <div className="mono text-[9.5px] uppercase tracking-[0.14em] px-3 pb-1.5"
-                   style={{ color: 'var(--faint)' }}>{t(lang, group.label)}</div>
-              <div className="flex flex-col gap-1">
-                {group.items.map((n) => {
-                  const on = page === n.id
-                  return (
-                    <button
-                      key={n.id}
-                      onClick={() => setPage(n.id)}
-                      className="flex items-start gap-2.5 px-3 py-2 rounded-lg text-left"
-                      style={{ background: on ? `color-mix(in srgb, ${accent} 13%, transparent)` : 'transparent', border: `1px solid ${on ? `color-mix(in srgb, ${accent} 35%, var(--line))` : 'transparent'}` }}
-                    >
-                      <span className="mono text-sm mt-0.5" style={{ color: on ? accent : 'var(--faint)' }}>{n.glyph}</span>
-                      <span className="min-w-0">
-                        <span className="block text-sm" style={{ color: on ? 'var(--text)' : 'var(--muted)' }}>{t(lang, NAV_LABELS[n.id])}</span>
-                        <span className="block mono text-[10px]" style={{ color: 'var(--faint)' }}>{t(lang, NAV_SUBS[n.id])}</span>
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          ))}
+        <nav id="workspace-navigation" aria-label={lang === 'ko' ? '분석 화면' : 'Analysis pages'} className="sidebar-nav flex flex-col p-2 overflow-y-auto">
+          <div className="eda-tree-heading">{lang === 'ko' ? '설계 탐색기' : 'Design explorer'}</div>
+          <div className="eda-cell-name">▾ {domain === 'vco' ? 'ring_vco' : 'strongarm'} <span>schematic</span></div>
+          {navList.map(item => <button key={item.id} aria-current={workspace.id === item.id ? 'page' : undefined}
+            className="eda-tree-item" onClick={() => { setPage(item.pages[0]); setMobileNavOpen(false) }}>
+            <span>{item.glyph}</span>{t(lang, item.label)}
+          </button>)}
         </nav>
-        <div className="mt-auto p-3 flex flex-col gap-2" style={{ borderTop: '1px solid var(--line-soft)' }}>
+        <div className="app-sidebar-footer mt-auto p-3 flex flex-col gap-2" style={{ borderTop: '1px solid var(--line-soft)' }}>
           <div className="mono text-[11px] flex items-center gap-2" style={{ color: 'var(--muted)' }}>
             <span className="inline-block w-2 h-2 rounded-full" style={{ background: apiUp === null ? 'var(--faint)' : apiUp ? 'var(--good)' : 'var(--bad)' }} />
             {apiUp === null ? t(lang, UI.connecting) : apiUp ? t(lang, UI.backendLive) : t(lang, UI.backendOff)}
@@ -588,18 +548,43 @@ export default function App() {
 
       {/* MAIN */}
       <main className="flex-1 min-w-0">
-        <div className="max-w-[1000px] mx-auto px-6 py-7 flex flex-col gap-5">
-          <div className="flex items-baseline justify-between gap-4">
-            <h1 className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{pageTitle}</h1>
+        <div className="workspace-content px-6 py-7 flex flex-col gap-5">
+          <div className="workspace-heading flex items-baseline justify-between gap-4">
+            <h1 id="workspace-title" tabIndex={-1} className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{pageTitle}</h1>
             <div className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
               {/* the subtitle used to say "StrongARM latch" on VCO pages too, which told the
                   reader they were looking at the wrong circuit */}
-              {domain === 'vco' ? 'Cross-coupled ring VCO' : 'StrongARM latch'} · {params.model === 'gaa2nm' ? 'GAA 2nm≈ (BSIM4 근사)' : params.model === 'asap7' ? 'ASAP7 7nm FinFET (BSIM-CMG·OSDI)' : params.model === 'sky130' ? 'SKY130 (real PDK)' : 'BSIM4 PTM 45nm'}
+              {domain === 'vco' ? 'Cross-coupled ring VCO' : 'StrongARM latch'} {domain === 'comparator' && <> · {params.model === 'gaa2nm' ? 'GAA 2nm≈ (BSIM4 근사)' : params.model === 'asap7' ? 'ASAP7 7nm FinFET (BSIM-CMG·OSDI)' : params.model === 'sky130' ? 'SKY130 (real PDK)' : 'BSIM4 PTM 45nm'}</>}
             </div>
           </div>
 
 
-          {/* beginner-friendly explanation for the current page (KO/EN) */}
+          <div id="project-toolbar-host">{domain === 'comparator' && <ProjectToolbar domain="comparator" lang={lang} status={draft} params={params} targets={targets} busy={busy}
+            onImport={project => {
+              setResult(null); setOpt(null); setPlay(null); setWf(null); setWfBefore(null); setMcBefore(null); setPostLayout(null); setPvtRes(null); setParetoRes(null); setFlowRes(null); setLayoutRes(null); setMetaRes(null); setResRes(null); setBerRes(null); setProbitRes(null); setSensRes(null); setFclkRes(null); setYieldRes(null); setAnalysisError(null)
+              updateParams(project.params as Params); setTargets(project.targets as Targets); setProfile('custom')
+            }} />}</div>
+          {domain === 'comparator' && resultStale && <div className="analysis-notice" role="status">{lang === 'ko' ? '설계 입력이 변경되었습니다. 현재 설계의 측정값을 보려면 다시 실행하세요.' : 'Design inputs changed. Run again to measure the current design.'}</div>}
+
+
+
+          <div className="eda-document-bar">
+            <span>{domain === 'vco' ? 'ring_vco' : 'strongarm'} / {workspace.id}</span>
+            <span>{lang === 'ko' ? '작업공간' : 'Workspace'}</span>
+          </div>
+          {workspace.id !== 'design' && <div className="eda-analysis-tabs" role="tablist" aria-label={lang === 'ko' ? '세부 분석' : 'Analysis views'}>
+            {workspace.pages.map(id => <button key={id} role="tab" aria-selected={page === id} tabIndex={page === id ? 0 : -1}
+              onKeyDown={event => {
+                const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
+                if (!keys.includes(event.key)) return
+                event.preventDefault()
+                const i = workspace.pages.indexOf(page)
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? workspace.pages.length - 1 : (i + (event.key === 'ArrowRight' ? 1 : -1) + workspace.pages.length) % workspace.pages.length
+                setPage(workspace.pages[next])
+                ;(event.currentTarget.parentElement?.children[next] as HTMLButtonElement)?.focus()
+              }} onClick={() => setPage(id)}>{t(lang, NAV_LABELS[id])}</button>)}
+          </div>}
+          {/* Help is contextual to the selected analysis. */}
           <PageHelp page={page} lang={lang} />
 
           {/* The same answer on every page: does this design meet its spec? It used to be
@@ -610,9 +595,10 @@ export default function App() {
               lang={lang}
               profileLabel={profile === 'custom' ? (lang === 'ko' ? '사용자 스펙' : 'custom spec') : (SPEC_PROFILES.find((p) => p.id === profile)?.label ?? profile)}
               functional={result ? (result.error ? null : !!result.nominal?.functional) : null}
-              error={result?.error ?? null}
+              error={analysisError ?? result?.error ?? null}
               busy={busy}
-              onRun={() => run()}
+              onRun={workspace.id === 'design' ? undefined : () => run()}
+              compact={workspace.id === 'design'}
               onFix={() => setPage('sensitivity')}
               metrics={TARGET_KEYS.map((k) => ({
                 key: k, label: TARGET_META[k].label, value: measured[k],
@@ -621,10 +607,41 @@ export default function App() {
             />
           )}
 
-          {page === 'sizing' && (
-            <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0, 420px) 1fr' }}>
-              {/* controls */}
-              <section className="flex flex-col gap-5">
+          <AnalysisBoundary page={page} lang={lang}><Suspense fallback={<div className="panel-loading" role="status">{lang === 'ko' ? '분석 화면을 불러오는 중…' : 'Loading analysis workspace…'}</div>}>
+          {(page === 'sizing' || page === 'circuit') && (
+            <div className="workspace-columns eda-editor-layout grid gap-6">
+              {/* One inspector owns device and target inputs. */}
+              <section className="eda-inspector flex flex-col gap-5" aria-label={lang === 'ko' ? '속성 편집기' : 'Property inspector'}><div className="eda-panel-title">{lang === 'ko' ? '속성 · 시뮬레이션 설정' : 'Properties · simulation setup'}</div>
+          <label className="flex items-center gap-2.5 select-none cursor-pointer">
+            <input type="checkbox" checked={doOffset} disabled={busy} onChange={(e) => setDoOffset(e.target.checked)} style={{ accentColor: 'var(--si)' }} />
+            <span className="text-sm" style={{ color: 'var(--text)' }}>Measure offset (Monte-Carlo)</span>
+            <span className="mono text-[11px]" style={{ color: 'var(--faint)' }}>{doOffset ? '~20s' : 'fast'}</span>
+          </label>
+
+          <div className="grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
+            <button
+              onClick={() => run()}
+              disabled={busy || apiUp === false}
+              className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
+              style={{ background: 'var(--si)', color: '#04120f' }}
+            >
+              {running ? <>Simulating… <ElapsedTime since={startedAt} />s</> : apiUp === false ? 'Backend offline' : '▶  Run SPICE'}
+            </button>
+            <button
+              onClick={runOptimize}
+              disabled={busy || apiUp === false}
+              className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
+              style={{ background: 'var(--ag)', color: '#0b0820' }}
+              title="Autonomous search: adjusts W and M until the spec is met"
+            >
+              {optimizing ? <>Searching… <ElapsedTime since={startedAt} />s</> : '◴  Auto-find W & M'}
+            </button>
+          </div>
+          {apiUp === false && (
+            <p className="mono text-xs" style={{ color: 'var(--muted)' }}>
+              Start the bridge: <span style={{ color: 'var(--si)' }}>python3 server.py</span> in webapp/
+            </p>
+          )}
           <div className="flex gap-2 flex-wrap">
             {PRESETS.map((p) => (
               <button
@@ -683,73 +700,7 @@ export default function App() {
             </p>
           )}
           <DeviceEditor params={params} onChange={updateParams} disabled={busy} lang={lang} />
-
-          <div className="grid grid-cols-3 gap-3">
-            {([
-              ['vdd', 'VDD (V)', 0.05],
-              ['cload_ff', 'C_load (fF)', 1],
-              ['n_mc', 'n_MC', 1],
-            ] as const).map(([k, label, step]) => (
-              <label key={k} className="flex flex-col gap-1">
-                <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>{label}</span>
-                <input
-                  type="number"
-                  step={step}
-                  min={0}
-                  disabled={busy}
-                  value={params[k]}
-                  onChange={(e) => setParams({ ...params, [k]: parseFloat(e.target.value) || 0 })}
-                />
-              </label>
-            ))}
-          </div>
-
-          <label className="flex items-center gap-2.5 select-none cursor-pointer">
-            <input type="checkbox" checked={doOffset} disabled={busy} onChange={(e) => setDoOffset(e.target.checked)} style={{ accentColor: 'var(--si)' }} />
-            <span className="text-sm" style={{ color: 'var(--text)' }}>Measure offset (Monte-Carlo)</span>
-            <span className="mono text-[11px]" style={{ color: 'var(--faint)' }}>{doOffset ? '~20s' : 'fast'}</span>
-          </label>
-
-          <div className="grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr' }}>
-            <button
-              onClick={() => run()}
-              disabled={busy || apiUp === false}
-              className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
-              style={{ background: 'var(--si)', color: '#04120f' }}
-            >
-              {running ? `Simulating…  ${elapsed.toFixed(1)}s` : apiUp === false ? 'Backend offline' : '▶  Run SPICE'}
-            </button>
-            <button
-              onClick={runOptimize}
-              disabled={busy || apiUp === false}
-              className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
-              style={{ background: 'var(--ag)', color: '#0b0820' }}
-              title="Autonomous search: adjusts W and M until the spec is met"
-            >
-              {optimizing ? `Searching…  ${elapsed.toFixed(1)}s` : '◴  Auto-find W & M'}
-            </button>
-          </div>
-          {apiUp === false && (
-            <p className="mono text-xs" style={{ color: 'var(--muted)' }}>
-              Start the bridge: <span style={{ color: 'var(--si)' }}>python3 server.py</span> in webapp/
-            </p>
-          )}
-        </section>
-
-              {/* spec + measured details */}
-              <section className="flex flex-col gap-5">
-                <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: `1px solid ${allPass ? 'color-mix(in srgb, var(--good) 45%, var(--line))' : 'var(--line)'}` }}>
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>
-                      Spec compliance · {profile === 'custom' ? 'custom targets' : SPEC_PROFILES.find((p) => p.id === profile)?.label}
-                    </div>
-                    {result && !result.error && (
-                      <div className="mono text-xs px-2.5 py-1 rounded-full" style={{ color: allPass ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${allPass ? 'var(--good)' : 'var(--warn)'} 14%, transparent)` }}>
-                        {allPass ? 'ALL PASS' : 'SPEC MISS'}
-                      </div>
-                    )}
-                  </div>
-                  {/* spec profile selector + editable target limits */}
+<details className="eda-properties" open><summary>{lang === 'ko' ? '설계 목표' : 'Design targets'}</summary>                  {/* spec profile selector + editable target limits */}
                   <div className="flex flex-wrap gap-1.5 mb-3">
                     {SPEC_PROFILES.map((p) => (
                       <button
@@ -787,31 +738,33 @@ export default function App() {
                       </label>
                     ))}
                   </div>
-                  {result?.error ? (
-                    <p className="mono text-sm" style={{ color: 'var(--bad)' }}>error: {result.error}</p>
-                  ) : (
-                    <div className="flex flex-col gap-4">
-                      {TARGET_KEYS.map((k) => (
-                        <Gauge key={k} label={TARGET_META[k].label} value={measured[k]} limit={targets[k]} unit={TARGET_META[k].unit} pass={measured[k] == null ? null : measured[k]! <= targets[k]} />
-                      ))}
-                      {!result && <p className="text-sm" style={{ color: 'var(--muted)' }}>Set the device sizing and run a SPICE simulation to see the measured metrics against the selected spec targets.</p>}
-                    </div>
-                  )}
-                </div>
-                {result && !result.error && (
-                  <div className="grid grid-cols-2 gap-3">
-                    <Detail label="Resolved" value={nom?.functional ? 'latched to rail' : 'did not resolve'} ok={nom?.functional} />
-                    <Detail label="Final Δout" value={nom?.final_diff_v != null ? `${nom.final_diff_v} V` : '—'} />
-                    {off && <Detail label="Pelgrom σ_Vth" value={`${off.pelgrom_sigma_vth_mv} mV`} />}
-                    {off && <Detail label="offset mean" value={`${off.offset_mean_mv} mV (n=${off.n_mc})`} />}
-                  </div>
-                )}
-              </section>
-            </div>
-          )}
+</details>
 
-          {page === 'circuit' && (
-            <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
+          <div className="grid grid-cols-3 gap-3">
+            {([
+              ['vdd', 'VDD (V)', 0.05],
+              ['cload_ff', 'C_load (fF)', 1],
+              ['n_mc', 'n_MC', 1],
+            ] as const).map(([k, label, step]) => (
+              <label key={k} className="flex flex-col gap-1">
+                <span className="mono text-[11px] uppercase tracking-wider" style={{ color: 'var(--faint)' }}>{label}</span>
+                <input
+                  type="number"
+                  step={step}
+                  min={0}
+                  disabled={busy}
+                  value={params[k]}
+                  onChange={(e) => setParams({ ...params, [k]: parseFloat(e.target.value) || 0 })}
+                />
+              </label>
+            ))}
+          </div>
+
+        </section>
+
+              {/* spec + measured details */}
+              <section className="flex flex-col gap-5">
+<div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
               <div className="flex items-center justify-between mb-3">
                 <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Circuit &amp; transient · V(out) vs t</div>
                 <div className="flex gap-2">
@@ -836,7 +789,7 @@ export default function App() {
                   </div>
                 </div>
               )}
-              <div className="grid gap-4 items-center" style={{ gridTemplateColumns: '1fr 1fr' }}>
+              <div className="analysis-columns grid gap-4 items-center" style={{ gridTemplateColumns: '1fr 1fr' }}>
                 <Schematic devices={dispDevices} changed={stepChanged} />
                 <div className="min-w-0">
                   {wf ? (
@@ -862,7 +815,7 @@ export default function App() {
               {postLayout && (
                 <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--line-soft)' }}>
                   <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={{ color: 'var(--ag)' }}>Post-layout parasitics · schematic vs extracted</div>
-                  <div className="grid gap-4 items-center" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                  <div className="analysis-columns grid gap-4 items-center" style={{ gridTemplateColumns: '1fr 1fr' }}>
                     <WaveformChart wf={postLayout.postlayout.waveform} before={postLayout.schematic.waveform} theme={theme} />
                     <div className="mono text-[12px] tnum flex flex-col gap-1.5" style={{ color: 'var(--muted)' }}>
                       {(() => {
@@ -885,10 +838,43 @@ export default function App() {
               )}
             <NetlistImport kind="comparator" ko={lang === 'ko'} onApply={(pp) => updateParams({ ...params, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'sky130' | 'gaa2nm' | 'asap7' } : {}), devices: { ...params.devices, ...pp.devices } })} />
             </div>
+                <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: `1px solid ${allPass ? 'color-mix(in srgb, var(--good) 45%, var(--line))' : 'var(--line)'}` }}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>
+                      Spec compliance · {profile === 'custom' ? 'custom targets' : SPEC_PROFILES.find((p) => p.id === profile)?.label}
+                    </div>
+                    {result && !result.error && (
+                      <div className="mono text-xs px-2.5 py-1 rounded-full" style={{ color: allPass ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${allPass ? 'var(--good)' : 'var(--warn)'} 14%, transparent)` }}>
+                        {!result.nominal?.functional ? 'CIRCUIT FAILED' : allPass ? 'ALL PASS' : Object.values(result.verdicts).some(v => v === false) ? 'SPEC MISS' : 'MEASUREMENTS INCOMPLETE'}
+                      </div>
+                    )}
+                  </div>
+                  {result?.error ? (
+                    <p className="mono text-sm" style={{ color: 'var(--bad)' }}>error: {result.error}</p>
+                  ) : (
+                    <div className="flex flex-col gap-4">
+                      {TARGET_KEYS.map((k) => (
+                        <Gauge key={k} label={TARGET_META[k].label} value={measured[k]} limit={targets[k]} unit={TARGET_META[k].unit} pass={measured[k] == null ? null : measured[k]! <= targets[k]} />
+                      ))}
+                      {!result && <p className="text-sm" style={{ color: 'var(--muted)' }}>Set the device sizing and run a SPICE simulation to see the measured metrics against the selected spec targets.</p>}
+                    </div>
+                  )}
+                </div>
+                {result && !result.error && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <Detail label="Resolved" value={nom?.functional ? 'latched to rail' : 'did not resolve'} ok={nom?.functional} />
+                    <Detail label="Final Δout" value={nom?.final_diff_v != null ? `${nom.final_diff_v} V` : '—'} />
+                    {off && <Detail label="Pelgrom σ_Vth" value={`${off.pelgrom_sigma_vth_mv} mV`} />}
+                    {off && <Detail label="offset mean" value={`${off.offset_mean_mv} mV (n=${off.n_mc})`} />}
+                  </div>
+                )}
+              </section>
+            </div>
           )}
 
           {page === 'optimizer' && (
             <div className="flex flex-col gap-5">
+              <div className="eda-command-row"><button onClick={runOptimize} disabled={busy || apiUp === false}>◴ {lang === 'ko' ? '최적화 실행' : 'Run optimization'}</button><button onClick={() => setPage('sizing')}>{lang === 'ko' ? '설계 입력 편집' : 'Edit design inputs'}</button></div>
               {opt && !opt.error ? (
                 <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
                   <div className="flex items-center justify-between mb-3">
@@ -897,7 +883,7 @@ export default function App() {
                       {Object.values(opt.verdicts).every((v) => v === true) ? 'ALL SPECS MET' : opt.success ? 'OFFSET + SPEED MET' : 'PARTIAL'}
                     </div>
                   </div>
-                  <div className="grid gap-4" style={{ gridTemplateColumns: 'minmax(0, 230px) 1fr' }}>
+                  <div className="analysis-columns grid gap-4" style={{ gridTemplateColumns: 'minmax(0, 230px) 1fr' }}>
                     <div>
                       {stepNow && <div className="mono text-[11px] mb-1" style={{ color: 'var(--ag)' }}>replay · step {play!.idx + 1}/{play!.steps.length}</div>}
                       <Schematic devices={dispDevices} changed={stepChanged} />
@@ -938,7 +924,7 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <p className="text-sm" style={{ color: 'var(--muted)' }}>{opt?.error ? `error: ${opt.error}` : 'Run “Auto-find W & M” on the Sizing page — the search trajectory replays here step by step.'}</p>
+                <p className="text-sm" style={{ color: 'var(--muted)' }}>{opt?.error ? `error: ${opt.error}` : 'Run optimization to inspect the search trajectory and apply the resulting design.'}</p>
               )}
               <div>
                 <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2.5" style={{ color: 'var(--faint)' }}>Run history</div>
@@ -950,7 +936,7 @@ export default function App() {
                       const hp = Object.values(h.result.verdicts).every((v) => v === true)
                       const inp = h.params.devices.input
                       return (
-                        <button key={h.id} onClick={() => updateParams(structuredClone(h.params))} className="grid gap-2 items-center rounded-lg px-3 py-2 text-left" style={{ gridTemplateColumns: '1fr auto', background: 'var(--surface)', border: '1px solid var(--line)' }} title="Load these params">
+                        <button key={h.id} disabled={busy} onClick={() => updateParams(structuredClone(h.params))} className="grid gap-2 items-center rounded-lg px-3 py-2 text-left" style={{ gridTemplateColumns: '1fr auto', background: 'var(--surface)', border: '1px solid var(--line)' }} title="Load these params">
                           <div className="mono text-xs tnum truncate" style={{ color: 'var(--muted)' }}>
                             in {inp.w_um}µm/{inp.l_nm}n/×{inp.m} ·{' '}
                             <span style={{ color: 'var(--text)' }}>{h.result.nominal.decision_time_ps ?? '—'}ps</span> ·{' '}
@@ -976,7 +962,7 @@ export default function App() {
               <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Monte-Carlo · V_th mismatch → offset σ</div>
               <button onClick={() => run(true)} disabled={busy || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}
                 title="현재 소자 크기로 n_MC회 미스매치 샘플링(ngspice)을 돌려 오프셋 분포를 측정">
-                {running ? `sampling… ${elapsed.toFixed(0)}s` : `∿ run Monte-Carlo (n=${params.n_mc})`}
+                {running ? <>sampling… <ElapsedTime since={startedAt} />s</> : `∿ run Monte-Carlo (n=${params.n_mc})`}
               </button>
             </div>
             {off?.samples_mv?.length ? (
@@ -1049,7 +1035,7 @@ export default function App() {
                   </div>
                 </>
               ) : (
-                <p className="text-sm" style={{ color: 'var(--muted)' }}>Run the PVT sweep to check the current sizing across 27 process/voltage/temperature corners (worst-case sign-off).</p>
+                <p className="text-sm" style={{ color: 'var(--muted)' }}>Run the PVT sweep to check the current sizing across 45 process/voltage/temperature corners (worst-case sign-off).</p>
               )}
             </div>
           )}
@@ -1165,8 +1151,8 @@ export default function App() {
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Metastability · decision time vs input amplitude</div>
-                <button onClick={runMeta} disabled={busy || metaLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
-                  {metaLoading ? 'sweeping…' : '⧗ run sweep'}
+                <button onClick={runResolution} disabled={busy || resLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
+                  {resLoading ? 'sweeping…' : '▶ resolution + noise / BER'}
                 </button>
               </div>
               {metaRes ? (
@@ -1237,8 +1223,8 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Noise / BER · decision error rate vs input</div>
                 <div className="flex items-center gap-2">
-                  <button onClick={runBer} disabled={busy || berLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
-                    {berLoading ? 'computing…' : '⊹ compute BER'}
+                  <button onClick={runResolution} disabled={busy || resLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
+                    {resLoading ? 'computing…' : '▶ resolution + noise / BER'}
                   </button>
                   <button onClick={runProbit} disabled={busy || probitLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }}
                     title="프로빗(noise-counting) 실측: 준안정점 근처에서 열잡음 주입 판정을 반복해 P(+|vin)→Φ⁻¹ 피팅으로 σ 를 잰다">
@@ -1322,16 +1308,16 @@ export default function App() {
             </div>
           )}
 
-          {page === 'wicked' && <WickedPage params={params} targets={targets} busy={busy} apiUp={apiUp} onApply={updateParams} />}
+          {(page === 'wicked' || wickedVisited) && <div hidden={page !== 'wicked'}><AnalysisBoundary page="wicked" lang={lang}><WickedPage params={params} targets={targets} busy={busy} apiUp={apiUp} onApply={updateParams} /></AnalysisBoundary></div>}
 
-          {domain === 'vco' && (
-            <VcoPage view={VCO_VIEW[page]} lang={lang} theme={theme}
+          {(domain === 'vco' || vcoVisited) && (
+            <div hidden={domain !== 'vco'}><AnalysisBoundary page="vco" lang={lang}><VcoPage active={domain === 'vco'} view={VCO_VIEW[page]} lang={lang} theme={theme}
                      // the view is owned here, so VcoPage cannot navigate itself: its status
                      // strip called a setView() that did not exist and would have thrown
                      onNavigate={(v) => {
                        const target = (Object.keys(VCO_VIEW) as Page[]).find((k) => VCO_VIEW[k] === v)
                        if (target) setPage(target)
-                     }} />
+                     }} /></AnalysisBoundary></div>
           )}
 
           {page === 'flow' && (
@@ -1369,7 +1355,7 @@ export default function App() {
           )}
 
           {page === 'layout' && (
-            <div className="flex flex-col gap-4">
+            <LayoutWorkspace lang={lang}><div className="flex flex-col gap-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="mono text-[11px] uppercase tracking-[0.16em]" style={{ color: 'var(--faint)' }}>Layout · GDSII synthesis + rule DRC</div>
                 <button onClick={runLayout} disabled={busy || layoutLoading || apiUp === false} className="mono text-[11px] px-2.5 py-1 rounded-full disabled:opacity-50" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }}>
@@ -1379,29 +1365,17 @@ export default function App() {
               {layoutRes ? (
                 <div className="rounded-2xl p-5 flex flex-col gap-3" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}>
                   <LayoutView data={layoutRes} />
-                  <div className="flex flex-wrap gap-x-4 gap-y-1">
-                    {layoutRes.layers.filter((l) => l.rects.length).map((l) => (
-                      <span key={l.name} className="mono text-[10px] flex items-center gap-1.5" style={{ color: 'var(--muted)' }}>
-                        <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: l.color }} />{l.name} ({l.gds})
-                      </span>
-                    ))}
-                  </div>
-                  <div className="flex flex-wrap gap-4 items-center">
-                    <span className="mono text-[12px]" style={{ color: 'var(--text)' }}>cell area <span className="tnum">{layoutRes.area_um2}</span> µm²</span>
-                    <span className="mono text-xs px-2.5 py-1 rounded-full" style={{ color: layoutRes.drc.clean ? 'var(--good)' : 'var(--bad)', background: `color-mix(in srgb, ${layoutRes.drc.clean ? 'var(--good)' : 'var(--bad)'} 14%, transparent)` }}>{layoutRes.drc.clean ? 'DRC CLEAN' : `${layoutRes.drc.n_violations} DRC violations`}</span>
-                  </div>
-                  <p className="mono text-[11px] leading-relaxed" style={{ color: 'var(--faint)' }}>
-                    Multi-finger MOS + nwell + guard ring on SKY130 stream layers. Rule DRC: {layoutRes.drc.rules}. GDSII written to <span style={{ color: 'var(--si)' }}>{layoutRes.gds_path}</span> (opens in KLayout/Magic). PoC layout, not sign-off DRC.
-                  </p>
                 </div>
               ) : (
                 <p className="text-sm" style={{ color: 'var(--muted)' }}>Generate a transistor-level GDSII layout from the current sizing (multi-finger devices, nwell, guard ring) + a rule DRC check.</p>
               )}
-            </div>
+            </div></LayoutWorkspace>
           )}
 
+          </Suspense></AnalysisBoundary>
+          <div className="eda-output-dock"><ExecutionPanel lang={lang} onOpen={destination => { setPage(destination as Page); setMobileNavOpen(false) }} /></div>
           <p className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
-            {ngspice ? `ngspice: ${ngspice}` : ''} · model: {params.model === 'gaa2nm' ? 'GAA 2nm≈ (scaled BSIM4)' : params.model === 'asap7' ? 'ASAP7 7nm (BSIM-CMG via OSDI)' : params.model === 'sky130' ? 'SKY130 PDK' : 'BSIM4 PTM 45nm bulk'} {domain === 'comparator' ? ' · offset σ from the deterministic full budget (Gauss-Hermite quadrature over every matched pair)' : ' · ring oscillator, 27-corner PVT available'}
+            {ngspice ? `ngspice: ${ngspice}` : 'ngspice: unavailable'} · {domain === 'comparator' ? 'StrongARM' : 'Ring VCO'} · {lang === 'ko' ? '현재 입력 기준 분석' : 'Analysis of current inputs'}
           </p>
         </div>
       </main>

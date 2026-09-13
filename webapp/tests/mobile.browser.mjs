@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict'
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ?? 'playwright')
+const browser = await chromium.launch({ headless: true })
+const page = await browser.newPage({ viewport: { width: 390, height: 1000 } })
+const errors = []
+page.on('pageerror', e => errors.push(e.message))
+await page.goto(process.env.CONSOLE_URL ?? 'http://127.0.0.1:8771')
+const navigation = page.getByRole('navigation', { name: '분석 화면' })
+assert.equal(await navigation.isVisible(), false)
+await page.getByRole('button', { name: '분석 메뉴', exact: true }).press('Enter')
+assert.equal(await navigation.isVisible(), true)
+await navigation.getByRole('button').first().focus()
+await page.keyboard.press('Escape')
+assert.equal(await navigation.isVisible(), false)
+assert.equal(await page.getByRole('button', { name: '분석 메뉴', exact: true }).evaluate(el=>el===document.activeElement), true)
+const fits = async () => {
+  const inputs = await page.locator('main input[type="number"]:visible').evaluateAll(elements => elements.map(el => {
+    const box = el.getBoundingClientRect()
+    return { width: box.width, fits: box.x >= 0 && box.right <= innerWidth }
+  }))
+  assert(inputs.length > 0)
+  assert(inputs.every(input => input.width >= 35 && input.fits), JSON.stringify(inputs))
+}
+await fits()
+await page.getByRole('button', { name: '분석 메뉴', exact: true }).click()
+await navigation.getByRole('button').filter({ hasText: '설계 편집' }).click()
+assert.equal(await navigation.isVisible(), false)
+assert.equal(await page.getByRole('heading', { level: 1 }).innerText(), '설계 편집')
+await page.getByRole('button', { name: '∿ VCO', exact: true }).click()
+await page.getByRole('button', { name: '분석 메뉴', exact: true }).click()
+await navigation.getByRole('button').filter({ hasText: '설계 편집' }).click()
+await page.getByLabel('단수 N', { exact: true }).waitFor()
+await fits()
+await page.getByRole('button', { name: '◐ 테마', exact: true }).click()
+assert.equal(await page.locator('html').getAttribute('data-theme'), 'light')
+assert.deepEqual(errors, [])
+console.log(JSON.stringify({ width: 390, keyboardMenu: true, comparatorInputsFit: true, vcoInputsFit: true, navigation: true, lightTheme: true, browserErrors: errors }))
+await browser.close()

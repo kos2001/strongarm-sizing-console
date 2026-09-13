@@ -8,7 +8,11 @@
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "server": "python3 server.py",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tests/workspace.browser.mjs && node tests/project.browser.mjs && node tests/mobile.browser.mjs && node tests/execution.browser.mjs && node tests/eda.browser.mjs",
+    "test:live": "node tests/live.browser.mjs",
+    "test:physical": "node tests/physical.browser.mjs"
   },
   "dependencies": {
     "react": "^19.2.7",

@@ -1,3 +1,4 @@
+import { useId, useState } from 'react'
 import type { LayoutResult } from '../types'
 import { LAYER_STYLE, V, type Hatch } from '../virtuoso'
 
@@ -7,6 +8,9 @@ import { LAYER_STYLE, V, type Hatch } from '../virtuoso'
 // boundary — the way real EDA layout editors distinguish layers. Y is flipped so
 // the origin reads bottom-left.
 export default function LayoutView({ data }: { data: LayoutResult }) {
+  const uid = useId().replace(/:/g, '')
+  const [hidden, setHidden] = useState<string[]>([])
+  const [zoom, setZoom] = useState(1)
   const { bbox } = data
   const W = bbox.w, H = bbox.h
   const layers = [...data.layers].sort((a, b) => a.z - b.z)
@@ -22,23 +26,26 @@ export default function LayoutView({ data }: { data: LayoutResult }) {
     if (hatch === 'backdiag' || hatch === 'cross') g.push(<line key="b" x1={0} y1={0} x2={s} y2={s} stroke={color} strokeWidth={sw} />)
     if (hatch === 'vert') g.push(<line key="v" x1={s / 2} y1={0} x2={s / 2} y2={s} stroke={color} strokeWidth={sw} />)
     return (
-      <pattern key={name} id={`hx-${name}`} width={s} height={s} patternUnits="userSpaceOnUse">
+      <pattern key={name} id={`${uid}-hx-${name}`} width={s} height={s} patternUnits="userSpaceOnUse">
         {g}
       </pattern>
     )
   }
 
   return (
+    <div className="generated-layout">
+      <div className="eda-command-row"><button aria-label="Zoom in layout" onClick={() => setZoom(v => Math.min(8, v * 1.5))}>＋</button><button aria-label="Zoom out layout" onClick={() => setZoom(v => Math.max(1, v / 1.5))}>−</button><button onClick={() => setZoom(1)}>Fit</button><span className="mono">{W.toFixed(2)} × {H.toFixed(2)} µm · {(zoom * 100).toFixed(0)}%</span></div>
+      <div className="generated-layout-canvas">
     <svg
       viewBox={`${-0.2} ${-0.2} ${W + 0.4} ${H + 0.4}`}
-      width="100%"
-      style={{ maxHeight: 440, display: 'block', background: V.bg, borderRadius: 8 }}
+      width={`${zoom * 100}%`}
+      style={{ minWidth: `${zoom * 100}%`, height: 400 * zoom, display: 'block', background: V.bg }}
       preserveAspectRatio="xMidYMid meet"
       role="img"
-      aria-label="StrongARM comparator GDS layout (Virtuoso Layout XL style)"
+      aria-label="Generated design GDS geometry"
     >
       <defs>
-        <pattern id="lgrid" width={0.5} height={0.5} patternUnits="userSpaceOnUse">
+        <pattern id={`${uid}-lgrid`} width={0.5} height={0.5} patternUnits="userSpaceOnUse">
           <circle cx={0} cy={0} r={0.012} fill={V.grid} />
         </pattern>
         {layers.map((l) => {
@@ -49,16 +56,16 @@ export default function LayoutView({ data }: { data: LayoutResult }) {
 
       {/* black canvas + dim snap grid */}
       <rect x={-0.2} y={-0.2} width={W + 0.4} height={H + 0.4} fill={V.bg} />
-      <rect x={-0.2} y={-0.2} width={W + 0.4} height={H + 0.4} fill="url(#lgrid)" />
+      <rect x={-0.2} y={-0.2} width={W + 0.4} height={H + 0.4} fill={`url(#${uid}-lgrid)`} />
 
-      {layers.map((l) => {
+      {layers.filter(l => !hidden.includes(l.name)).map((l) => {
         const st = LAYER_STYLE[l.name] || { color: l.color, hatch: 'solid' as Hatch, op: 0.5 }
         return l.rects.map((r, i) => (
           <g key={`${l.name}-${i}`}>
             {/* body tint */}
             <rect x={r[0]} y={Y(r[1], r[3])} width={r[2]} height={r[3]} fill={st.color} fillOpacity={st.hatch === 'solid' ? st.op : 0.16} />
             {/* stipple/hatch overlay */}
-            {st.hatch !== 'solid' && <rect x={r[0]} y={Y(r[1], r[3])} width={r[2]} height={r[3]} fill={`url(#hx-${l.name})`} />}
+            {st.hatch !== 'solid' && <rect x={r[0]} y={Y(r[1], r[3])} width={r[2]} height={r[3]} fill={`url(#${uid}-hx-${l.name})`} />}
             {/* bright layer boundary */}
             <rect x={r[0]} y={Y(r[1], r[3])} width={r[2]} height={r[3]} fill="none" stroke={st.color} strokeWidth={0.02} strokeOpacity={0.9} />
           </g>
@@ -70,6 +77,11 @@ export default function LayoutView({ data }: { data: LayoutResult }) {
           {lb.name}
         </text>
       ))}
-    </svg>
+    </svg></div>
+    <div className="physical-layers">{layers.filter(layer => layer.rects.length).map(layer => <label key={layer.name} style={{ color: layer.color }}><input type="checkbox" checked={!hidden.includes(layer.name)} onChange={() => setHidden(values => values.includes(layer.name) ? values.filter(name => name !== layer.name) : [...values, layer.name])} />{layer.name} ({layer.gds})</label>)}</div>
+    <div className="physical-provenance">GDS: {data.gds_path}</div>
+    <div className="physical-provenance">{data.area_um2} µm² · Rule DRC: {data.drc.n_violations} · LVS / routed connectivity: unverified</div>
+    <details><summary>Rule DRC · {data.drc.rules}</summary>{data.drc.violations.length ? data.drc.violations.map((value, i) => <p key={i} style={{ color: 'var(--bad)' }}>{value}</p>) : <p>No violations in the checked width/spacing rules.</p>}</details>
+    </div>
   )
 }

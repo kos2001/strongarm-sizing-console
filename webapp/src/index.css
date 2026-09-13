@@ -78,3 +78,158 @@ button:focus-visible { outline: 2px solid var(--si); outline-offset: 2px; }
 
 @keyframes sweep { to { transform: translateX(300%); } }
 @media (prefers-reduced-motion: reduce) { .animate-sweep { animation: none !important; } }
+
+/* Persistent design workspace and predictable async panel layout. */
+.draft-status {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 13px 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); font-size: 12px;
+}
+.draft-mark { color: var(--si); background: color-mix(in srgb, var(--si) 10%, transparent); border-radius: 7px; padding: 5px 8px; }
+.draft-title { display: block; font-weight: 600; color: var(--text); }
+.draft-detail { display: block; color: var(--muted); margin-top: 2px; }
+.draft-restored { margin-left: auto; color: var(--muted); font-size: 11px; }
+.panel-loading { min-height: 160px; padding: 32px; display: grid; place-items: center; color: var(--muted); border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+
+.project-toolbar { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.project-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px 16px; }
+.project-name { display: flex; flex-direction: column; gap: 4px; min-width: 160px; flex: 1; font-size: 11px; color: var(--muted); }
+.project-name input { font: inherit; font-size: 15px; color: var(--text); border: 1px solid transparent; border-radius: 5px; background: transparent; width: 100%; padding: 3px 5px; margin-left: -5px; }
+.project-name input:hover { border-color: var(--line); }
+.project-name input:focus-visible { outline: 2px solid var(--si); }
+.project-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.project-actions button { border: 1px solid var(--line); background: var(--surface-2); color: var(--text); border-radius: 7px; padding: 7px 12px; font-size: 12px; }
+.project-actions button:hover { border-color: var(--si); }
+.project-actions button:disabled { opacity: .45; cursor: default; }
+.project-toolbar .draft-status { border: 0; border-top: 1px solid var(--line-soft); border-radius: 0; padding: 8px 16px; }
+.project-toolbar .draft-title, .project-toolbar .draft-mark { display: none; }
+.project-preview { display: grid; gap: 8px; padding: 16px; border-top: 1px solid var(--line); background: var(--surface-2); font-size: 12px; color: var(--muted); }
+.project-preview strong { color: var(--text); font-size: 14px; }
+.project-message, .analysis-notice { padding: 12px 16px; font-size: 12px; color: var(--warn); }
+.analysis-notice { border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--warn) 5%, var(--surface)); }
+
+.app-sidebar { width: 210px; }
+.mobile-nav-toggle { display: none; }
+.workspace-columns { grid-template-columns: minmax(0, 420px) minmax(0, 1fr); }
+.workspace-columns > *, .analysis-columns > * { min-width: 0; }
+@media (max-width: 900px) {
+  .workspace-columns, .analysis-columns { grid-template-columns: minmax(0, 1fr) !important; }
+}
+@media (max-width: 700px) {
+  .console-shell { flex-direction: column; }
+  .app-sidebar { width: 100%; height: auto; position: static; border-bottom: 1px solid var(--line); }
+  .mobile-nav-toggle { display: block; position: absolute; right: 16px; top: 20px; border: 1px solid var(--line); color: var(--text); background: var(--surface); border-radius: 7px; padding: 7px 12px; font-size: 12px; }
+  .app-sidebar .sidebar-nav { max-height: 55vh; }
+  .app-sidebar[data-menu-open="false"] .sidebar-nav { display: none; }
+  .app-sidebar-footer { flex-direction: row; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .workspace-content { padding: 20px 16px; gap: 16px; }
+  .workspace-heading { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .workspace-heading h1 { white-space: nowrap; }
+  .workspace-content .grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .project-name { min-width: 100%; }
+  .draft-restored { margin-left: 0; }
+  .project-preview, .project-message { overflow-wrap: anywhere; }
+}
+
+.execution-panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.execution-summary { display: flex; width: 100%; justify-content: space-between; padding: 10px 14px; text-align: left; color: var(--text); font-size: 12px; }
+.execution-summary .tnum { color: var(--muted); margin-left: 6px; }
+.execution-row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--line-soft); font-size: 12px; }
+.execution-domain { font-size: 10px; color: var(--muted); min-width: 30px; }
+.execution-label { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.execution-outcome { color: var(--muted); white-space: nowrap; font-size: 11px; }
+.execution-time { color: var(--muted); min-width: 35px; text-align: right; }
+.execution-open { color: var(--si); font-size: 11px; white-space: nowrap; padding: 4px; }
+.execution-row[data-state="running"] .execution-outcome { color: var(--si); }
+.execution-row[data-state="failed"] .execution-outcome, .execution-error { color: var(--bad); }
+.execution-error { display: block; font-size: 11px; margin-top: 3px; }
+@media (max-width: 700px) {
+  .execution-row { flex-wrap: wrap; gap: 8px; }
+  .execution-label { flex-basis: 60%; }
+  .execution-outcome { margin-left: auto; }
+}
+
+/* EDA workbench: explorer, document, property inspector and output dock. */
+.eda-shell { --faint: #8596ae; }
+:root[data-theme="light"] .eda-shell { --faint: #61718b; }
+.eda-shell .app-sidebar { width: 204px; }
+.eda-shell .workspace-content { max-width: none; margin: 0; padding: 14px 18px; gap: 10px; }
+.eda-shell .workspace-heading { min-height: 32px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.eda-shell .workspace-heading h1 { font-size: 15px; }
+.eda-tree-heading, .eda-panel-title { font: 11px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .07em; padding: 10px; border-bottom: 1px solid var(--line); }
+.eda-cell-name { padding: 16px 8px 12px; font: 12px var(--mono); color: var(--text); }
+.eda-cell-name span { display: block; padding-left: 16px; font-size: 10px; color: var(--faint); margin-top: 4px; }
+.eda-tree-item { display: flex; gap: 10px; align-items: center; text-align: left; font-size: 12px; padding: 10px 12px; margin: 1px 0; color: var(--muted); border-left: 2px solid transparent; }
+.eda-tree-item:hover { background: var(--surface); color: var(--text); }
+.eda-tree-item[aria-current="page"] { border-color: var(--si); color: var(--text); background: color-mix(in srgb, var(--si) 10%, var(--surface)); }
+.eda-document-bar { display: flex; justify-content: space-between; padding: 9px 12px; border: 1px solid var(--line); border-top: 2px solid var(--si); background: var(--surface); font: 11px var(--mono); color: var(--text); }
+.eda-document-bar span:last-child { color: var(--faint); }
+.eda-analysis-tabs { display: flex; gap: 0; overflow-x: auto; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.eda-analysis-tabs button { white-space: nowrap; padding: 10px 16px; font-size: 12px; border-bottom: 2px solid transparent; color: var(--muted); }
+.eda-analysis-tabs button[aria-selected="true"] { color: var(--si); border-color: var(--si); background: var(--surface); }
+.eda-shell .project-toolbar { border-radius: 3px; }
+.eda-shell .project-controls { padding: 7px 10px; gap: 8px; }
+.eda-shell .project-name { flex-direction: row; align-items: center; gap: 12px; }
+.eda-shell .project-name input { font-size: 12px; max-width: 250px; }
+.eda-shell .project-toolbar .draft-status { padding: 4px 10px; font-size: 10px; }
+.eda-shell .project-actions button { padding: 5px 9px; border-radius: 3px; font-size: 11px; }
+.eda-shell .eda-help { border: 0 !important; background: transparent !important; align-self: flex-end; max-width: 100%; }
+.eda-help > button { padding: 4px 8px; }
+.eda-help > button > span:first-child { display: none; }
+.eda-shell .rounded-2xl, .eda-shell .rounded-xl { border-radius: 4px; }
+.eda-shell .rounded-full { border-radius: 4px; }
+.eda-shell .p-5 { padding: 16px; }
+.eda-editor-layout { grid-template-columns: minmax(0, 1fr) 380px; align-items: start; gap: 14px; }
+.eda-editor-layout > section:first-child { grid-column: 2; grid-row: 1; }
+.eda-editor-layout > section:last-child { grid-column: 1; grid-row: 1; }
+.eda-inspector { padding: 10px; gap: 14px; background: var(--surface-2); border: 1px solid var(--line); }
+.eda-inspector > .eda-panel-title { padding: 0 0 10px; }
+.eda-inspector > .flex { flex-wrap: wrap; }
+.eda-inspector .grid-cols-2 { grid-template-columns: minmax(0, 1fr); }
+.eda-inspector input[type="number"] { min-width: 0; border-radius: 3px; font-size: 12px; padding: 5px; }
+.eda-properties summary { font-size: 12px; cursor: pointer; padding: 8px 0 12px; color: var(--text); }
+.eda-command-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.eda-command-row button { padding: 8px 12px; font-size: 12px; background: var(--surface); color: var(--si); border: 1px solid var(--line); }
+.eda-command-row button:disabled { opacity: .4; }
+.eda-output-dock { margin-top: 12px; position: sticky; bottom: 0; z-index: 5; }
+.eda-output-dock .execution-panel { border-radius: 0; box-shadow: 0 -5px 14px #0002; }
+.eda-output-dock #execution-list { max-height: 180px; overflow: auto; }
+.eda-output-empty { font: 11px var(--mono); padding: 12px 14px; color: var(--muted); border-top: 1px solid var(--line); }
+@media (max-width: 1180px) {
+  .eda-editor-layout { grid-template-columns: minmax(0, 1fr) !important; }
+  .eda-editor-layout > section:first-child, .eda-editor-layout > section:last-child { grid-column: 1; grid-row: auto; }
+  .eda-editor-layout > section:first-child { order: 2; }
+  .eda-editor-layout > section:last-child { order: 1; }
+  .eda-inspector .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .eda-shell .app-sidebar { width: 100%; }
+  .eda-shell .workspace-content { padding: 12px; }
+  .eda-shell .project-name { min-width: 100%; }
+  .eda-inspector .grid-cols-2 { grid-template-columns: minmax(0, 1fr); }
+  .eda-output-dock { position: static; }
+  .eda-analysis-tabs button { padding: 9px 12px; }
+}
+@media (min-width: 1181px) {
+  .eda-editor-layout > section { max-height: calc(100vh - 370px); min-height: 300px; overflow: auto; scrollbar-gutter: stable; }
+  .eda-editor-layout > .eda-inspector { padding-right: 8px; }
+  .eda-output-dock { position: static; }
+}
+.eda-analysis-tabs button[aria-pressed="true"] { color: var(--si); border-color: var(--si); }
+.layout-workspace { display: flex; flex-direction: column; gap: 14px; }
+.physical-reference { display: flex; flex-direction: column; gap: 12px; font-size: 12px; min-width: 0; }
+.physical-selectors { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+.physical-selectors label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); }
+.physical-selectors select { max-width: 100%; min-width: 0; background: var(--surface); color: var(--text); border: 1px solid var(--line); padding: 8px; font-size: 12px; }
+.physical-provenance { font: 11px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.physical-canvas { height: 480px; overflow: auto; border: 1px solid var(--line); background: #080c13; }
+.physical-canvas svg { display: block; height: auto; }
+.physical-layers { display: flex; flex-wrap: wrap; gap: 16px; }
+.physical-layers label { display: flex; align-items: center; gap: 6px; }
+.physical-checks { border-collapse: collapse; width: 100%; text-align: left; }
+.physical-checks caption { text-align: left; padding: 10px 0; color: var(--text); }
+.physical-checks td, .physical-checks th { border: 1px solid var(--line); padding: 7px 10px; }
+@media (max-width:700px) { .physical-selectors { grid-template-columns: minmax(0,1fr); } .physical-canvas { height: 320px; } }
+.generated-layout { display: flex; flex-direction: column; gap: 10px; font-size: 11px; }
+.generated-layout-canvas { max-height: 460px; overflow: auto; border: 1px solid var(--line); background: #080c13; }
+.generated-layout summary { cursor: pointer; padding: 7px 0; color: var(--muted); }

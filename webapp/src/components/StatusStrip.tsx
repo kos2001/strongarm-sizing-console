@@ -53,6 +53,7 @@ const on_target = (m: StatusMetric) =>
 
 interface Props {
   lang: Lang
+  compact?: boolean
   metrics: StatusMetric[]
   /** Where to go next when the design misses. "Misses spec" on its own leaves the reader
    *  with the diagnosis and no move; the binding metric plus the page that acts on it is
@@ -70,7 +71,7 @@ interface Props {
 /** Digits that fit: 530 ps needs none, 1.87 mV needs two. */
 const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2))
 
-export default function StatusStrip({ lang, metrics, functional, profileLabel, error, onRun, busy, onFix, fixLabel }: Props) {
+export default function StatusStrip({ lang, metrics, functional, profileLabel, error, onRun, busy, onFix, fixLabel, compact = false }: Props) {
   const measured = metrics.filter((m) => m.value != null && m.limit != null)
   const failing = measured.filter((m) => ok_of(m) === false)
   // A target the knob covers but is not currently sitting on is its own state: the design
@@ -78,9 +79,9 @@ export default function StatusStrip({ lang, metrics, functional, profileLabel, e
   // screen is not the target; calling it "fail" sends the user to re-size a design that
   // already meets the spec.
   const offBias = measured.some((m) => m.mode === 'target' && m.reach && ok_of(m) && !on_target(m))
-  const state: 'unrun' | 'error' | 'pass' | 'fail' | 'offbias' =
-    error ? 'error' : functional === null || !measured.length ? 'unrun'
-      : functional === false || failing.length ? 'fail' : offBias ? 'offbias' : 'pass'
+  const state: 'unrun' | 'error' | 'pass' | 'fail' | 'offbias' | 'incomplete' =
+    error ? 'error' : functional === false ? 'fail' : functional === null || !measured.length ? 'unrun'
+      : failing.length ? 'fail' : measured.length < metrics.filter(m => m.limit != null).length ? 'incomplete' : offBias ? 'offbias' : 'pass'
 
   // "worst" = furthest past its limit in relative terms, which is the one to fix first.
   // Absolute overshoot would rank a 30 ps miss above a 2x power miss.
@@ -88,9 +89,10 @@ export default function StatusStrip({ lang, metrics, functional, profileLabel, e
     ? failing.reduce((a, b) => (Math.abs(a.value! / a.limit! - 1) >= Math.abs(b.value! / b.limit! - 1) ? a : b))
     : null
   const tone = { unrun: 'var(--faint)', error: 'var(--bad)', pass: 'var(--good)',
-                 fail: 'var(--bad)', offbias: 'var(--ag)' }[state]
+                 fail: 'var(--bad)', offbias: 'var(--ag)', incomplete: 'var(--warn)' }[state]
   const headline = {
     unrun: t(lang, UI.statusUnrun),
+    incomplete: lang === 'ko' ? '일부 측정 필요' : 'Measurements incomplete',
     error: t(lang, UI.statusError),
     pass: t(lang, UI.statusPass),
     fail: functional === false ? t(lang, UI.statusNonFunctional) : t(lang, UI.statusFail),
@@ -99,6 +101,7 @@ export default function StatusStrip({ lang, metrics, functional, profileLabel, e
 
   return (
     <div
+      data-testid="design-status"
       className="rounded-xl px-3.5 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-2"
       style={{
         background: `color-mix(in srgb, ${tone} 7%, var(--surface))`,
@@ -111,7 +114,7 @@ export default function StatusStrip({ lang, metrics, functional, profileLabel, e
         <span className="mono text-[10px] px-1.5 py-0.5 rounded" style={{ color: 'var(--faint)', background: 'var(--surface-2)' }}>{profileLabel}</span>
       </div>
 
-      {state === 'unrun' && onRun && (
+      {(state === 'unrun' || state === 'incomplete') && onRun && (
         <button
           onClick={onRun}
           disabled={busy}
@@ -139,7 +142,7 @@ export default function StatusStrip({ lang, metrics, functional, profileLabel, e
       {/* Every metric always shown, in the same order, whether it passes or not. Hiding the
           passing ones would make the row jump around between pages and lose its value as a
           fixed reference. */}
-      {state !== 'unrun' && state !== 'error' && (
+      {!compact && state !== 'unrun' && state !== 'error' && (
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-1.5">
           {metrics.map((m) => {
             const has = m.value != null

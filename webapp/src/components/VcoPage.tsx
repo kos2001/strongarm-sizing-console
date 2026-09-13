@@ -1,4 +1,10 @@
+import LayoutWorkspace from './LayoutWorkspace'
+import { analysisKey } from '../analysis'
+import { useAnalysisState } from '../useAnalysisState'
+import { useDraft } from '../useDraft'
+import ProjectToolbar from './ProjectToolbar'
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, VcoWickedMismatch, VcoWickedVerdict, VcoWickedWcd, VcoWickedYieldSweep } from '../types'
 import { VCO_DEVICE_META } from '../types'
 import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform, vcoWickedMismatch, vcoWickedVerdict, vcoWickedWcd, vcoWickedYieldsweep } from '../api'
@@ -44,24 +50,26 @@ const normalizeVcoStages = (raw: number | undefined | null) => {
   return Math.min(n, 9)
 }
 
-export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { lang: Lang; theme: string; view?: View; onNavigate?: (v: View) => void }) {
-  const [params, setParams] = useState<VcoParams>(VCO_DEFAULTS)
-  const [res, setRes] = useState<VcoResult | null>(null)
-  const [tuning, setTuning] = useState<VcoTuning | null>(null)
-  const [opt, setOpt] = useState<VcoOptimizeResult | null>(null)
-  const [wf, setWf] = useState<VcoWaveform | null>(null)
-  const [pvt, setPvt] = useState<VcoPvtResult | null>(null)
-  const [push, setPush] = useState<VcoPushing | null>(null)
-  const [pareto, setPareto] = useState<VcoParetoResult | null>(null)
+export default function VcoPage({ lang, theme, view = 'main', active = true, onNavigate }: { lang: Lang; theme: string; active?: boolean; view?: View; onNavigate?: (v: View) => void }) {
+  const [params, setParams, draft] = useDraft<VcoParams>('vco', VCO_DEFAULTS)
+  const [targetF, setTargetF] = useDraft<number>('vco-target-frequency', 1.5)
+  const designKey = analysisKey(params)
+  const specKey = analysisKey(params, targetF)
+  const [res, setRes, resultStale] = useAnalysisState<VcoResult>(designKey)
+  const [tuning, setTuning] = useAnalysisState<VcoTuning>(designKey)
+  const [opt, setOpt, , isCurrent] = useAnalysisState<VcoOptimizeResult>(specKey)
+  const [wf, setWf] = useAnalysisState<VcoWaveform>(designKey)
+  const [pvt, setPvt] = useAnalysisState<VcoPvtResult>(designKey)
+  const [push, setPush] = useAnalysisState<VcoPushing>(designKey)
+  const [pareto, setPareto] = useAnalysisState<VcoParetoResult>(designKey)
   const [paretoSel, setParetoSel] = useState<number | null>(null) // 파레토 front 선택점(상세 패널)
   // WiCkeD 수율·강건성 결과(4종 병렬 실행)
-  const [wk, setWk] = useState<{ verdict?: VcoWickedVerdict; wcd?: VcoWickedWcd; mm?: VcoWickedMismatch; ys?: VcoWickedYieldSweep } | null>(null)
-  const [lay, setLay] = useState<LayoutResult | null>(null)
-  const [flow, setFlow] = useState<VcoFullflow | null>(null)
-  const [pn, setPn] = useState<VcoPhaseNoise | null>(null)
+  const [wk, setWk] = useAnalysisState<{ verdict?: VcoWickedVerdict; wcd?: VcoWickedWcd; mm?: VcoWickedMismatch; ys?: VcoWickedYieldSweep }>(specKey)
+  const [lay, setLay] = useAnalysisState<LayoutResult>(designKey)
+  const [flow, setFlow] = useAnalysisState<VcoFullflow>(specKey)
+  const [pn, setPn] = useAnalysisState<VcoPhaseNoise>(designKey)
+  const [error, setError] = useAnalysisState<string>(specKey)
   const [load, setLoad] = useState('')
-  const [targetF, setTargetF] = useState(1.5)
-  const [showLiveSchematic, setShowLiveSchematic] = useState(false)
   const busy = load !== ''
 
   // W 그리드 모델: gaa2nm = 나노시트 스택 0.2µ, asap7 = 핀 0.07µ — 입력을 그리드에 스냅
@@ -105,7 +113,7 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
     </span>
   )
 
-  const guard = async (tag: string, fn: () => Promise<void>) => { setLoad(tag); try { await fn() } catch { /* ignore */ } finally { setLoad('') } }
+  const guard = async (tag: string, fn: () => Promise<void>) => { if (busy) return; setError(null); setLoad(tag); try { await fn() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setLoad('') } }
   const run = () => guard('run', async () => { const r = await vcoSimulate(params, true); setRes(r); setTuning(r.tuning ?? null) })
   const runWicked = () => guard('wicked', async () => {
     // 무거운 분석 4종 — 동시 실행은 로컬 ngspice 풀을 고갈시키므로 순차 실행,
@@ -117,13 +125,31 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
     const mm = await vcoWickedMismatch(params); setWk((w) => ({ ...w, mm }))
     const ys = await vcoWickedYieldsweep(params, targets); setWk((w) => ({ ...w, ys }))
   })
-  const optimize = () => guard('opt', async () => { const r = await vcoOptimize(params, targetF); if (!r.error) { setOpt(r); setParams((p) => ({ ...p, n_stages: normalizeVcoStages(r.final_params.n_stages ?? p.n_stages), devices: { ...p.devices, ...r.final_params.devices } })); setRes({ nominal: r.nominal }); setTuning(r.tuning); setTimeout(() => document.getElementById('vco-tuning-card')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 150) } })
+  const optimizedParams = (final: Partial<VcoParams>): VcoParams => ({
+    ...params, ...final, n_stages: normalizeVcoStages(final.n_stages ?? params.n_stages),
+    devices: { ...params.devices, ...final.devices },
+  })
+  const optimize = () => guard('opt', async () => {
+    const r = await vcoOptimize(params, targetF)
+    if (!isCurrent()) return
+    const final = optimizedParams(r.final_params)
+    setOpt(r, analysisKey(final, targetF))
+    setRes({ nominal: r.nominal }, analysisKey(final))
+    setTuning(r.tuning, analysisKey(final))
+    setParams(final)
+  })
   const runWave = () => guard('wave', async () => { const w = await vcoWaveform(params); if (!w.error) setWf(w) })
   const runPvt = () => guard('pvt', async () => { const r = await vcoPvt(params); if (!r.error) setPvt(r) })
   const runPush = () => guard('push', async () => { const r = await vcoPushing(params); if (!r.error) setPush(r) })
   const runPareto = () => guard('pareto', async () => { const r = await vcoPareto(params); if (!r.error) setPareto(r) })
   const runLayout = () => guard('layout', async () => { const r = await vcoLayout(params); if (!r.error) setLay(r) })
-  const runFlow = () => guard('flow', async () => { const r = await vcoFullflow(params); if (!r.error) { setFlow(r); setParams((p) => ({ ...p, n_stages: normalizeVcoStages(r.final_params.n_stages ?? p.n_stages), devices: { ...p.devices, ...r.final_params.devices } })) } })
+  const runFlow = () => guard('flow', async () => {
+    const r = await vcoFullflow(params, targetF)
+    if (!isCurrent()) return
+    const final = optimizedParams(r.final_params)
+    setFlow(r, analysisKey(final, targetF))
+    setParams(final)
+  })
   const runPn = () => guard('pn', async () => { const r = await vcoPhaseNoise(params); if (!r.error) setPn(r) })
 
   const nom = res?.nominal
@@ -167,9 +193,10 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
       lang={lang}
       profileLabel={`f → ${targetF} GHz`}
       functional={res ? (res.error ? null : !!nom?.oscillates) : null}
-      error={res?.error ?? null}
+      error={error ?? res?.error ?? null}
       busy={busy}
-      onRun={run}
+      onRun={view === 'main' || view === 'circuit' || view === 'opt' ? undefined : run}
+      compact={view === 'main' || view === 'circuit' || view === 'opt'}
       onFix={() => onNavigate?.('opt')}
       fixLabel={T(lang, '목표로 재사이징', 'resize to target')}
       metrics={[
@@ -189,10 +216,15 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
       ]}
     />
   )
-  const withDock = (node: React.ReactNode) => <><div className="mb-4">{vcoStrip}</div>{node}{agentDock}</>
+  const projectToolbar = <ProjectToolbar domain="vco" lang={lang} status={draft} params={params} targets={{ f_ghz: targetF }} busy={busy}
+    onImport={project => {
+      setRes(null); setTuning(null); setOpt(null); setWf(null); setPvt(null); setPush(null); setPareto(null); setWk(null); setLay(null); setFlow(null); setPn(null); setError(null)
+      setParams(project.params as VcoParams); setTargetF(project.targets.f_ghz)
+    }} />
+  const toolbarHost = document.getElementById('project-toolbar-host')
+  const withDock = (node: React.ReactNode) => <>{active && toolbarHost && createPortal(projectToolbar, toolbarHost)}{resultStale && <div className="analysis-notice" role="status">{T(lang, '설계 입력이 변경되었습니다. 현재 설계의 측정값을 보려면 다시 실행하세요.', 'Design inputs changed. Run again to measure the current design.')}</div>}<div className="mb-4">{vcoStrip}</div>{node}{agentDock}</>
 
-  if (view === 'circuit') {
-    return withDock(
+  const circuitPanel = (
       <div className="flex flex-col gap-4">
         <div className="p-5" style={box}>
           {hd(T(lang, '회로도 · 발진 파형', 'schematic · oscillation'), <div className="flex items-center gap-2">{topoBadge}
@@ -213,15 +245,14 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
         </div>
         <NetlistImport kind="vco" ko={lang === 'ko'} onApply={(pp) => setParams((prev) => ({ ...prev, ...(pp.vdd != null ? { vdd: pp.vdd } : {}), ...(pp.vctrl != null ? { vctrl: pp.vctrl } : {}), ...(pp.n_stages != null ? { n_stages: normalizeVcoStages(pp.n_stages) } : {}), ...(pp.cload_ff != null ? { cload_ff: pp.cload_ff } : {}), ...(pp.model ? { model: pp.model as 'ptm' | 'gaa2nm' } : {}), devices: { ...prev.devices, ...pp.devices } }))} />
       </div>
-    )
-  }
+  )
 
   // ---- PVT ----
   if (view === 'pvt') {
     return withDock(
       <div className="p-5" style={box}>
-        {hd(T(lang, 'PVT 코너 · 주파수 / 발진', 'PVT corners · frequency / oscillation'), runBtn(runPvt, 'pvt', T(lang, '◫ 27코너 실행', '◫ run 27 corners')))}
-        {pvt ? <VcoPvtView pvt={pvt} lang={lang} /> : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '공정·전압·온도 27코너에서 발진 주파수와 발진 여부를 확인합니다.', 'Check oscillation frequency and startup across 27 process/voltage/temperature corners.')}</p>}
+        {hd(T(lang, 'PVT 코너 · 주파수 / 발진', 'PVT corners · frequency / oscillation'), runBtn(runPvt, 'pvt', T(lang, '◫ 45코너 실행', '◫ run 45 corners')))}
+        {pvt ? <VcoPvtView pvt={pvt} lang={lang} /> : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '공정·전압·온도 45코너에서 발진 주파수와 발진 여부를 확인합니다.', 'Check oscillation frequency and startup across 45 process/voltage/temperature corners.')}</p>}
       </div>
     )
   }
@@ -288,7 +319,7 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
         {hd(T(lang, '수율 · 강건성 (WiCkeD)', 'Yield · robustness (WiCkeD)'),
           <div className="flex gap-2 items-center">
             <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
-            <input type="number" step={0.1} min={0.1} disabled={busy} value={targetF} onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
+            <input aria-label={T(lang, '목표 주파수 (GHz)', 'Target frequency (GHz)')} type="number" step={0.1} min={0.1} disabled={busy} value={targetF} onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
             <span className="mono text-[11px]" style={lab}>GHz ±15%</span>
             {runBtn(runWicked, 'wicked', T(lang, '⊞ 강건성 분석 실행', '⊞ Run robustness'))}
           </div>)}
@@ -430,7 +461,7 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
   // ---- Layout (GDS + DRC) ----
   if (view === 'layout') {
     return withDock(
-      <div className="p-5" style={box}>
+      <LayoutWorkspace lang={lang}><div className="p-5" style={box}>
         {hd(T(lang, '레이아웃 · GDSII + DRC', 'layout · GDSII + DRC'), runBtn(runLayout, 'layout', T(lang, '▧ 레이아웃 생성', '▧ generate layout')))}
         {lay ? (
           <>
@@ -444,7 +475,7 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
             <p className="mono text-[11px] mt-2" style={lab}>{T(lang, 'N단(각 인버터 2쌍 Mp/Mn·Mpb/Mnb + 래치 Mx/Mxb — 유닛 소자만) 멀티핑거 MOS + 가드링. PoC 레이아웃(사인오프 DRC 아님).', 'N stages (2 inverter pairs + latch Mx/Mxb each — unit devices only) as multi-finger MOS + guard ring. PoC layout, not sign-off DRC.')}</p>
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '현재 소자 크기로 링 VCO의 트랜지스터 레벨 GDSII 레이아웃을 합성하고 규칙 DRC를 돌립니다.', 'Synthesize the transistor-level GDSII layout of the ring VCO from the current sizing and run rule DRC.')}</p>}
-      </div>
+      </div></LayoutWorkspace>
     )
   }
 
@@ -476,8 +507,20 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
 
   // ---- main (sizing · tuning) & opt (auto-size): 2-column with editor ----
   return withDock(
-    <div className="grid gap-6" style={{ gridTemplateColumns: 'minmax(0,400px) 1fr' }}>
-      <section className="flex flex-col gap-4">
+    <div className="workspace-columns eda-editor-layout grid gap-6">
+      <section className="eda-inspector flex flex-col gap-4" aria-label={T(lang, '속성 편집기', 'Property inspector')}><div className="eda-panel-title">{T(lang, '속성 · 시뮬레이션 설정', 'Properties · simulation setup')}</div>
+        {view !== 'opt' ? (
+          <button onClick={run} disabled={busy} className="py-2.5 rounded-xl font-medium disabled:opacity-50" style={{ background: A, color: 'var(--bg)' }}>
+            {load === 'run' ? T(lang, '시뮬레이션 중…', 'simulating…') : T(lang, '▶ VCO 실행 (튜닝 포함)', '▶ Run VCO (with tuning)')}
+          </button>
+        ) : (
+          <div className="flex gap-2 items-center rounded-xl p-2.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+            <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
+            <input aria-label={T(lang, '목표 주파수 (GHz)', 'Target frequency (GHz)')} type="number" step={0.1} min={0.1} disabled={busy} value={targetF} onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
+            <span className="mono text-[11px]" style={lab}>GHz</span>
+            {runBtn(optimize, 'opt', T(lang, '◴ 자동 사이징 실행', '◴ Run auto-size'))}
+          </div>
+        )}
         <div className="p-4" style={box}>
           <div className="flex items-center justify-between gap-2 mb-3">
             <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '링 VCO · 소자 크기', 'ring VCO · sizing')}</div>
@@ -519,7 +562,7 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
                 <div className="text-xs truncate" style={{ color: 'var(--muted)' }}>{VCO_DEVICE_META[k].role[lang]}</div>
               </div>
               {(['w_um', 'l_nm', 'm'] as const).map((f) => (
-                <input key={f} type="number" step={f === 'w_um' ? (unit ?? 0.5) : f === 'l_nm' ? 5 : 1} min={0} disabled={busy}
+                <input key={f} aria-label={`${VCO_DEVICE_META[k].name} ${f === 'w_um' ? 'W (µm)' : f === 'l_nm' ? 'L (nm)' : 'M'}`} type="number" step={f === 'w_um' ? (unit ?? 0.5) : f === 'l_nm' ? 5 : 1} min={0} disabled={busy}
                   title={unit && f === 'w_um' ? T(lang, `${unit}µ(${unitName} 1개) 단위 스냅 — 현재 ${Math.round(params.devices[k].w_um / unit)}${unitName} × M${params.devices[k].m}`, `snaps to ${unit}µ — ${Math.round(params.devices[k].w_um / unit)} units × M${params.devices[k].m}`) : undefined}
                   value={params.devices[k][f]} onChange={(e) => setDev(k, f, parseFloat(e.target.value) || 0)} />
               ))}
@@ -535,44 +578,12 @@ export default function VcoPage({ lang, theme, view = 'main', onNavigate }: { la
             ))}
           </div>
         </div>
-        {view === 'main' ? (
-          <button onClick={run} disabled={busy} className="py-2.5 rounded-xl font-medium disabled:opacity-50" style={{ background: A, color: 'var(--bg)' }}>
-            {load === 'run' ? T(lang, '시뮬레이션 중…', 'simulating…') : T(lang, '▶ VCO 실행 (튜닝 포함)', '▶ Run VCO (with tuning)')}
-          </button>
-        ) : (
-          <div className="flex gap-2 items-center rounded-xl p-2.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
-            <span className="mono text-[11px]" style={lab}>{T(lang, '목표 f', 'target f')}</span>
-            <input type="number" step={0.1} min={0.1} disabled={busy} value={targetF} onChange={(e) => setTargetF(parseFloat(e.target.value) || 0)} style={{ width: 64 }} />
-            <span className="mono text-[11px]" style={lab}>GHz</span>
-            {runBtn(optimize, 'opt', T(lang, '◴ 자동 사이징 실행', '◴ Run auto-size'))}
-          </div>
-        )}
+
 
       </section>
 
       <section className="flex flex-col gap-4">
-        <div className="p-4" style={box}>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="mono text-[11px] uppercase tracking-[0.16em]" style={lab}>{T(lang, '회로도 동기화', 'schematic sync')}</div>
-              <p className="mono text-[10.5px] mt-1" style={lab}>
-                {T(lang, 'N 변경은 회로 탭의 schematic에 즉시 반영됩니다.', 'N changes are reflected immediately in the Circuit schematic.')}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="mono text-[10.5px] tnum" style={{ color: A }}>N={normalizeVcoStages(params.n_stages)}</span>
-              <button onClick={() => setShowLiveSchematic((v) => !v)} className="mono text-[10.5px] px-2.5 py-1 rounded-full"
-                style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 35%, var(--line))' }}>
-                {showLiveSchematic ? T(lang, '접기', 'hide') : T(lang, '미리보기', 'preview')}
-              </button>
-            </div>
-          </div>
-          {showLiveSchematic && (
-            <div className="overflow-x-auto mt-3" style={{ maxHeight: 260 }}>
-              <VcoSchematic devices={params.devices} nStages={params.n_stages} starved={(params.topology ?? 'xcplsv') !== 'xcpl'} />
-            </div>
-          )}
-        </div>
+        {circuitPanel}
         <div className="p-5" style={box}>
           <div className="mono text-[11px] uppercase tracking-[0.16em] mb-4" style={lab}>{T(lang, '발진 측정', 'oscillation metrics')}</div>
           {res?.error ? <p className="mono text-sm" style={{ color: 'var(--bad)' }}>error: {res.error}</p> : (

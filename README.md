@@ -1017,7 +1017,7 @@ comparator's spec triple replaced by *oscillates / frequency band
 - `nominal_verdict` — FEO-style margins against the f-band and power targets.
 - `parameter_screening` — OAT width ranking for f and power, with a
   `kills_osc` flag on moves that stop the oscillation.
-- `wco_operating` / `worst_case_corners` — 27 PVT corners, ranked by f-margin.
+- `wco_operating` / `worst_case_corners` — 45 PVT corners, ranked by f-margin.
 - `worst_case_distance` — WCD beta over (pskew, VDD, temp) with linear
   interpolation to the band edge; `yop_optimize` centers the design on beta.
 - `mismatch_mc` — the comparator's Monte-Carlo offset analog: an independent

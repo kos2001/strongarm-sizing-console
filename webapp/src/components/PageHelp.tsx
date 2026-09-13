@@ -1,15 +1,15 @@
-import { useState } from 'react'
+import { useDraft } from '../useDraft'
 import { HELP, t, UI, type Lang } from '../i18n'
 
 // Beginner-friendly explanation card shown at the top of every page: a plain-
 // language "what is this" + "how to read it", in the selected language.
 // Collapsible so experienced users can hide it (state per page id).
 export default function PageHelp({ page, lang }: { page: string; lang: Lang }) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useDraft<boolean>('help-expanded', false)
   const h = HELP[page]
   if (!h) return null
   return (
-    <div className="rounded-2xl mb-5" style={{ background: 'color-mix(in srgb, var(--ag) 8%, var(--surface))', border: '1px solid color-mix(in srgb, var(--ag) 30%, var(--line))' }}>
+    <div className="eda-help rounded-xl" style={{ background: 'color-mix(in srgb, var(--ag) 8%, var(--surface))', border: '1px solid color-mix(in srgb, var(--ag) 30%, var(--line))' }}>
       <button
         onClick={() => setOpen(!open)}
         className="w-full flex items-center gap-2 px-4 py-2.5 text-left"

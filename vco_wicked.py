@@ -9,7 +9,7 @@ current). Applied analyses:
 
 * Nominal verdict with normalized spec margins (FEO-style feasibility).
 * Parameter screening — OAT width sensitivity ranking per device group.
-* WCO worst-case operation over the 27 PVT corners + worst-corner extraction.
+* WCO worst-case operation over the 45 PVT corners + worst-corner extraction.
 * WCD worst-case distance (sigma robustness proxy) over pskew/VDD/temp.
 * Per-device Vth mismatch Monte Carlo (the comparator's MC-offset analog):
   sigma_f/f spread + oscillation-failure count under Pelgrom mismatch.

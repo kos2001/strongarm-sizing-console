@@ -165,8 +165,8 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
   },
   pvt: {
     what: {
-      ko: '공정(Process)·전압(Voltage)·온도(Temperature)가 변해도 동작하는지, 27개 조합(코너)에서 최악의 성능을 확인합니다.',
-      en: 'Checks that the circuit still works as process, voltage, and temperature vary — the worst case across 27 combinations (corners).',
+      ko: '공정(Process)·전압(Voltage)·온도(Temperature)가 변해도 동작하는지, 45개 조합(코너)에서 최악의 성능을 확인합니다.',
+      en: 'Checks that the circuit still works as process, voltage, and temperature vary — the worst case across 45 combinations (corners).',
     },
     read: {
       ko: '표의 각 칸이 한 코너에서의 판정시간입니다(청록=통과, 빨강=실패). 상온에서 통과해도 느리고 차갑고 저전압인 코너에서 실패하는 경우가 많아요 — 그래서 코너 검증이 중요합니다.',
@@ -266,7 +266,7 @@ export const HELP: Record<string, { what: Bi; read: Bi }> = {
   vcopvt: {
     what: {
       ko: '공정 5코너(SS/SF/TT/FS/FF)·전압·온도 45개 코너에서 VCO가 발진하는지와 주파수가 얼마나 변하는지 확인합니다. 비교기 PVT와 같은 방식.',
-      en: 'Checks whether the VCO oscillates and how much its frequency shifts across 27 process/voltage/temperature corners — same as the comparator PVT.',
+      en: 'Checks whether the VCO oscillates and how much its frequency shifts across 45 process/voltage/temperature corners — same as the comparator PVT.',
     },
     read: {
       ko: '표의 각 칸 = 그 코너의 발진 주파수. 진할수록 빠름, ✗ = 발진 실패. 최악 코너에서도 발진해야 하고, 주파수 변동폭이 튜닝으로 커버돼야 합니다.',
@@ -344,7 +344,7 @@ export const UI = {
   statusRunNow: { ko: '지금 실행', en: 'Run now' },
   statusPass: { ko: '스펙 만족', en: 'Meets spec' },
   statusFail: { ko: '스펙 미달', en: 'Misses spec' },
-  statusNonFunctional: { ko: '판정 실패 — 회로가 동작하지 않음', en: 'No decision — circuit not functional' },
+  statusNonFunctional: { ko: '회로 동작 실패', en: 'Circuit not functional' },
   statusError: { ko: '시뮬레이션 오류', en: 'Simulation error' },
   statusFixIt: { ko: '지렛대 찾기', en: 'find the lever' },
   // Reachable-but-not-there is neither pass nor fail: the design is capable, the operating
