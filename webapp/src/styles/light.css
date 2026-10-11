@@ -1,0 +1,70 @@
+/* Light workbench: color identifies the task, device and measurement. */
+:root[data-theme="light"] .eda-shell { --faint: #5f718b; --workspace-accent: var(--blue); --workspace-tint: var(--blue-tint); }
+:root[data-theme="light"] .eda-shell[data-domain="vco"][data-workspace="design"] { --workspace-accent: var(--violet); --workspace-tint: var(--violet-tint); }
+:root[data-theme="light"] :is(.eda-shell, .eda-tree-item)[data-workspace="characterization"] { --workspace-accent: var(--cyan); --workspace-tint: var(--cyan-tint); }
+:root[data-theme="light"] :is(.eda-shell, .eda-tree-item)[data-workspace="optimization"] { --workspace-accent: var(--violet); --workspace-tint: var(--violet-tint); }
+:root[data-theme="light"] :is(.eda-shell, .eda-tree-item)[data-workspace="variation"] { --workspace-accent: var(--amber); --workspace-tint: var(--amber-tint); }
+:root[data-theme="light"] :is(.eda-shell, .eda-tree-item)[data-workspace="implementation"] { --workspace-accent: var(--rose); --workspace-tint: var(--rose-tint); }
+:root[data-theme="light"] .eda-tree-item[data-workspace="design"] { --workspace-accent: var(--blue); --workspace-tint: var(--blue-tint); }
+:root[data-theme="light"] body { background: radial-gradient(ellipse at top right, #eee9ff 0, transparent 48%), radial-gradient(ellipse at bottom left, #e4f5fa 0, transparent 48%), var(--bg); }
+:root[data-theme="light"] .eda-shell .app-sidebar { background: linear-gradient(180deg, #fff 0%, #f4f7ff 65%, #eef5fc 100%) !important; box-shadow: 3px 0 18px #24457408; }
+:root[data-theme="light"] .eda-tree-heading { color: var(--blue); }
+:root[data-theme="light"] .eda-tree-item { border-radius: 8px; margin-block: 3px; padding: 8px 10px; }
+:root[data-theme="light"] .eda-tree-item > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0; color: var(--workspace-accent); background: var(--workspace-tint); font-size: 16px; }
+:root[data-theme="light"] .eda-tree-item:hover { color: var(--workspace-accent); background: var(--workspace-tint); }
+:root[data-theme="light"] .eda-tree-item[aria-current="page"] { color: var(--workspace-accent); border-color: var(--workspace-accent); background: var(--workspace-tint); font-weight: 600; }
+:root[data-theme="light"] [data-domain-choice="comparator"] { --domain-color: var(--teal); --domain-tint: var(--teal-tint); }
+:root[data-theme="light"] [data-domain-choice="vco"] { --domain-color: var(--violet); --domain-tint: var(--violet-tint); }
+:root[data-theme="light"] [data-domain-choice] { background: #fff !important; border-color: var(--line) !important; border-radius: 10px; }
+:root[data-theme="light"] [data-domain-choice] > span { color: var(--domain-color) !important; }
+:root[data-theme="light"] [data-domain-choice][aria-pressed="true"] { background: var(--domain-tint) !important; border-color: var(--domain-color) !important; box-shadow: 0 2px 8px color-mix(in srgb, var(--domain-color) 10%, transparent); }
+:root[data-theme="light"] .eda-shell .workspace-heading h1 { color: var(--workspace-accent) !important; font-size: 17px; }
+:root[data-theme="light"] .workspace-search-trigger { background: #fff; border-radius: 8px; color: var(--blue); box-shadow: 0 2px 8px #24457406; }
+:root[data-theme="light"] .eda-document-bar { border-top-color: var(--workspace-accent); background: linear-gradient(100deg, var(--workspace-tint), #fff 65%); border-radius: 8px; color: var(--workspace-accent); }
+:root[data-theme="light"] .eda-analysis-tabs button[aria-selected="true"] { color: var(--workspace-accent); border-color: var(--workspace-accent); background: var(--workspace-tint); }
+:root[data-theme="light"] .eda-shell .project-toolbar { border-radius: 10px; box-shadow: 0 3px 12px #24457406; }
+:root[data-theme="light"] .project-controls { background: linear-gradient(100deg, #fff, var(--blue-tint)); }
+:root[data-theme="light"] .project-actions button:first-child { color: var(--blue); background: var(--blue-tint); border-color: #c4d6fa; }
+:root[data-theme="light"] .project-actions button:nth-child(2) { color: var(--violet); background: var(--violet-tint); border-color: #dacdf8; }
+:root[data-theme="light"] .project-toolbar .draft-status { background: var(--teal-tint); }
+:root[data-theme="light"] .draft-detail { color: var(--teal); }
+:root[data-theme="light"] .draft-status[data-state="error"] .draft-detail { color: var(--bad); }
+:root[data-theme="light"] .draft-status[data-state="saving"] .draft-detail { color: var(--amber); }
+:root[data-theme="light"] .eda-shell .rounded-2xl { border-radius: 12px; }
+:root[data-theme="light"] .eda-shell .rounded-xl { border-radius: 9px; }
+:root[data-theme="light"] .eda-shell .rounded-full { border-radius: 7px; }
+:root[data-theme="light"] .eda-editor-layout > section > .rounded-2xl { box-shadow: 0 4px 18px #24457408; }
+:root[data-theme="light"] .eda-inspector { background: linear-gradient(160deg, #f0f5ff, #fff 65%); border-radius: 12px; box-shadow: 0 4px 18px #24457408; }
+:root[data-theme="light"] .eda-panel-title { color: var(--workspace-accent); border-bottom-color: color-mix(in srgb, var(--workspace-accent) 20%, var(--line-soft)); }
+:root[data-theme="light"] .eda-inspector input[type="number"] { background: #fff; border-radius: 6px; border-color: #c9d7e9; }
+:root[data-theme="light"] .device-row[data-device="input"], :root[data-theme="light"] .device-row[data-device="invn"] { --device-accent: var(--blue); --device-tint: var(--blue-tint); }
+:root[data-theme="light"] .device-row[data-device="tail"], :root[data-theme="light"] .device-row[data-device="starven"] { --device-accent: var(--teal); --device-tint: var(--teal-tint); }
+:root[data-theme="light"] .device-row[data-device="ncc"], :root[data-theme="light"] .device-row[data-device="starvep"] { --device-accent: var(--violet); --device-tint: var(--violet-tint); }
+:root[data-theme="light"] .device-row[data-device="pcc"], :root[data-theme="light"] .device-row[data-device="invp"] { --device-accent: var(--rose); --device-tint: var(--rose-tint); }
+:root[data-theme="light"] .device-row[data-device="pre"], :root[data-theme="light"] .device-row[data-device="xcplp"] { --device-accent: var(--amber); --device-tint: var(--amber-tint); }
+:root[data-theme="light"] .device-row[data-device="prei"] { --device-accent: var(--cyan); --device-tint: var(--cyan-tint); }
+:root[data-theme="light"] .design-preset:nth-child(1) { background: var(--blue-tint) !important; border-color: #c4d6fa !important; }
+:root[data-theme="light"] .design-preset:nth-child(2) { background: var(--amber-tint) !important; border-color: #ebd7af !important; }
+:root[data-theme="light"] .design-preset:nth-child(3) { background: var(--teal-tint) !important; border-color: #b9e4d5 !important; }
+:root[data-theme="light"] .design-preset:hover { box-shadow: 0 3px 10px #24457412; }
+:root[data-theme="light"] .eda-properties { background: var(--violet-tint); border: 1px solid #e2d7fa; border-radius: 9px; padding: 0 10px; }
+:root[data-theme="light"] .eda-properties summary { color: var(--violet); }
+:root[data-theme="light"] [data-testid="design-status"][data-state="unrun"] { background: var(--blue-tint) !important; border-color: #c4d6fa !important; }
+:root[data-theme="light"] .metric-gauge[data-metric="Decision time"] { --metric-accent: var(--blue); --metric-tint: var(--blue-tint); }
+:root[data-theme="light"] .metric-gauge[data-metric="Power"] { --metric-accent: var(--amber); --metric-tint: var(--amber-tint); }
+:root[data-theme="light"] .metric-gauge[data-metric="Offset σ"] { --metric-accent: var(--violet); --metric-tint: var(--violet-tint); }
+:root[data-theme="light"] .metric-gauge[data-metric="Input noise"] { --metric-accent: var(--rose); --metric-tint: var(--rose-tint); }
+:root[data-theme="light"] .metric-gauge > div:first-child > div:first-child { color: var(--metric-accent, var(--text)); }
+:root[data-theme="light"] .gauge-fill { background: linear-gradient(90deg, color-mix(in srgb, var(--metric-accent, var(--si)) 15%, #fff), color-mix(in srgb, var(--metric-accent, var(--si)) 35%, #fff)) !important; }
+:root[data-theme="light"] .metric-gauge[data-verdict="fail"] .gauge-fill { background: linear-gradient(90deg, #ffe4e8, #f7a8b7) !important; }
+:root[data-theme="light"] .gauge-value { color: var(--text); font-weight: 600; }
+:root[data-theme="light"] .eda-output-dock .execution-panel { border-radius: 10px; box-shadow: 0 3px 14px #24457408; }
+:root[data-theme="light"] .execution-summary { background: var(--cyan-tint); color: var(--cyan); }
+:root[data-theme="light"] .execution-row[data-state="running"] { background: var(--blue-tint); }
+:root[data-theme="light"] .execution-row[data-state="failed"] { background: #fff0f2; }
+:root[data-theme="light"] .execution-row[data-state="succeeded"] { background: var(--teal-tint); }
+:root[data-theme="light"] .workspace-search-dialog { box-shadow: 0 24px 80px #233b6433; }
+:root[data-theme="light"] .workspace-search-header { background: linear-gradient(100deg, var(--blue-tint), var(--violet-tint)); }
+:root[data-theme="light"] .workspace-search-result:hover, :root[data-theme="light"] .workspace-search-result:focus-visible { background: var(--blue-tint); }
+:root[data-theme="light"] :is(.waveform-plot, .generated-layout-canvas) { border-radius: 9px; }
+:root[data-theme="light"] :is(.generated-layout-canvas, .physical-canvas) { background: var(--circuit-bg); }

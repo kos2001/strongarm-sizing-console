@@ -1,0 +1,83 @@
+/* ---- instrument palette (shared with the project's viz aesthetic) ---- */
+:root {
+  --bg: #0a0f1a;
+  --surface: #111826;
+  --surface-2: #0d1420;
+  --line: #1f2b3f;
+  --line-soft: #17202f;
+  --text: #dce6f2;
+  --muted: #8296b0;
+  --faint: #5a6b86;
+  --si: #35d0c0;
+  --si-dim: #1c8f86;
+  --ag: #8b7dff;
+  --good: #46d18a;
+  --warn: #f0b24a;
+  --bad: #ff6b6b;
+  --on-si: #04120f;
+  --on-ag: #0b0820;
+  --circuit-bg: #040a0a;
+  --circuit-grid: #0d2422;
+  --circuit-grid-major: #123230;
+  --circuit-wire: #39d7d7;
+  --circuit-symbol: #63d68a;
+  --circuit-active: #8fe6ff;
+  --circuit-pin: #ff5a52;
+  --circuit-property: #e6c84f;
+  --circuit-net: #57e0e0;
+  --circuit-global: #ff8a3d;
+  --circuit-changed: #ffb02e;
+  --circuit-text: #cfe9e6;
+  --circuit-faint: #7aa6a3;
+  --plot-bg: #04090a;
+  --plot-line: #143433;
+  --plot-control: #234342;
+  --plot-text: #bfe4e0;
+  --plot-accent: #39d7d7;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+/* fallback first paint when JS hasn't set data-theme yet (no-JS / pre-hydration) */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #f4f7fd; --surface: #ffffff; --surface-2: #edf3fc;
+    --line: #cdd9ec; --line-soft: #e0e8f5;
+    --text: #20304d; --muted: #536581; --faint: #5f718b;
+    --si: #0f766e; --si-dim: #a7e4d8; --ag: #6d28d9;
+    --good: #087f5b; --warn: #955700; --bad: #b4233b;
+    --on-si: #ffffff; --on-ag: #ffffff;
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f7fd; --surface: #ffffff; --surface-2: #edf3fc;
+  --line: #cdd9ec; --line-soft: #e0e8f5;
+  --text: #20304d; --muted: #536581; --faint: #5f718b;
+  --si: #0f766e; --si-dim: #a7e4d8; --ag: #6d28d9;
+  --good: #087f5b; --warn: #955700; --bad: #b4233b;
+  --on-si: #ffffff; --on-ag: #ffffff;
+  --blue: #1d4ed8; --blue-tint: #edf4ff;
+  --cyan: #0e7490; --cyan-tint: #e9f8fc;
+  --violet: #6d28d9; --violet-tint: #f3eeff;
+  --amber: #955700; --amber-tint: #fff6e5;
+  --rose: #be185d; --rose-tint: #fff0f5;
+  --teal: #0f766e; --teal-tint: #eaf9f4;
+  --circuit-bg: #f8fbff;
+  --circuit-grid: #d7e2f1;
+  --circuit-grid-major: #bdcfe6;
+  --circuit-wire: #2563b2;
+  --circuit-symbol: #047857;
+  --circuit-active: #7c3aed;
+  --circuit-pin: #be185d;
+  --circuit-property: #955700;
+  --circuit-net: #0e7490;
+  --circuit-global: #c2410c;
+  --circuit-changed: #b45309;
+  --circuit-text: #20304d;
+  --circuit-faint: #536581;
+  --plot-bg: #f8fbff;
+  --plot-line: #d1dff0;
+  --plot-control: #bdcfe6;
+  --plot-text: #334968;
+  --plot-accent: #1d4ed8;
+}

@@ -11,7 +11,7 @@ interface Props {
   params: Params | VcoParams
   targets: Record<string, number>
   busy: boolean
-  status: { savedAt: number | null; restored: boolean; saveError: boolean }
+  status: { savedAt: number | null; restored: boolean; saveError: boolean; saving?: boolean }
   onImport: (project: DesignProject) => void
 }
 

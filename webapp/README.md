@@ -65,6 +65,12 @@ npm run build     # -> dist/  (static, then serve dist/ behind any /api proxy)
 
 ## Tests
 
+```sh
+npm test                  # pure logic: drafts, requests, reports and waveforms
+npm run test:browser      # UI regression against http://127.0.0.1:8771
+npm run test:live         # real comparator/VCO/PVT simulations on that server
+```
+
 `strongarm_sim/tests/` holds a pytest regression suite (SPICE integration
 tests — auto-skipped if ngspice is missing): backend functional/verdict/noise,
 metastability τ, layout DRC + parasitic extraction, BER monotonicity,
@@ -73,6 +79,20 @@ sensitivity coverage, and optimizer convergence.
 ```sh
 cd strongarm_sim && python3 -m pytest tests/ -q      # runs real ngspice; duration depends on host
 ```
+
+## Frontend structure
+
+`App.tsx` owns comparator state and analysis orchestration. `comparator.ts` holds
+defaults, presets and measurement metadata; `navigation.ts` defines the shared
+workspace, search and VCO view mappings. `WorkspaceSidebar` and `WorkspaceTabs`
+render navigation from those definitions. `analysisRequest.ts` handles common
+loading/error cleanup while each caller controls result updates and stale-result
+checks. `report.ts` generates Markdown separately from the download action.
+
+`WaveformPlot` owns interaction state; `waveform.ts` handles sample selection and
+decimation, and `waveformCanvas.ts` builds cached paths and draws the plot/cursor.
+`index.css` imports styles in cascade order: theme tokens, base rules, interaction,
+workspace layout and light-theme overrides, all under `src/styles/`.
 
 ## Workspace and execution workflow
 
@@ -83,6 +103,8 @@ the sibling `ppa-eda-agent` repository. See [EDA workspace guide](../docs/eda-wo
 for the layout data sources, verification scope and integration tests.
 
 Inputs, targets, design names, language and theme are saved in the current browser.
+Autosave coalesces edits for 250 ms and flushes pending changes when the tab is
+hidden, reloaded or unmounted. The saved indicator shows when a write is pending.
 Use **Save file** to export a named `.strongarm.json` design and **Open file** to
 validate and preview a design before applying it. Undo restores the preceding
 inputs. Measurements are tied to the inputs and targets used for that run;
@@ -93,6 +115,33 @@ The execution panel shows running tasks, elapsed time, errors and the latest
 **Open workspace** returns to it. Identical pending requests share one operation.
 Running work has a browser leave guard, but does not resume after a reload or
 server restart. Completion indicates a successful request, not a spec pass.
+
+Use **Find analysis** or **Cmd/Ctrl+K** to search across both domains in Korean or
+English. Arrow keys select a result, Enter opens it and Escape closes search.
+Analysis URLs include the selected view (for example `#vcocircuit`), so bookmarks,
+reloads and browser Back/Forward restore the view without restarting in-tab work.
+
+Comparator and VCO waveforms support a sample cursor, signal visibility toggles,
+cursor-centered zoom and reset. Hover or use the keyboard-accessible cursor slider
+to read the original measured samples. Trace paths are cached separately from the
+cursor overlay, and large traces retain the first/last sample and both extrema per
+screen pixel, preserving short pulses rather than skipping every Nth sample.
+VCO result charts and its assistant load on demand; chart loading keeps the device
+editor mounted. Schematics and generated layouts skip unrelated parent updates.
+
+Measured with the production build and `tests/interaction.browser.mjs`:
+
+| Check | Before | After |
+|------|-------:|------:|
+| VCO page JavaScript chunk (uncompressed) | 59.67 kB | 42.56 kB |
+| VCO page JavaScript chunk (gzip) | 18.97 kB | 14.06 kB |
+| Three synthetic 20,001-sample traces at the tested desktop size | 60,003 vertices | 1,923 path vertices |
+
+Vertex counts depend on plot width and signal shape; these are rendering-work and
+bundle-size measurements, not an end-to-end latency benchmark. Cursor movement
+causes zero trace redraws. Browser checks also
+verify one storage write for a typing burst, immediate reload preservation,
+keyboard search, history navigation, bookmarks and chart controls at 390 px width.
 
 From the project root, after starting a production server on port 8771:
 

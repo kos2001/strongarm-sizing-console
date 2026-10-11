@@ -1,4 +1,12 @@
-import LayoutWorkspace from './components/LayoutWorkspace'
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import WorkspaceSidebar from './components/WorkspaceSidebar'
+import WorkspaceTabs from './components/WorkspaceTabs'
+import WorkspaceSearch from './components/WorkspaceSearch'
+import { NAV_COMPARATOR, NAV_VCO, VCO_VIEW, domainOf, PAGES, SEARCH_DESTINATIONS, pageForVcoView, type Page } from './navigation'
+import { DEFAULTS, PRESETS, SPEC_PROFILES, TARGET_KEYS, TARGET_META, comparatorMeasurements, type TargetKey, type Targets } from './comparator'
+import { runAnalysisRequest } from './analysisRequest'
+import { downloadComparatorReport } from './report'
+import { useWorkspacePage } from './useWorkspacePage'
 import AnalysisBoundary from './components/AnalysisBoundary'
 import { analysisKey, comparatorVerdicts } from './analysis'
 import { useAnalysisState } from './useAnalysisState'
@@ -6,102 +14,33 @@ import { requestJson, getExecutions, subscribeExecutions } from './execution'
 import ExecutionPanel, { ElapsedTime } from './components/ExecutionPanel'
 import { useDraft } from './useDraft'
 import ProjectToolbar from './components/ProjectToolbar'
-import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ResolutionResult, BerResult, ProbitResult, Device, DeviceKey, FlowResult, LayoutResult, MaxFclkResult, MetastabilityResult, Offset, OptimizeResult, OptStep, Params, ParetoResult, PostLayout, PvtResult, SensitivityResult, SimResult, Waveform, YieldResult } from './types'
 import { DEVICE_META } from './types'
 import { fullflow, getDefaults, health, layout, maxfclk, resolution as apiResolution, optimize, pareto, postlayout, pvt, sensitivity, simulate, waveform, yieldRun } from './api'
-const BerChart = lazy(() => import('./components/BerChart'))
 import DeviceEditor from './components/DeviceEditor'
-const FclkChart = lazy(() => import('./components/FclkChart'))
 import Gauge from './components/Gauge'
 import StatusStrip from './components/StatusStrip'
+import PageHelp from './components/PageHelp'
+import { downloadNetlist } from './netlist'
+import NetlistImport from './components/NetlistImport'
+import AgentDock from './components/AgentDock'
+import { t, type Lang } from './i18n'
+
+const LayoutWorkspace = lazy(() => import('./components/LayoutWorkspace'))
+const BerChart = lazy(() => import('./components/BerChart'))
+const FclkChart = lazy(() => import('./components/FclkChart'))
 const LayoutView = lazy(() => import('./components/LayoutView'))
 const MetastabilityChart = lazy(() => import('./components/MetastabilityChart'))
 const ResolutionChart = lazy(() => import('./components/ResolutionChart'))
 const MonteCarloChart = lazy(() => import('./components/MonteCarloChart'))
 const ParetoChart = lazy(() => import('./components/ParetoChart'))
-import PageHelp from './components/PageHelp'
 const Schematic = lazy(() => import('./components/Schematic'))
-import { downloadNetlist } from './netlist'
-import NetlistImport from './components/NetlistImport'
 const AgentSizing = lazy(() => import('./components/AgentSizing'))
-import AgentDock from './components/AgentDock'
 const SensitivityChart = lazy(() => import('./components/SensitivityChart'))
 const VcoPage = lazy(() => import('./components/VcoPage'))
 const WaveformChart = lazy(() => import('./components/WaveformChart'))
 const WickedPage = lazy(() => import('./components/WickedPage'))
 const YieldView = lazy(() => import('./components/YieldView'))
-import { NAV_LABELS, t, UI, type Bi, type Lang } from './i18n'
-
-// metric metadata is fixed; the *limits* are editable (see spec profiles below)
-type TargetKey = 'decision_time_ps' | 'power_uw' | 'offset_sigma_mv' | 'noise_uv_rms'
-const TARGET_KEYS: TargetKey[] = ['decision_time_ps', 'power_uw', 'offset_sigma_mv', 'noise_uv_rms']
-const TARGET_META: Record<TargetKey, { unit: string; label: string; step: number }> = {
-  decision_time_ps: { unit: 'ps', label: 'Decision time', step: 10 },
-  power_uw: { unit: 'µW', label: 'Power', step: 5 },
-  offset_sigma_mv: { unit: 'mV', label: 'Offset σ', step: 0.5 },
-  noise_uv_rms: { unit: 'µV', label: 'Input noise', step: 10 },
-}
-type Targets = Record<TargetKey, number>
-// application-driven spec profiles; pick one, then fine-tune any limit inline
-const SPEC_PROFILES: { id: string; label: string; note: string; targets: Targets }[] = [
-  { id: 'P1', label: 'P1 · SAR-ADC', note: '10-bit SAR comparator (balanced)', targets: { decision_time_ps: 400, power_uw: 100, offset_sigma_mv: 5, noise_uv_rms: 250 } },
-  { id: 'P2', label: 'P2 · High-speed', note: 'fast link RX, offset-relaxed', targets: { decision_time_ps: 150, power_uw: 300, offset_sigma_mv: 10, noise_uv_rms: 400 } },
-  { id: 'P3', label: 'P3 · Low-power', note: 'sensor front-end, precise + quiet', targets: { decision_time_ps: 800, power_uw: 40, offset_sigma_mv: 3, noise_uv_rms: 150 } },
-]
-
-const DEFAULTS: Params = {
-  vdd: 0.7,
-  cload_ff: 15.0,
-  avt_mv_um: 2.0,
-  n_mc: 16,
-  devices: {
-    input: { w_um: 8.0, l_nm: 80.0, m: 4 },
-    tail: { w_um: 12.0, l_nm: 45.0, m: 6 },
-    ncc: { w_um: 4.0, l_nm: 45.0, m: 2 },
-    pcc: { w_um: 9.0, l_nm: 45.0, m: 4 },
-    pre: { w_um: 4.0, l_nm: 45.0, m: 2 },    // S3/S4 — 출력 X·Y 프리차지
-    prei: { w_um: 4.0, l_nm: 45.0, m: 2 },   // S1/S2 — 내부 P·Q 프리차지
-  },
-}
-
-const PRESETS: { name: string; note: string; patch: (p: Params) => Params }[] = [
-  { name: 'PTM seed', note: 'baseline P1 sizing', patch: () => structuredClone(DEFAULTS) },
-  {
-    name: 'Under-sized',
-    note: 'fails offset spec',
-    patch: (p) => ({ ...structuredClone(p), devices: { ...structuredClone(p.devices), input: { w_um: 2.0, l_nm: 45, m: 2 }, tail: { w_um: 3.0, l_nm: 45, m: 2 } } }),
-  },
-  {
-    name: 'Tuned pass',
-    note: 'input widened 3×',
-    patch: (p) => ({ ...structuredClone(p), devices: { ...structuredClone(p.devices), input: { w_um: 6.0, l_nm: 45, m: 2 } } }),
-  },
-]
-
-type Page = 'sizing' | 'circuit' | 'resolution' | 'metastability' | 'maxfclk' | 'optimizer' | 'sensitivity' | 'pareto' | 'montecarlo' | 'ber' | 'pvt' | 'yield' | 'wicked' | 'layout' | 'flow'
-  | 'vcocircuit' | 'vco' | 'vcoopt' | 'vcopareto' | 'vcopn' | 'vcopvt' | 'vcoyield' | 'vcopushing' | 'vcolayout' | 'vcoflow'
-type Domain = 'comparator' | 'vco'
-// Each workspace owns related analyses; leaf views stay addressable for run history.
-type Workspace = { id: string; label: Bi; glyph: string; pages: Page[] }
-const NAV_COMPARATOR: Workspace[] = [
-  { id: 'design', label: { ko: '설계 편집', en: 'Design editor' }, glyph: '⎓', pages: ['sizing', 'circuit'] },
-  { id: 'characterization', label: { ko: '특성 분석', en: 'Characterization' }, glyph: '∿', pages: ['resolution', 'metastability', 'ber', 'maxfclk'] },
-  { id: 'optimization', label: { ko: '최적화', en: 'Optimization' }, glyph: '◴', pages: ['optimizer', 'sensitivity', 'pareto'] },
-  { id: 'variation', label: { ko: '변동성 검증', en: 'Variation' }, glyph: '◫', pages: ['pvt', 'montecarlo', 'yield', 'wicked'] },
-  { id: 'implementation', label: { ko: '구현 · 검증', en: 'Implementation' }, glyph: '▧', pages: ['layout', 'flow'] },
-]
-const NAV_VCO: Workspace[] = [
-  { id: 'design', label: { ko: '설계 편집', en: 'Design editor' }, glyph: '⎓', pages: ['vco', 'vcocircuit'] },
-  { id: 'optimization', label: { ko: '최적화', en: 'Optimization' }, glyph: '◴', pages: ['vcoopt', 'vcopareto'] },
-  { id: 'characterization', label: { ko: '특성 분석', en: 'Characterization' }, glyph: '∿', pages: ['vcopn', 'vcopushing'] },
-  { id: 'variation', label: { ko: '변동성 검증', en: 'Variation' }, glyph: '◫', pages: ['vcopvt', 'vcoyield'] },
-  { id: 'implementation', label: { ko: '구현 · 검증', en: 'Implementation' }, glyph: '▧', pages: ['vcolayout', 'vcoflow'] },
-]
-const DOMAIN_HOME: Record<Domain, Page> = { comparator: 'sizing', vco: 'vco' }
-const DOMAIN_OF: Record<string, Domain> = { vcocircuit: 'vco', vco: 'vco', vcoopt: 'vco', vcopareto: 'vco', vcopn: 'vco', vcopvt: 'vco', vcoyield: 'vco', vcopushing: 'vco', vcolayout: 'vco', vcoflow: 'vco' }
-const VCO_VIEW: Record<string, 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'> = { vcocircuit: 'circuit', vco: 'main', vcoopt: 'opt', vcopareto: 'pareto', vcopn: 'pn', vcopvt: 'pvt', vcoyield: 'yield', vcopushing: 'pushing', vcolayout: 'layout', vcoflow: 'flow' }
-const domainOf = (p: Page): Domain => DOMAIN_OF[p] ?? 'comparator'
 
 interface HistoryItem {
   id: number
@@ -126,7 +65,7 @@ export default function App() {
   const result = resultData ? { ...resultData, verdicts: comparatorVerdicts(resultData, targets) } : null
   const [opt, setOpt, , optimizationIsCurrent] = useAnalysisState<OptimizeResult>(specKey)
   const [play, setPlay] = useAnalysisState<{ steps: OptStep[]; idx: number; auto: boolean }>(specKey)
-  const [page, setPage] = useState<Page>('sizing')
+  const [page, setPage] = useWorkspacePage(PAGES, 'sizing')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [wf, setWf] = useAnalysisState<Waveform>(designKey)
   const [wfBefore, setWfBefore] = useAnalysisState<Waveform>(designKey)
@@ -172,109 +111,56 @@ export default function App() {
     if (page === 'wicked') setWickedVisited(true)
   }, [page])
 
-  const loadWaveform = async (p: Params) => {
-    setWfLoading(true)
-    setAnalysisError(null)
+  const runAnalysis = (setLoading: (loading: boolean) => void, work: () => Promise<void>) =>
+    runAnalysisRequest(work, { setLoading, setError: setAnalysisError })
+
+  const loadWaveform = (p: Params) => runAnalysis(setWfLoading, async () => {
     setWfBefore(null) // single-trace mode (overlay only set by the optimizer)
-    try {
-      const w = await waveform(p)
-      if (!w.error) setWf(w)
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setWfLoading(false)
-    }
-  }
+    const w = await waveform(p)
+    if (!w.error) setWf(w)
+  })
 
-  const runPostLayout = async () => {
-    setPlLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await postlayout(params)
-      if (!r.error) setPostLayout(r)
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setPlLoading(false)
-    }
-  }
+  const runPostLayout = () => runAnalysis(setPlLoading, async () => {
+    const r = await postlayout(params)
+    if (!r.error) setPostLayout(r)
+  })
 
-  const runPvt = async () => {
-    setPvtLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await pvt(params)
-      if (!r.error) setPvtRes(r)
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setPvtLoading(false)
-    }
-  }
+  const runPvt = () => runAnalysis(setPvtLoading, async () => {
+    const r = await pvt(params)
+    if (!r.error) setPvtRes(r)
+  })
 
-  const runPareto = async () => {
-    setParetoLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await pareto(params, targets)
-      if (!r.error) setParetoRes(r)
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setParetoLoading(false)
-    }
-  }
+  const runPareto = () => runAnalysis(setParetoLoading, async () => {
+    const r = await pareto(params, targets)
+    if (!r.error) setParetoRes(r)
+  })
 
-  const runFlow = async () => {
-    setFlowLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await fullflow(params, targets)
-      if (!flowIsCurrent()) return
-      if (!r.error) {
-        setFlowRes(r, analysisKey(r.final_params, targets))
-        updateParams(r.final_params) // land the flow's sized design in the editor
-      }
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setFlowLoading(false)
+  const runFlow = () => runAnalysis(setFlowLoading, async () => {
+    const r = await fullflow(params, targets)
+    if (!flowIsCurrent()) return
+    if (!r.error) {
+      setFlowRes(r, analysisKey(r.final_params, targets))
+      updateParams(r.final_params) // land the flow's sized design in the editor
     }
-  }
+  })
 
-  const runLayout = async () => {
-    setLayoutLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await layout(params)
-      if (!r.error) setLayoutRes(r)
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLayoutLoading(false)
-    }
-  }
+  const runLayout = () => runAnalysis(setLayoutLoading, async () => {
+    const r = await layout(params)
+    if (!r.error) setLayoutRes(r)
+  })
 
   // one call: the tau sweep and the noise+offset measurement, merged on the
   // shared amplitude axis (see server.resolution_view)
-  const runResolution = async () => {
-    setResLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await apiResolution(params)
-      if (!r.error) {
-        setResRes(r)
-        setMetaRes({ points: r.points, tau_ps: r.tau_ps, intercept_ps: r.intercept_ps, min_resolved_v: r.min_resolved_v })
-        setBerRes({ points: r.points, noise_uv_rms: r.sigma.noise_uv, offset_sigma_mv: r.sigma.offset_mv,
-          sigma_total_uv: r.sigma.total_uv, ber_target: r.ber_target,
-          min_input_noise_uv: r.markers_uv.min_input_noise, min_input_total_uv: r.markers_uv.min_input_total })
-      }
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setResLoading(false)
+  const runResolution = () => runAnalysis(setResLoading, async () => {
+    const r = await apiResolution(params)
+    if (!r.error) {
+      setResRes(r)
+      setMetaRes({ points: r.points, tau_ps: r.tau_ps, intercept_ps: r.intercept_ps, min_resolved_v: r.min_resolved_v })
+      setBerRes({ points: r.points, noise_uv_rms: r.sigma.noise_uv, offset_sigma_mv: r.sigma.offset_mv,
+        sigma_total_uv: r.sigma.total_uv, ber_target: r.ber_target,
+        min_input_noise_uv: r.markers_uv.min_input_noise, min_input_total_uv: r.markers_uv.min_input_total })
     }
-  }
+  })
 
   const runProbit = async () => {
     setProbitLoading(true)
@@ -283,87 +169,24 @@ export default function App() {
       setProbitRes(await requestJson<ProbitResult>('/api/noise/probit', { params }))
     } catch (e) { setProbitRes({ error: String(e) } as ProbitResult) } finally { setProbitLoading(false) }
   }
-  const runSens = async () => {
-    setSensLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await sensitivity(params)
-      if (!r.error) setSensRes(r)
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setSensLoading(false)
-    }
-  }
+  const runSens = () => runAnalysis(setSensLoading, async () => {
+    const r = await sensitivity(params)
+    if (!r.error) setSensRes(r)
+  })
 
-  const runFclk = async () => {
-    setFclkLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await maxfclk(params)
-      if (!r.error) setFclkRes(r)
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setFclkLoading(false)
-    }
-  }
+  const runFclk = () => runAnalysis(setFclkLoading, async () => {
+    const r = await maxfclk(params)
+    if (!r.error) setFclkRes(r)
+  })
 
-  const runYield = async () => {
-    setYieldLoading(true)
-    setAnalysisError(null)
-    try {
-      const r = await yieldRun(params, targets, 48)
-      if (!r.error) setYieldRes(r)
-    } catch (e) {
-      setAnalysisError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setYieldLoading(false)
-    }
-  }
+  const runYield = () => runAnalysis(setYieldLoading, async () => {
+    const r = await yieldRun(params, targets, 48)
+    if (!r.error) setYieldRes(r)
+  })
 
-  const downloadReport = () => {
-    const ts = new Date().toISOString()
-    const pf = profile === 'custom' ? 'custom' : SPEC_PROFILES.find((p) => p.id === profile)?.label
-    const fmt = (v: number | null | undefined, u: string) => (v == null ? '—' : `${v} ${u}`)
-    const verdict = (k: TargetKey) => (measured[k] == null ? '—' : measured[k]! <= targets[k] ? 'PASS' : 'FAIL')
-    const dev = params.devices
-    const lines: string[] = [
-      `# StrongARM comparator sizing report`,
-      ``,
-      `- Generated: ${ts}`,
-      `- Model: ${params.model === 'sky130' ? 'SkyWater SKY130 (real)' : 'PTM 45nm bulk'}`,
-      `- VDD: ${params.vdd} V · C_load: ${params.cload_ff} fF · n_MC: ${params.n_mc}`,
-      `- Spec profile: ${pf}`,
-      ``,
-      `## Device sizing`,
-      ``,
-      `| Device | W (µm) | L (nm) | M |`,
-      `|--------|-------:|-------:|--:|`,
-      ...(Object.keys(dev) as DeviceKey[]).map((k) => `| ${DEVICE_META[k].name} (${k}) | ${dev[k].w_um} | ${dev[k].l_nm} | ${dev[k].m} |`),
-      ``,
-      `## Spec compliance`,
-      ``,
-      `| Metric | Measured | Target | Verdict |`,
-      `|--------|---------:|-------:|:-------:|`,
-      ...TARGET_KEYS.map((k) => `| ${TARGET_META[k].label} | ${fmt(measured[k], TARGET_META[k].unit)} | ≤ ${targets[k]} ${TARGET_META[k].unit} | ${verdict(k)} |`),
-    ]
-    if (metaRes) lines.push(``, `## Metastability`, ``, `- Regeneration τ: ${fmt(metaRes.tau_ps, 'ps')}`, `- Min resolved input: ${metaRes.min_resolved_v != null ? (metaRes.min_resolved_v * 1e6).toFixed(1) + ' µV' : '—'}`)
-    if (berRes) lines.push(``, `## Noise / BER`, ``, `- Input-referred noise σ: ${berRes.noise_uv_rms} µV`, `- Offset σ: ${fmt(berRes.offset_sigma_mv, 'mV')}`, `- Min detectable input @ BER ${berRes.ber_target}: ${berRes.min_input_total_uv} µV (with offset), ${berRes.min_input_noise_uv} µV (noise only)`)
-    if (fclkRes) lines.push(``, `## Max clock rate`, ``, `- Max f_clk: ${fclkRes.max_fclk_ghz != null ? fclkRes.max_fclk_ghz + ' GHz' : 'none'} (min period ${fmt(fclkRes.min_period_ns, 'ns')})`, `- Energy / conversion: ${fmt(fclkRes.energy_fj_at_max, 'fJ')}`)
-    if (yieldRes) lines.push(``, `## Parametric yield`, ``, `- Yield: ${yieldRes.yield_pct}% (${yieldRes.pass}/${yieldRes.n}, mismatch × PVT)`, `- Fails — offset ${yieldRes.fail_breakdown.offset}, speed ${yieldRes.fail_breakdown.speed}, wrong ${yieldRes.fail_breakdown.decision_wrong}`)
-    if (pvtRes) lines.push(``, `## PVT sign-off (45 corners)`, ``, `- Worst decision: ${fmt(pvtRes.worst.decision_time_ps, 'ps')}`, `- Worst power: ${fmt(pvtRes.worst.power_uw, 'µW')}`, `- All corners resolve: ${pvtRes.worst.any_nonfunctional ? 'NO' : 'yes'}`)
-    if (sensRes) lines.push(``, `## Sensitivity (±${sensRes.delta_pct}% W)`, ``, ...sensRes.devices.map((d) => `- ${DEVICE_META[d.key].name}: decision ${d.low.decision_time_ps}→${d.high.decision_time_ps} ps, offset ${d.low.offset_sigma_mv}→${d.high.offset_sigma_mv} mV`))
-    if (paretoRes) lines.push(``, `## Pareto front`, ``, `- ${paretoRes.front.length} non-dominated designs (power ↔ decision-time)`)
-    lines.push(``, `---`, ``, `<details><summary>Raw JSON</summary>`, ``, '```json', JSON.stringify({ params, targets, result, metaRes, berRes, sensRes, fclkRes, yieldRes, pvtRes: pvtRes?.worst, generated: ts }, null, 2), '```', ``, `</details>`, ``)
-    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `strongarm-report-${ts.slice(0, 19).replace(/[:T]/g, '')}.md`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+  const downloadReport = () => downloadComparatorReport({
+    params, targets, profile, result, metaRes, berRes, fclkRes, yieldRes, pvtRes, sensRes, paretoRes,
+  })
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -473,12 +296,7 @@ export default function App() {
   const stepNow = play ? play.steps[play.idx] : null
   const nom = result?.nominal
   const off = result?.offset
-  const measured: Record<TargetKey, number | null> = {
-    decision_time_ps: nom?.decision_time_ps ?? null,
-    power_uw: nom?.power_uw ?? null,
-    offset_sigma_mv: off?.offset_sigma_mv ?? null,
-    noise_uv_rms: nom?.noise_uv_rms ?? null,
-  }
+  const measured = comparatorMeasurements(result)
   const applyProfile = (id: string) => {
     const prof = SPEC_PROFILES.find((p) => p.id === id)
     if (prof) {
@@ -497,60 +315,18 @@ export default function App() {
   const workspace = navList.find(item => item.pages.includes(page))!
   const pageTitle = t(lang, workspace.label)
   return (
-    <div className="console-shell eda-shell min-h-screen flex">
+    <div className="console-shell eda-shell min-h-screen flex" data-workspace={workspace.id} data-domain={domain}>
       {/* SIDEBAR */}
-      <aside data-menu-open={mobileNavOpen} onKeyDown={e => { if (e.key === 'Escape') { setMobileNavOpen(false); document.querySelector<HTMLButtonElement>('.mobile-nav-toggle')?.focus() } }} className="app-sidebar shrink-0 sticky top-0 self-start h-screen flex flex-col" style={{ borderRight: '1px solid var(--line-soft)', background: 'var(--surface-2)' }}>
-        <div className="px-4 py-4 flex items-center gap-2.5" style={{ borderBottom: '1px solid var(--line-soft)' }}>
-          <div className="relative w-8 h-8 rounded-lg overflow-hidden shrink-0" style={{ background: 'var(--surface)', border: '1px solid var(--line)' }} aria-hidden>
-            <div className="absolute top-1/2 left-0 w-1/3 h-[2px]" style={{ background: 'var(--si)', boxShadow: '0 0 8px var(--si)', animation: 'sweep 2.2s linear infinite' }} />
-          </div>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold leading-tight" style={{ color: 'var(--text)' }}>StrongARM</div>
-            <div className="mono text-[10px]" style={{ color: 'var(--faint)' }}>{t(lang, UI.appSub)}</div>
-          </div>
-        </div>
-        <button className="mobile-nav-toggle" aria-expanded={mobileNavOpen} aria-controls="workspace-navigation"
-          onClick={() => setMobileNavOpen(open => !open)}>{mobileNavOpen ? (lang === 'ko' ? '메뉴 닫기' : 'Close menu') : (lang === 'ko' ? '분석 메뉴' : 'Analysis menu')}</button>
-        {/* domain switch — Comparator vs VCO are two separate worlds */}
-        <div className="grid grid-cols-2 gap-1.5 p-2" style={{ borderBottom: '1px solid var(--line-soft)' }}>
-          {([['comparator', '⚖', 'var(--si)', UI.domainComparator], ['vco', '∿', 'var(--ag)', UI.domainVco]] as const).map(([d, glyph, col, label]) => {
-            const on = domain === d
-            return (
-              <button key={d} onClick={() => { setPage(DOMAIN_HOME[d]); setMobileNavOpen(false) }}
-                className="flex flex-col items-center gap-0.5 py-2 rounded-lg transition-colors"
-                style={{ background: on ? `color-mix(in srgb, ${col} 16%, transparent)` : 'var(--surface)', border: `1px solid ${on ? col : 'var(--line)'}` }}>
-                <span className="text-base" style={{ color: on ? col : 'var(--faint)' }}>{glyph}</span>
-                <span className="mono text-[10px] tracking-wide" style={{ color: on ? 'var(--text)' : 'var(--muted)' }}>{t(lang, label)}</span>
-              </button>
-            )
-          })}
-        </div>
-        <nav id="workspace-navigation" aria-label={lang === 'ko' ? '분석 화면' : 'Analysis pages'} className="sidebar-nav flex flex-col p-2 overflow-y-auto">
-          <div className="eda-tree-heading">{lang === 'ko' ? '설계 탐색기' : 'Design explorer'}</div>
-          <div className="eda-cell-name">▾ {domain === 'vco' ? 'ring_vco' : 'strongarm'} <span>schematic</span></div>
-          {navList.map(item => <button key={item.id} aria-current={workspace.id === item.id ? 'page' : undefined}
-            className="eda-tree-item" onClick={() => { setPage(item.pages[0]); setMobileNavOpen(false) }}>
-            <span>{item.glyph}</span>{t(lang, item.label)}
-          </button>)}
-        </nav>
-        <div className="app-sidebar-footer mt-auto p-3 flex flex-col gap-2" style={{ borderTop: '1px solid var(--line-soft)' }}>
-          <div className="mono text-[11px] flex items-center gap-2" style={{ color: 'var(--muted)' }}>
-            <span className="inline-block w-2 h-2 rounded-full" style={{ background: apiUp === null ? 'var(--faint)' : apiUp ? 'var(--good)' : 'var(--bad)' }} />
-            {apiUp === null ? t(lang, UI.connecting) : apiUp ? t(lang, UI.backendLive) : t(lang, UI.backendOff)}
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            <button onClick={() => setLang(lang === 'ko' ? 'en' : 'ko')} className="mono text-xs px-3 py-1.5 rounded-full" style={{ color: 'var(--ag)', border: '1px solid color-mix(in srgb, var(--ag) 40%, var(--line))' }} title="한국어 / English">🌐 {lang === 'ko' ? 'EN' : '한'}</button>
-            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="mono text-xs px-3 py-1.5 rounded-full" style={{ color: 'var(--muted)', border: '1px solid var(--line)' }}>◐ {t(lang, UI.theme)}</button>
-            <button onClick={downloadReport} disabled={!result} className="mono text-xs px-3 py-1.5 rounded-full disabled:opacity-40" style={{ color: 'var(--si)', border: '1px solid color-mix(in srgb, var(--si) 40%, var(--line))' }} title="Download a Markdown report of the current design + results">⤓ {t(lang, UI.report)}</button>
-          </div>
-        </div>
-      </aside>
+      <WorkspaceSidebar page={page} lang={lang} theme={theme} apiUp={apiUp} reportAvailable={!!result}
+        mobileNavOpen={mobileNavOpen} onMobileNavChange={setMobileNavOpen} onNavigate={setPage}
+        onLangChange={setLang} onThemeChange={setTheme} onReport={downloadReport} />
 
       {/* MAIN */}
       <main className="flex-1 min-w-0">
         <div className="workspace-content px-6 py-7 flex flex-col gap-5">
           <div className="workspace-heading flex items-baseline justify-between gap-4">
             <h1 id="workspace-title" tabIndex={-1} className="text-lg font-semibold" style={{ color: 'var(--text)' }}>{pageTitle}</h1>
+            <WorkspaceSearch destinations={SEARCH_DESTINATIONS} lang={lang} onNavigate={id => { setPage(id); setMobileNavOpen(false) }} />
             <div className="mono text-[11px]" style={{ color: 'var(--faint)' }}>
               {/* the subtitle used to say "StrongARM latch" on VCO pages too, which told the
                   reader they were looking at the wrong circuit */}
@@ -572,18 +348,7 @@ export default function App() {
             <span>{domain === 'vco' ? 'ring_vco' : 'strongarm'} / {workspace.id}</span>
             <span>{lang === 'ko' ? '작업공간' : 'Workspace'}</span>
           </div>
-          {workspace.id !== 'design' && <div className="eda-analysis-tabs" role="tablist" aria-label={lang === 'ko' ? '세부 분석' : 'Analysis views'}>
-            {workspace.pages.map(id => <button key={id} role="tab" aria-selected={page === id} tabIndex={page === id ? 0 : -1}
-              onKeyDown={event => {
-                const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
-                if (!keys.includes(event.key)) return
-                event.preventDefault()
-                const i = workspace.pages.indexOf(page)
-                const next = event.key === 'Home' ? 0 : event.key === 'End' ? workspace.pages.length - 1 : (i + (event.key === 'ArrowRight' ? 1 : -1) + workspace.pages.length) % workspace.pages.length
-                setPage(workspace.pages[next])
-                ;(event.currentTarget.parentElement?.children[next] as HTMLButtonElement)?.focus()
-              }} onClick={() => setPage(id)}>{t(lang, NAV_LABELS[id])}</button>)}
-          </div>}
+          <WorkspaceTabs workspace={workspace} page={page} lang={lang} onNavigate={setPage} />
           {/* Help is contextual to the selected analysis. */}
           <PageHelp page={page} lang={lang} />
 
@@ -623,7 +388,7 @@ export default function App() {
               onClick={() => run()}
               disabled={busy || apiUp === false}
               className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
-              style={{ background: 'var(--si)', color: '#04120f' }}
+              style={{ background: 'var(--si)', color: 'var(--on-si)' }}
             >
               {running ? <>Simulating… <ElapsedTime since={startedAt} />s</> : apiUp === false ? 'Backend offline' : '▶  Run SPICE'}
             </button>
@@ -631,7 +396,7 @@ export default function App() {
               onClick={runOptimize}
               disabled={busy || apiUp === false}
               className="rounded-xl py-3 font-semibold text-[15px] transition-opacity disabled:opacity-60"
-              style={{ background: 'var(--ag)', color: '#0b0820' }}
+              style={{ background: 'var(--ag)', color: 'var(--on-ag)' }}
               title="Autonomous search: adjusts W and M until the spec is met"
             >
               {optimizing ? <>Searching… <ElapsedTime since={startedAt} />s</> : '◴  Auto-find W & M'}
@@ -648,7 +413,7 @@ export default function App() {
                 key={p.name}
                 disabled={busy}
                 onClick={() => updateParams(p.patch(params))}
-                className="text-left rounded-lg px-3 py-2 disabled:opacity-50"
+                className="design-preset text-left rounded-lg px-3 py-2 disabled:opacity-50"
                 style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
               >
                 <div className="text-sm" style={{ color: 'var(--text)' }}>{p.name}</div>
@@ -793,7 +558,7 @@ export default function App() {
                 <Schematic devices={dispDevices} changed={stepChanged} />
                 <div className="min-w-0">
                   {wf ? (
-                    <WaveformChart wf={wf} before={wfBefore} theme={theme} />
+                    <WaveformChart wf={wf} before={wfBefore} theme={theme} lang={lang} />
                   ) : (
                     <div className="text-sm flex items-center justify-center" style={{ height: 190, color: 'var(--muted)' }}>
                       {wfLoading ? 'capturing transient…' : 'Run a simulation to capture the transient.'}
@@ -816,7 +581,7 @@ export default function App() {
                 <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--line-soft)' }}>
                   <div className="mono text-[11px] uppercase tracking-[0.16em] mb-2" style={{ color: 'var(--ag)' }}>Post-layout parasitics · schematic vs extracted</div>
                   <div className="analysis-columns grid gap-4 items-center" style={{ gridTemplateColumns: '1fr 1fr' }}>
-                    <WaveformChart wf={postLayout.postlayout.waveform} before={postLayout.schematic.waveform} theme={theme} />
+                    <WaveformChart wf={postLayout.postlayout.waveform} before={postLayout.schematic.waveform} theme={theme} lang={lang} />
                     <div className="mono text-[12px] tnum flex flex-col gap-1.5" style={{ color: 'var(--muted)' }}>
                       {(() => {
                         const s = postLayout.schematic.nominal
@@ -1315,7 +1080,7 @@ export default function App() {
                      // the view is owned here, so VcoPage cannot navigate itself: its status
                      // strip called a setView() that did not exist and would have thrown
                      onNavigate={(v) => {
-                       const target = (Object.keys(VCO_VIEW) as Page[]).find((k) => VCO_VIEW[k] === v)
+                       const target = pageForVcoView(v)
                        if (target) setPage(target)
                      }} /></AnalysisBoundary></div>
           )}

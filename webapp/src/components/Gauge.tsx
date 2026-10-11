@@ -14,7 +14,7 @@ export default function Gauge({ label, value, limit, unit, pass }: GaugeProps) {
   const color = pass === null ? 'var(--muted)' : pass ? 'var(--si)' : 'var(--bad)'
 
   return (
-    <div>
+    <div className="metric-gauge" data-metric={label} data-verdict={pass === null ? 'unmeasured' : pass ? 'pass' : 'fail'}>
       <div className="flex items-baseline justify-between mb-2">
         <div className="text-sm">
           {label}{' '}
@@ -33,11 +33,11 @@ export default function Gauge({ label, value, limit, unit, pass }: GaugeProps) {
         </div>
       </div>
       <div
-        className="relative h-9 rounded-lg overflow-hidden"
-        style={{ background: 'var(--surface-2)', border: '1px solid var(--line-soft)' }}
+        className="gauge-track relative h-9 rounded-lg overflow-hidden"
+        style={{ background: 'var(--metric-tint, var(--surface-2))', border: '1px solid var(--line-soft)' }}
       >
         <div
-          className="absolute inset-y-0 left-0 rounded-l-lg transition-all duration-500"
+          className="gauge-fill absolute inset-y-0 left-0 rounded-l-lg transition-all duration-500"
           style={{
             width: `${fillPct}%`,
             background:
@@ -52,7 +52,7 @@ export default function Gauge({ label, value, limit, unit, pass }: GaugeProps) {
           style={{ left: `${targetPct}%`, width: '2px', background: 'var(--warn)' }}
         />
         <div
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 mono tnum text-sm"
+          className="gauge-value absolute right-2.5 top-1/2 -translate-y-1/2 mono tnum text-sm"
           style={{ color: 'var(--text)' }}
         >
           {has ? `${value} ${unit}` : '—'}

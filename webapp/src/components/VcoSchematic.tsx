@@ -1,14 +1,15 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import type { Device, VcoDeviceKey } from '../types'
+import { V } from '../virtuoso'
 
 // Ring VCO schematic in the Virtuoso Composer idiom — 교차결합+리셋(xcpl) 단일:
 // pseudo-differential 딜레이 셀(두 starved 인버터 레일 + cross-coupled PMOS
 // 쌍 Mx/Mxb(X 결선) + 리셋 PMOS Mrst) 옆에 수평 2-레일 링(매 단 back-to-back
 // 래치 커플러, 참고 그림 Fig.1 형태)을 그린다. 전류제한(starved) 단일 토폴로지는 제거됨.
 // Built imperatively into an <svg> so the geometry stays exact.
-const C = { wire: '#39d7d7', sym: '#63d68a', pin: '#ff5a52', prop: '#e6c84f', net: '#57e0e0', global: '#ff8a3d', dim: '#7aa6a3', bg: '#040a0a', grid: '#0d2422' }
+const C = { ...V, global: V.netGlobal, dim: V.faint }
 
-export default function VcoSchematic({ devices, nStages, starved = true }: { devices: Record<VcoDeviceKey, Device>; nStages: number; starved?: boolean }) {
+function VcoSchematic({ devices, nStages, starved = true }: { devices: Record<VcoDeviceKey, Device>; nStages: number; starved?: boolean }) {
   const ref = useRef<SVGSVGElement>(null)
   useEffect(() => {
     const svg = ref.current
@@ -140,3 +141,5 @@ export default function VcoSchematic({ devices, nStages, starved = true }: { dev
   return <svg ref={ref} viewBox="0 0 866 300" width="100%" style={{ display: 'block', maxHeight: 340, background: C.bg, borderRadius: 8 }} role="img"
     aria-label="Cross-coupled pseudo-differential ring VCO schematic" />
 }
+
+export default memo(VcoSchematic)

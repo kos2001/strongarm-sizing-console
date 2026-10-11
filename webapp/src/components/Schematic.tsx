@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { Device, DeviceKey } from '../types'
 import { V } from '../virtuoso'
 
@@ -6,7 +7,7 @@ import { V } from '../virtuoso'
 // analogLib-style MOSFET symbols with source arrows + red pin squares, yellow
 // instance-property labels, and orange global-net names (vdd!/gnd!). `changed`
 // flashes the device the optimizer just adjusted (amber, glowing).
-export default function Schematic({ devices, changed }: { devices: Record<DeviceKey, Device>; changed?: DeviceKey | null }) {
+function Schematic({ devices, changed }: { devices: Record<DeviceKey, Device>; changed?: DeviceKey | null }) {
   const d = devices
   const sz = (k: DeviceKey) => `${d[k].w_um}u×${d[k].m}`
   const REF: Record<DeviceKey, string> = { pre: 'S3/4', prei: 'S1/2', pcc: 'M5/6', ncc: 'M3/4', input: 'M1/2', tail: 'M7' }
@@ -181,3 +182,5 @@ export default function Schematic({ devices, changed }: { devices: Record<Device
     </svg>
   )
 }
+
+export default memo(Schematic)
