@@ -44,16 +44,16 @@ export default function DeviceEditor({ params, onChange, disabled, lang }: Props
         return (
           <div
             key={dk}
-            className="grid gap-2 items-center rounded-xl p-2.5"
+            className="device-row grid gap-2 items-center rounded-xl p-2.5" data-device={dk}
             style={{
               gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr',
-              background: 'var(--surface)',
+              background: 'var(--device-tint, var(--surface))',
               border: '1px solid var(--line)',
-              borderLeft: `3px solid var(--si)`,
+              borderLeft: '3px solid var(--device-accent, var(--si))',
             }}
           >
             <div className="min-w-0">
-              <div className="mono text-sm" style={{ color: 'var(--text)' }}>
+              <div className="mono text-sm" style={{ color: 'var(--device-accent, var(--text))' }}>
                 {meta.name}
               </div>
               <div className="text-xs truncate" style={{ color: 'var(--muted)' }}>

@@ -1,0 +1,43 @@
+/* Let the document grow with content and scroll naturally. Forcing height:100%
+   here caps the scroll region to the viewport, so tall pages become unreachable
+   (the sidebar stays sticky via position:sticky, not a fixed-height ancestor). */
+html, body, #root { min-height: 100%; }
+/* 모든 화면에서 스크롤 보장: 내용이 넘치면 문서 스크롤이 항상 동작하고,
+   임베드/확장 등 외부에서 overflow:hidden 을 걸어도 되돌린다. */
+html, body { overflow-y: auto !important; overflow-x: auto !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono { font-family: var(--mono); }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* number inputs: strip spinners, instrument look */
+input[type="number"] {
+  font-family: var(--mono);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 8px;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+input[type="number"]:focus-visible {
+  outline: 2px solid var(--si);
+  outline-offset: 1px;
+  border-color: var(--si);
+}
+::-webkit-inner-spin-button, ::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+button { font-family: var(--sans); cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--si); outline-offset: 2px; }
+
+@keyframes sweep { to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

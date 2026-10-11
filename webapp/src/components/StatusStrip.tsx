@@ -102,6 +102,7 @@ export default function StatusStrip({ lang, metrics, functional, profileLabel, e
   return (
     <div
       data-testid="design-status"
+      data-state={state}
       className="rounded-xl px-3.5 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-2"
       style={{
         background: `color-mix(in srgb, ${tone} 7%, var(--surface))`,

@@ -1,27 +1,33 @@
-import LayoutWorkspace from './LayoutWorkspace'
+const LayoutWorkspace = lazy(() => import('./LayoutWorkspace'))
 import { analysisKey } from '../analysis'
 import { useAnalysisState } from '../useAnalysisState'
 import { useDraft } from '../useDraft'
 import ProjectToolbar from './ProjectToolbar'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { LayoutResult, VcoDeviceKey, VcoFullflow, VcoOptimizeResult, VcoParams, VcoParetoResult, VcoPhaseNoise, VcoPushing, VcoPvtResult, VcoResult, VcoTuning, VcoWaveform, VcoWickedMismatch, VcoWickedVerdict, VcoWickedWcd, VcoWickedYieldSweep } from '../types'
 import { VCO_DEVICE_META } from '../types'
 import { vcoFullflow, vcoLayout, vcoOptimize, vcoPareto, vcoPhaseNoise, vcoPushing, vcoPvt, vcoSimulate, vcoWaveform, vcoWickedMismatch, vcoWickedVerdict, vcoWickedWcd, vcoWickedYieldsweep } from '../api'
-import VcoPhaseNoiseChart from './VcoPhaseNoiseChart'
-import TuningChart from './TuningChart'
+const VcoPhaseNoiseChart = lazy(() => import('./VcoPhaseNoiseChart'))
+const TuningChart = lazy(() => import('./TuningChart'))
 import VcoSchematic from './VcoSchematic'
 import NetlistImport from './NetlistImport'
-import VcoAgentSizing from './VcoAgentSizing'
+const VcoAgentSizing = lazy(() => import('./VcoAgentSizing'))
 import AgentDock from './AgentDock'
 import StatusStrip from './StatusStrip'
 import { downloadNetlist } from '../netlist'
-import VcoWaveformChart from './VcoWaveformChart'
-import VcoPvtView from './VcoPvtView'
-import VcoPushingChart from './VcoPushingChart'
-import VcoParetoChart from './VcoParetoChart'
-import LayoutView from './LayoutView'
+const VcoWaveformChart = lazy(() => import('./VcoWaveformChart'))
+const VcoPvtView = lazy(() => import('./VcoPvtView'))
+const VcoPushingChart = lazy(() => import('./VcoPushingChart'))
+const VcoParetoChart = lazy(() => import('./VcoParetoChart'))
+const LayoutView = lazy(() => import('./LayoutView'))
 import type { Lang } from '../i18n'
+import type { VcoView as View } from '../navigation'
+
+// Keep controls mounted while an individual result chart downloads.
+function DeferredChart({ lang, children }: { lang: Lang; children: React.ReactNode }) {
+  return <Suspense fallback={<div className="panel-loading" role="status">{lang === 'ko' ? '차트를 불러오는 중…' : 'Loading chart…'}</div>}>{children}</Suspense>
+}
 
 const VCO_DEFAULTS: VcoParams = {
   // 'xcplsv' — the cross-coupled cell WITH the current-starve pair, so V_ctrl
@@ -42,7 +48,6 @@ const KEYS_FOR = (t: VcoParams['topology']): VcoDeviceKey[] =>
     : t === 'starved' ? ['invp', 'invn', 'starvep', 'starven']
     : ['invp', 'invn', 'xcplp', 'starvep', 'starven']
 const T = (l: Lang, ko: string, en: string) => (l === 'ko' ? ko : en)
-type View = 'circuit' | 'main' | 'opt' | 'pvt' | 'pushing' | 'pareto' | 'layout' | 'flow' | 'pn' | 'yield'
 
 const normalizeVcoStages = (raw: number | undefined | null) => {
   let n = Math.max(3, Math.round(Number(raw) || 3))
@@ -222,7 +227,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
       setParams(project.params as VcoParams); setTargetF(project.targets.f_ghz)
     }} />
   const toolbarHost = document.getElementById('project-toolbar-host')
-  const withDock = (node: React.ReactNode) => <>{active && toolbarHost && createPortal(projectToolbar, toolbarHost)}{resultStale && <div className="analysis-notice" role="status">{T(lang, '설계 입력이 변경되었습니다. 현재 설계의 측정값을 보려면 다시 실행하세요.', 'Design inputs changed. Run again to measure the current design.')}</div>}<div className="mb-4">{vcoStrip}</div>{node}{agentDock}</>
+  const withDock = (node: React.ReactNode) => <>{active && toolbarHost && createPortal(projectToolbar, toolbarHost)}{resultStale && <div className="analysis-notice" role="status">{T(lang, '설계 입력이 변경되었습니다. 현재 설계의 측정값을 보려면 다시 실행하세요.', 'Design inputs changed. Run again to measure the current design.')}</div>}<div className="mb-4">{vcoStrip}</div><Suspense fallback={<div className="panel-loading" role="status">{T(lang, '분석 화면을 불러오는 중…', 'Loading analysis workspace…')}</div>}>{node}</Suspense>{agentDock}</>
 
   const circuitPanel = (
       <div className="flex flex-col gap-4">
@@ -237,7 +242,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
           <div className="overflow-x-auto"><VcoSchematic devices={params.devices} nStages={params.n_stages} starved={(params.topology ?? 'xcplsv') !== 'xcpl'} /></div>
           {wf ? (
             <div className="mt-4">
-              <VcoWaveformChart wf={wf} theme={theme} labels={['o1', 'ob1']} />
+              <DeferredChart lang={lang}><VcoWaveformChart wf={wf} theme={theme} labels={['o1', 'ob1']} lang={lang} /></DeferredChart>
               <p className="mono text-[11px] mt-2" style={lab}>
                 {T(lang, '상보 링 노드(o1·ob1)의 실제 발진 — 리셋 해제 후 시작 — 주기', 'real oscillation of the complementary nodes (o1·ob1), starting on reset release — period')} {wf.period_ns} ns → {wf.f_osc_ghz} GHz</p>
             </div>
@@ -252,7 +257,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
     return withDock(
       <div className="p-5" style={box}>
         {hd(T(lang, 'PVT 코너 · 주파수 / 발진', 'PVT corners · frequency / oscillation'), runBtn(runPvt, 'pvt', T(lang, '◫ 45코너 실행', '◫ run 45 corners')))}
-        {pvt ? <VcoPvtView pvt={pvt} lang={lang} /> : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '공정·전압·온도 45코너에서 발진 주파수와 발진 여부를 확인합니다.', 'Check oscillation frequency and startup across 45 process/voltage/temperature corners.')}</p>}
+        {pvt ? <DeferredChart lang={lang}><VcoPvtView pvt={pvt} lang={lang} /></DeferredChart> : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '공정·전압·온도 45코너에서 발진 주파수와 발진 여부를 확인합니다.', 'Check oscillation frequency and startup across 45 process/voltage/temperature corners.')}</p>}
       </div>
     )
   }
@@ -264,7 +269,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
         {hd(T(lang, '전원 푸싱 · f vs VDD', 'supply pushing · f vs VDD'), runBtn(runPush, 'push', T(lang, '⇅ 스윕 실행', '⇅ run sweep')))}
         {push ? (
           <>
-            <VcoPushingChart push={push} theme={theme} />
+            <DeferredChart lang={lang}><VcoPushingChart push={push} theme={theme} /></DeferredChart>
             <div className="mono text-[11px] mt-3 px-2.5 py-1.5 rounded-lg inline-block" style={{ color: A, background: `color-mix(in srgb, ${A} 12%, transparent)` }}>
               {T(lang, '푸싱', 'pushing')} = {push.pushing_ghz_per_v} GHz/V @ {push.nominal_vdd}V
             </div>
@@ -282,7 +287,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
         {hd(T(lang, '위상잡음 · L(Δf) / 지터', 'phase noise · L(Δf) / jitter'), runBtn(runPn, 'pn', T(lang, '⌇ 위상잡음 계산', '⌇ compute phase noise')))}
         {pn ? (
           <>
-            <VcoPhaseNoiseChart pn={pn} theme={theme} />
+            <DeferredChart lang={lang}><VcoPhaseNoiseChart pn={pn} theme={theme} /></DeferredChart>
             <div className="grid grid-cols-4 gap-3 mt-3">
               <Metric label="L(1MHz)" value={`${pn.L_1mhz_dbc} dBc/Hz`} big />
               <Metric label={T(lang, '주기 지터', 'period jitter')} value={`${pn.period_jitter_fs} fs`} />
@@ -413,7 +418,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
         {hd(T(lang, 'Pareto · 전력 ↔ 주파수 (NSGA-II)', 'Pareto · power ↔ frequency (NSGA-II)'), runBtn(runPareto, 'pareto', T(lang, '⤢ 프론트 탐색', '⤢ run NSGA-II')))}
         {pareto ? (
           <>
-            <VcoParetoChart res={pareto} theme={theme} selected={paretoSel} onSelect={setParetoSel} />
+            <DeferredChart lang={lang}><VcoParetoChart res={pareto} theme={theme} selected={paretoSel} onSelect={setParetoSel} /></DeferredChart>
             <p className="mono text-[11px] mt-2 leading-relaxed" style={lab}>
               <span style={{ color: A }}>— 프론트</span> = {pareto.front.length} {T(lang, '개 비지배 설계 (주파수별 최소 전력). 왼쪽-위가 우수(고주파·저전력) — 점을 클릭하면 상세.', 'non-dominated designs (min power per frequency). Upper-left is better — click a point for details.')}
             </p>
@@ -465,7 +470,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
         {hd(T(lang, '레이아웃 · GDSII + DRC', 'layout · GDSII + DRC'), runBtn(runLayout, 'layout', T(lang, '▧ 레이아웃 생성', '▧ generate layout')))}
         {lay ? (
           <>
-            <LayoutView data={lay} />
+            <DeferredChart lang={lang}><LayoutView data={lay} /></DeferredChart>
             <div className="flex flex-wrap gap-4 mt-3 mono text-[11px]" style={lab}>
               {lay.layers.map((l) => (<span key={l.name}><span className="sw" style={{ display: 'inline-block', width: 9, height: 9, borderRadius: 2, background: l.color, marginRight: 5, verticalAlign: 'middle' }} />{l.name} ({l.gds})</span>))}
             </div>
@@ -498,7 +503,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
             <div className="mono text-sm mt-3 px-3 py-2 rounded-lg inline-block" style={{ color: flow.overall ? 'var(--good)' : 'var(--warn)', background: `color-mix(in srgb, ${flow.overall ? 'var(--good)' : 'var(--warn)'} 14%, transparent)` }}>
               {flow.overall ? T(lang, '전체 사인오프 ✓', 'SIGNED OFF ✓') : T(lang, '미완료', 'NOT CLEAN')}
             </div>
-            {flow.layout && <div className="mt-4"><LayoutView data={flow.layout} /></div>}
+            {flow.layout && <div className="mt-4"><DeferredChart lang={lang}><LayoutView data={flow.layout} /></DeferredChart></div>}
           </>
         ) : <p className="text-sm" style={{ color: 'var(--muted)' }}>{T(lang, '자동 사이징 → 기생 재시뮬 → PVT 사인오프 → 레이아웃/DRC 를 한 번에 실행합니다.', 'Runs auto-size → parasitic re-sim → PVT sign-off → layout/DRC end to end.')}</p>}
       </div>
@@ -556,9 +561,9 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
             <span>{T(lang, '소자', 'Device')}</span><span>{unit ? `W (${unit}µ×${lang === 'ko' ? unitName : (params.model === 'asap7' ? 'fins' : 'stacks')})` : 'W (µm)'}</span><span>L (nm)</span><span>M</span>
           </div>
           {dkeys.map((k) => (
-            <div key={k} className="grid gap-2 items-center rounded-xl p-2.5 mb-2" style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', background: 'var(--surface-2)', border: '1px solid var(--line)', borderLeft: `3px solid ${A}` }}>
+            <div key={k} className="device-row grid gap-2 items-center rounded-xl p-2.5 mb-2" data-device={k} style={{ gridTemplateColumns: '1.6fr 1fr 1fr 0.7fr', background: 'var(--device-tint, var(--surface-2))', border: '1px solid var(--line)', borderLeft: `3px solid var(--device-accent, ${A})` }}>
               <div className="min-w-0">
-                <div className="mono text-sm" style={{ color: 'var(--text)' }}>{VCO_DEVICE_META[k].name}</div>
+                <div className="mono text-sm" style={{ color: 'var(--device-accent, var(--text))' }}>{VCO_DEVICE_META[k].name}</div>
                 <div className="text-xs truncate" style={{ color: 'var(--muted)' }}>{VCO_DEVICE_META[k].role[lang]}</div>
               </div>
               {(['w_um', 'l_nm', 'm'] as const).map((f) => (
@@ -650,7 +655,7 @@ export default function VcoPage({ lang, theme, view = 'main', active = true, onN
         {tuning && (
           <div id="vco-tuning-card" className="p-5" style={box}>
             <div className="mono text-[11px] uppercase tracking-[0.16em] mb-3" style={lab}>{view === 'opt' ? T(lang, '최적화된 크기의 튜닝 곡선 · f vs V_ctrl', 'tuning curve of the optimized sizing · f vs V_ctrl') : T(lang, '튜닝 곡선 · f vs V_ctrl', 'tuning curve · f vs V_ctrl')}</div>
-            <TuningChart tuning={tuning} theme={theme} />
+            <DeferredChart lang={lang}><TuningChart tuning={tuning} theme={theme} /></DeferredChart>
             <div className="grid grid-cols-4 gap-3 mt-3">
               <Metric label={T(lang, '최소 f', 'f min')} value={tuning.f_min_ghz != null ? `${tuning.f_min_ghz} GHz` : '—'} />
               <Metric label={T(lang, '최대 f', 'f max')} value={tuning.f_max_ghz != null ? `${tuning.f_max_ghz} GHz` : '—'} />

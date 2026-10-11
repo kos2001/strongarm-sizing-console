@@ -1,0 +1,32 @@
+.workspace-search-trigger { display: flex; align-items: center; gap: 14px; padding: 6px 10px; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; font-size: 11px; }
+.workspace-search-trigger:hover { color: var(--text); border-color: var(--si); }
+.workspace-search-trigger kbd { font: 10px var(--mono); color: var(--faint); }
+.workspace-search-dialog { width: min(520px, calc(100vw - 32px)); max-height: 80vh; padding: 0; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); box-shadow: 0 24px 80px #0008; }
+.workspace-search-dialog::backdrop { background: #0008; }
+.workspace-search-header { display: flex; align-items: center; justify-content: space-between; padding: 16px; }
+.workspace-search-header h2 { font-size: 14px; font-weight: 600; }
+.workspace-search-header button { padding: 4px 10px; font-size: 20px; color: var(--muted); }
+.workspace-search-dialog input { width: calc(100% - 32px); margin: 0 16px 12px; padding: 10px; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; font-size: 14px; }
+.workspace-search-dialog input:focus-visible { outline: 2px solid var(--si); }
+.workspace-search-results { max-height: 45vh; overflow-y: auto; border-block: 1px solid var(--line); padding: 6px; }
+.workspace-search-result { display: flex; flex-direction: column; text-align: left; width: 100%; gap: 3px; padding: 10px; border-radius: 5px; font-size: 13px; }
+.workspace-search-result:hover, .workspace-search-result:focus-visible { background: color-mix(in srgb, var(--si) 12%, var(--surface)); }
+.workspace-search-result small, .workspace-search-hint { color: var(--muted); font-size: 11px; }
+.workspace-search-hint, .workspace-search-results p { padding: 12px 16px; }
+.waveform-plot { min-width: 0; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; background: var(--plot-bg); }
+.waveform-toolbar, .waveform-signals, .waveform-zoom { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.waveform-toolbar { justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid var(--plot-line); }
+.waveform-toolbar button { padding: 4px 7px; font: 10px var(--mono); color: var(--plot-text); border: 1px solid var(--plot-control); border-radius: 3px; }
+.waveform-toolbar button:hover { background: var(--plot-line); }
+.waveform-toolbar button[aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+.waveform-toolbar button:disabled { opacity: .35; cursor: default; }
+.waveform-canvas { position: relative; }
+.waveform-canvas canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.waveform-canvas canvas:last-child { cursor: crosshair; }
+.waveform-cursor { display: flex; align-items: center; gap: 10px; padding: 6px 10px; color: var(--plot-text); font: 10px var(--mono); }
+.waveform-cursor input { min-width: 0; flex: 1; accent-color: var(--plot-accent); }
+.waveform-readout { display: flex; flex-wrap: wrap; gap: 4px 14px; min-height: 42px; padding: 6px 10px; color: var(--plot-text); font-size: 10px; border-top: 1px solid var(--plot-line); }
+@media (max-width: 700px) {
+  .workspace-search-trigger { min-height: 36px; }
+  .waveform-toolbar button { min-height: 32px; }
+}

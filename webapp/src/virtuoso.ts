@@ -1,22 +1,15 @@
 // Cadence Virtuoso visual signature — used to give the circuit views (schematic
 // Composer, Layout XL, ViVA waveform) the authentic EDA-tool look: pure-black
 // canvas, dim snap-grid, thin cyan wires, red pin squares, yellow property
-// labels, and per-layer stipple/hatch fills. Committed dark regardless of the
-// app theme — Virtuoso canvases are always black.
+// labels, and per-layer stipple/hatch fills. Light mode uses a paper background
+// and deeper ink colors for the same circuit and signal roles.
+// SVG colors resolve CSS variables, so memoized schematics update with the theme.
 export const V = {
-  bg: '#040a0a', // near-black canvas
-  grid: '#0d2422', // dim teal snap-grid dots
-  gridMajor: '#123230',
-  wire: '#39d7d7', // cyan interconnect
-  sym: '#63d68a', // instance/symbol green (analogLib)
-  symHot: '#8fe6ff', // active/regenerating device
-  pin: '#ff5a52', // pin squares (red)
-  prop: '#e6c84f', // instance property labels (yellow)
-  net: '#57e0e0', // net-name labels (cyan)
-  netGlobal: '#ff8a3d', // global nets (vdd!/gnd!) — orange
-  changed: '#ffb02e', // just-edited device (amber, glows)
-  text: '#cfe9e6',
-  faint: '#4f7f7d',
+  bg: 'var(--circuit-bg)', grid: 'var(--circuit-grid)', gridMajor: 'var(--circuit-grid-major)',
+  wire: 'var(--circuit-wire)', sym: 'var(--circuit-symbol)', symHot: 'var(--circuit-active)',
+  pin: 'var(--circuit-pin)', prop: 'var(--circuit-property)', net: 'var(--circuit-net)',
+  netGlobal: 'var(--circuit-global)', changed: 'var(--circuit-changed)',
+  text: 'var(--circuit-text)', faint: 'var(--circuit-faint)',
 }
 
 // ViVA (waveform) trace colors — bright on black, distinct hues.
@@ -33,6 +26,16 @@ export const VIVA = {
   text: '#bfe4e0',
   faint: '#4f7f7d',
 }
+
+export type WaveformPalette = typeof VIVA
+const LIGHT_VIVA: WaveformPalette = {
+  bg: '#f8fbff', grid: '#e7eef8', gridMajor: '#d1dff0',
+  clk: '#955700', outp: '#1d4ed8', outn: '#be185d',
+  cursor: '#087f5b', clkCursor: '#955700', before: '#64748b',
+  text: '#334968', faint: '#536581',
+}
+// Canvas requires resolved colors; use the explicit theme instead of CSS strings.
+export const waveformPalette = (theme: string): WaveformPalette => theme === 'light' ? LIGHT_VIVA : VIVA
 
 // SKY130-ish layer draw style for the Layout XL look: color + a stipple/hatch
 // pattern id (defined in LayoutView <defs>) so overlapping layers stay legible.

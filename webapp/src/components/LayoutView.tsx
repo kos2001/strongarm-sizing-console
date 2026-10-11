@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { memo, useId, useState } from 'react'
 import type { LayoutResult } from '../types'
 import { LAYER_STYLE, V, type Hatch } from '../virtuoso'
 
@@ -7,7 +7,7 @@ import { LAYER_STYLE, V, type Hatch } from '../virtuoso'
 // stipple/hatch pattern (so overlapping layers stay legible) plus a bright
 // boundary — the way real EDA layout editors distinguish layers. Y is flipped so
 // the origin reads bottom-left.
-export default function LayoutView({ data }: { data: LayoutResult }) {
+function LayoutView({ data }: { data: LayoutResult }) {
   const uid = useId().replace(/:/g, '')
   const [hidden, setHidden] = useState<string[]>([])
   const [zoom, setZoom] = useState(1)
@@ -85,3 +85,5 @@ export default function LayoutView({ data }: { data: LayoutResult }) {
     </div>
   )
 }
+
+export default memo(LayoutView)
